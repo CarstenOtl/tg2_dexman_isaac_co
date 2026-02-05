@@ -32,8 +32,8 @@ from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
 from isaaclab.utils.math import quat_conjugate, quat_from_angle_axis, quat_mul, sample_uniform, saturate
 from isaacsim.core.utils.prims import set_prim_attribute_value
 
-from .dextrah_tg2_inspirehand_env_cfg import DextrahTG2InspirehandEnvCfg
-from .dextrah_tg2_inspirehand_utils import (
+from .dextrah_fr3_agilehand_env_cfg import DextrahFR3AgilehandEnvCfg
+from .dextrah_fr3_agilehand_utils import (
     assert_equals,
     scale,
     compute_absolute_action,
@@ -46,7 +46,8 @@ from .dextrah_tg2_inspirehand_utils import (
 # ADR imports
 from .dextrah_adr import DextrahADR
 
-from .dextrah_tg2_inspirehand_constants import (
+# TODO check if these need to be updated for agilehand
+from .dextrah_fr3_agilehand_constants import (
     NUM_XYZ,
     NUM_RPY,
     NUM_QUAT,
@@ -69,10 +70,10 @@ from fabrics_sim.taskmaps.robot_frame_origins_taskmap import RobotFrameOriginsTa
 # add a palm direction penalty
 # keep the palm to be always facing down
 
-class DextrahTG2InspirehandEnv(DirectRLEnv):
-    cfg: DextrahTG2InspirehandEnvCfg
+class DextrahFR3AgilehandEnv(DirectRLEnv):
+    cfg: DextrahFR3AgilehandEnvCfg
 
-    def __init__(self, cfg: DextrahTG2InspirehandEnvCfg, render_mode: str | None = None, **kwargs):
+    def __init__(self, cfg: DextrahFR3AgilehandEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
         self.num_robot_dofs = self.robot.num_joints
@@ -141,8 +142,10 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         self.num_hand_object_distance_bodies = len(self.hand_object_distance_bodies)
 
         # Palm body index and local axes used to compute live palm direction vectors.
-        self.palm_body_idx = self.robot.body_names.index("palm")
-        self.middle_link_0_body_idx = self.robot.body_names.index("middle_link_0")
+        self.palm_body_idx = self.robot.body_names.index(self.cfg.palm_body_name)
+        self.hand_workspace_body_idx = self.robot.body_names.index(
+            self.cfg.hand_workspace_body_name
+        )
 
         def _normalize_vector(vec: torch.Tensor) -> torch.Tensor:
             norm = torch.norm(vec)
@@ -191,37 +194,26 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         # self.object_goal =\
         #     torch.tensor([-0.5, 0., 0.4], device=self.device).repeat((self.num_envs, 1))
         
-        # Nominal reset states for the robot
-        self.robot_start_joint_pos =\
-            torch.tensor([-1.570796, -0.523599, 1.108284, -1.275836,
-                          0.089012, -0.027925, -0.048869, # arm
-                          0.0,  # index_joint_0 # default 0.25
-                          0.0,  # little_joint_0 # default 0.25
-                          0.0,  # middle_joint_0 # default 0.25
-                          0.0,  # ring_joint_0 # default 0.25
-                          0.4,  # thumb_joint_0 # default 0.5
-                          0.0,  # index_joint_1 # default 0.386
-                          0.0,  # little_joint_1 # default 0.386
-                          0.0,  # middle_joint_1 # default 0.386
-                          0.0,  # ring_joint_1 # default 0.386
-                          0.1,  # thumb_joint_1 # default 0.1
-                          0.2,  # thumb_joint_2 # default 0.2
-                          0.4], device=self.device) # thumb_joint_3 # default 0.4   
-        self.robot_start_joint_pos =\
-            self.robot_start_joint_pos.repeat(self.num_envs, 1).contiguous()
+        # Nominal reset states for the robot (aligned to USD joint order)
+        init_joint_pos = getattr(self.cfg.robot_cfg.init_state, "joint_pos", {})
+        start_joint_pos = torch.zeros(
+            self.num_envs, self.num_robot_dofs, device=self.device, dtype=torch.float
+        )
+        for joint_name, joint_value in init_joint_pos.items():
+            if joint_name in self.robot.joint_names:
+                joint_idx = self.robot.joint_names.index(joint_name)
+                start_joint_pos[:, joint_idx] = joint_value
+        self.robot_start_joint_pos = start_joint_pos.contiguous()
         # Start with zero initial velocities and accelerations
         self.robot_start_joint_vel =\
             torch.zeros(self.num_envs, self.num_robot_dofs, device=self.device)
 
-        # Nominal finger curled config
-        # Only the actuated finger joints – matches robot_dof_pos[:, 7:]
-        self.curled_q =\
-            torch.tensor([0.0,  # index_joint_0 # default 0.25
-                          0.0,  # little_joint_0 # default 0.25
-                          0.0,  # middle_joint_0 # default 0.25
-                          0.0,  # ring_joint_0 # default 0.25
-                          0.4,  # thumb_joint_0 # default 0.5
-                          0.1], device=self.device)  # thumb_joint_1 # default 0.1
+        # Nominal finger curled config (only actuated hand joints).
+        hand_joint_names = self.cfg.actuated_joint_names[7:]
+        hand_joint_defaults = [
+            init_joint_pos.get(joint_name, 0.0) for joint_name in hand_joint_names
+        ]
+        self.curled_q = torch.tensor(hand_joint_defaults, device=self.device, dtype=torch.float)
         self.curled_q = self.curled_q.repeat(self.num_envs, 1).contiguous()
 
         # Set up ADR
@@ -280,11 +272,13 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         # this is a fabric based forward kinematics helper
         # the purpose is to use forward kinematics to generate a noisy fingertip and palm position and vel
         # the noisy pos and vel will be compared with pure pos and vel
-        module_path = os.path.dirname(__file__)
-        root_path = os.path.dirname(os.path.dirname(module_path))
-        self.urdf_path = os.path.join(root_path, "assets", "tg2_inspirehand", "urdf", "tg2_with_hands_no_legs.urdf")
-        self.hand_points_taskmap = RobotFrameOriginsTaskMap(self.urdf_path, self.cfg.hand_body_names,
-                                                            self.num_envs, self.device)
+        self.urdf_path = self.cfg.hand_points_urdf_path
+        if self.urdf_path and os.path.exists(self.urdf_path):
+            self.hand_points_taskmap = RobotFrameOriginsTaskMap(
+                self.urdf_path, self.cfg.hand_body_names, self.num_envs, self.device
+            )
+        else:
+            self.hand_points_taskmap = None
 
         # markers
         self.pred_pos_markers = VisualizationMarkers(
@@ -371,6 +365,24 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
 
         objects_full_path = scene_objects_usd_path + objects_dir + "/USD"
 
+        # Check if the directory exists
+        if not os.path.exists(objects_full_path):
+            error_msg = (
+                f"\n{'='*80}\n"
+                f"ERROR: Object directory not found!\n"
+                f"{'='*80}\n"
+                f"Looking for: {objects_full_path}\n\n"
+                f"The objects directory '{objects_dir}' does not exist.\n\n"
+                f"You need to create the following directory structure:\n"
+                f"  {scene_objects_usd_path}{objects_dir}/USD/<object_name>/<object_name>.usd\n\n"
+                f"For testing, you can create a simple directory structure:\n"
+                f"  mkdir -p \"{objects_full_path}/cube\"\n"
+                f"  (then place a cube.usd file in that directory)\n\n"
+                f"Valid object directories according to config: {self.cfg.valid_objects_dir}\n"
+                f"{'='*80}\n"
+            )
+            raise FileNotFoundError(error_msg)
+
         # List all subdirectories in the target directory
         sub_dirs = sorted(os.listdir(objects_full_path))
 
@@ -387,13 +399,9 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         if self.cfg.objects_dir not in self.cfg.valid_objects_dir:
             raise ValueError(f"Need to specify valid directory of objects for training: {self.cfg.valid_objects_dir}")
 
-        num_unique_objects_found = self.find_num_unique_objects(self.cfg.objects_dir)
-        if num_unique_objects_found < 1:
+        num_unique_objects = self.find_num_unique_objects(self.cfg.objects_dir)
+        if num_unique_objects < 1:
             raise ValueError(f"No objects found under assets/{self.cfg.objects_dir}/USD")
-
-        # Single-object training: _setup_objects() will use only 1 object at a time,
-        # so we need to match the one-hot encoding size used there.
-        num_unique_objects = 1
 
         # Hardcode observation sizes (base + num_unique_objects).
         # num_actuated = 13, num_hand_bodies = 6 -> student obs = 96
@@ -439,19 +447,12 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         self.object_contact_sensors = []
         self.object_contact_links = []
         object_contact_cfgs = [
-            ("palm", self.cfg.palm_object_contact_sensor),
-            ("index_link_0", self.cfg.index0_object_contact_sensor),
-            ("middle_link_0", self.cfg.middle0_object_contact_sensor),
-            ("ring_link_0", self.cfg.ring0_object_contact_sensor),
-            ("little_link_0", self.cfg.little0_object_contact_sensor),
-            ("index_link_1", self.cfg.index1_object_contact_sensor),
-            ("middle_link_1", self.cfg.middle1_object_contact_sensor),
-            ("ring_link_1", self.cfg.ring1_object_contact_sensor),
-            ("little_link_1", self.cfg.little1_object_contact_sensor),
-            ("thumb_link_0", self.cfg.thumb0_object_contact_sensor),
-            ("thumb_link_1", self.cfg.thumb1_object_contact_sensor),
-            ("thumb_link_2", self.cfg.thumb2_object_contact_sensor),
-            ("thumb_link_3", self.cfg.thumb3_object_contact_sensor),
+            ("palm", getattr(self.cfg, "palm_object_contact_sensor", None)),
+            ("index_tip", getattr(self.cfg, "index1_object_contact_sensor", None)),
+            ("middle_tip", getattr(self.cfg, "middle1_object_contact_sensor", None)),
+            ("ring_tip", getattr(self.cfg, "ring1_object_contact_sensor", None)),
+            ("pinky_tip", getattr(self.cfg, "little1_object_contact_sensor", None)),
+            ("thumb_tip", getattr(self.cfg, "thumb3_object_contact_sensor", None)),
         ]
         for link_name, sensor_cfg in object_contact_cfgs:
             sensor = ContactSensor(sensor_cfg)
@@ -463,20 +464,20 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         self.table_contact_sensors = []
         self.table_contact_links = []
         table_contact_cfgs = [
-            ("shoulder_pitch_r_link", self.cfg.shoulder_pitch_r_link_table_contact_sensor),
-            ("shoulder_roll_r_link", self.cfg.shoulder_roll_r_link_table_contact_sensor),
-            ("shoulder_yaw_r_link", self.cfg.shoulder_yaw_r_link_table_contact_sensor),
-            ("elbow_pitch_r_link", self.cfg.elbow_pitch_r_link_table_contact_sensor),
-            ("elbow_yaw_r_link", self.cfg.elbow_yaw_r_link_table_contact_sensor),
-            ("wrist_pitch_r_link", self.cfg.wrist_pitch_r_link_table_contact_sensor),
-            ("wrist_roll_r_link", self.cfg.wrist_roll_r_link_table_contact_sensor),
+            ("fr3_link0", self.cfg.fr3_link0_table_contact_sensor),
+            ("fr3_link1", self.cfg.fr3_link1_table_contact_sensor),
+            ("fr3_link2", self.cfg.fr3_link2_table_contact_sensor),
+            ("fr3_link3", self.cfg.fr3_link3_table_contact_sensor),
+            ("fr3_link4", self.cfg.fr3_link4_table_contact_sensor),
+            ("fr3_link5", self.cfg.fr3_link5_table_contact_sensor),
+            ("fr3_link6", self.cfg.fr3_link6_table_contact_sensor),
         ]
         for link_name, sensor_cfg in table_contact_cfgs:
             sensor = ContactSensor(sensor_cfg)
             self.scene.sensors[f"table_contact_sensor_{link_name}"] = sensor
             self.table_contact_sensors.append(sensor)
             self.table_contact_links.append(link_name)
-        # print("current contact links = ", self.table_contact_links)
+        print("current contact links = ", self.table_contact_links)
         
 
         # add lights
@@ -1107,15 +1108,15 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         table_half_y = self.cfg.table_size_y * 0.5 + bbox_margin
         table_top_z = self.table_pos_z + self.cfg.table_size_z * 0.5
 
-        # Hand termination: keep middle_link_0 origin inside a box above the table surface
-        middle_pos = self.robot.data.body_pos_w[:, self.middle_link_0_body_idx] - self.scene.env_origins
-        middle_x_out = (middle_pos[:, 0] > (self.table_pos[:, 0] + table_half_x)) | \
-                       (middle_pos[:, 0] < (self.table_pos[:, 0] - table_half_x))
-        middle_y_out = (middle_pos[:, 1] > (self.table_pos[:, 1] + table_half_y)) | \
-                       (middle_pos[:, 1] < (self.table_pos[:, 1] - table_half_y))
-        # Constrain middle_link_0 height to remain between the table surface and a band above it
-        middle_z_out = (middle_pos[:, 2] < table_top_z) | (middle_pos[:, 2] > (table_top_z + 1.0 + bbox_margin))
-        hand_too_far = middle_x_out | middle_y_out | middle_z_out
+        # Hand termination: keep a reference hand body inside a box above the table surface
+        workspace_pos = self.robot.data.body_pos_w[:, self.hand_workspace_body_idx] - self.scene.env_origins
+        workspace_x_out = (workspace_pos[:, 0] > (self.table_pos[:, 0] + table_half_x)) | \
+                          (workspace_pos[:, 0] < (self.table_pos[:, 0] - table_half_x))
+        workspace_y_out = (workspace_pos[:, 1] > (self.table_pos[:, 1] + table_half_y)) | \
+                          (workspace_pos[:, 1] < (self.table_pos[:, 1] - table_half_y))
+        # Constrain reference hand body height to remain between the table surface and a band above it
+        workspace_z_out = (workspace_pos[:, 2] < table_top_z) | (workspace_pos[:, 2] > (table_top_z + 1.0 + bbox_margin))
+        hand_too_far = workspace_x_out | workspace_y_out | workspace_z_out
 
         # Hand termination: any palm/fingertip point closer than 2 cm to table surface
         hand_min_z = self.hand_pos[..., 2].min(dim=1).values
@@ -1533,11 +1534,11 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         contact_fingers = [set() for _ in range(self.num_envs)]
 
         tip_links = {
-            "index_link_1": "index",
-            "middle_link_1": "middle",
-            "ring_link_1": "ring",
-            "little_link_1": "little",
-            "thumb_link_3": "thumb",
+            "index_tip": "index",
+            "middle_tip": "middle",
+            "ring_tip": "ring",
+            "pinky_tip": "pinky",
+            "thumb_tip": "thumb",
         }
 
         def _finger_name(link: str) -> str | None:
@@ -1623,12 +1624,17 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         # Robot fingertip and palm velocity. 6D
         self.hand_vel = self.robot.data.body_vel_w[:, self.hand_bodies]
 
-        # Noisy hand point position and velocity from hand taskmap
-        self.hand_pos_noisy, hand_points_jac = self.hand_points_taskmap(robot_dof_pos_noisy_full, None)
-        self.hand_vel_noisy = torch.bmm(hand_points_jac, robot_dof_vel_noisy_full.unsqueeze(2)).squeeze(2)
+        # Noisy hand point position and velocity from hand taskmap (if available)
+        if self.hand_points_taskmap is not None:
+            self.hand_pos_noisy, hand_points_jac = self.hand_points_taskmap(robot_dof_pos_noisy_full, None)
+            self.hand_vel_noisy = torch.bmm(
+                hand_points_jac, robot_dof_vel_noisy_full.unsqueeze(2)
+            ).squeeze(2)
+        else:
+            self.hand_pos_noisy = self.hand_pos.view(self.num_envs, -1)
+            self.hand_vel_noisy = self.hand_vel[:, :, :3].contiguous().view(self.num_envs, -1)
         self.hand_vel_noisy *= self.dextrah_adr.get_custom_param_value(
-            "observation_annealing"
-            ,"coefficient"
+            "observation_annealing", "coefficient"
         )
 
         # Compute table data (per-step)

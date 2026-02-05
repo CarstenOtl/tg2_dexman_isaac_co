@@ -27,7 +27,9 @@ def main():
     from isaaclab.utils import configclass
     from isaacsim.core.utils.prims import set_prim_attribute_value
 
-    from dextrah_lab.assets.kuka_inspirehand.kuka_inspirehand import KUKA_INSPIREHAND_CFG
+    from dextrah_lab.assets.kuka_inspirehand.kuka_inspirehand import (
+        KUKA_INSPIREHAND_CFG,
+    )
 
     start_joint_pos_map = {
         "iiwa7_joint_1": -0.85,
@@ -55,9 +57,12 @@ def main():
     class ContactSensorSceneCfg(InteractiveSceneCfg):
         """Design the scene with sensors on the robot."""
 
-        ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
+        ground = AssetBaseCfg(
+            prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg()
+        )
         dome_light = AssetBaseCfg(
-            prim_path="/World/Light", spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
+            prim_path="/World/Light",
+            spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)),
         )
 
         robot = KUKA_INSPIREHAND_CFG.replace(
@@ -102,7 +107,9 @@ def main():
                 ),
                 mass_props=sim_utils.MassPropertiesCfg(density=500.0),
             ),
-            init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.5, 0.0, 0.5), rot=(1.0, 0.0, 0.0, 0.0)),
+            init_state=RigidObjectCfg.InitialStateCfg(
+                pos=(-0.5, 0.0, 0.5), rot=(1.0, 0.0, 0.0, 0.0)
+            ),
         )
 
         contact_palm = ContactSensorCfg(
@@ -115,12 +122,16 @@ def main():
             ],
         )
 
-    scene_cfg = ContactSensorSceneCfg(num_envs=1, env_spacing=2.0, replicate_physics=False)
+    scene_cfg = ContactSensorSceneCfg(
+        num_envs=1, env_spacing=2.0, replicate_physics=False
+    )
 
     sim_dt = 1.0 / 120.0
     sim_cfg = sim_utils.SimulationCfg(dt=sim_dt, device="cpu")
 
-    with build_simulation_context(sim_cfg=sim_cfg, device="cpu", add_ground_plane=False, add_lighting=False) as sim:
+    with build_simulation_context(
+        sim_cfg=sim_cfg, device="cpu", add_ground_plane=False, add_lighting=False
+    ) as sim:
         scene = InteractiveScene(scene_cfg)
         contact_sensor = ContactSensor(scene_cfg.contact_palm)
         scene.sensors["contact_palm"] = contact_sensor
@@ -149,7 +160,9 @@ def main():
         #         start_joint_pos[:, idx] = start_joint_pos_map[name]
         # robot.write_joint_state_to_sim(start_joint_pos, torch.zeros_like(start_joint_pos))
 
-        resolved_paths = contact_sensor.body_physx_view.prim_paths[: contact_sensor.num_bodies]
+        resolved_paths = contact_sensor.body_physx_view.prim_paths[
+            : contact_sensor.num_bodies
+        ]
         print(f"[INFO] Contact sensor prim path: {contact_sensor.cfg.prim_path}")
         if len(resolved_paths) > 0:
             print(f"[INFO] First resolved body prim: {resolved_paths[0]}")
