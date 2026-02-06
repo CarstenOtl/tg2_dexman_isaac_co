@@ -1,0 +1,1285 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="Left_adof">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="0.00256362310249171 0.00209272766336543 0.0633041969327663"
+        rpy="0 0 0" />
+      <mass
+        value="0.794438032911652" />
+      <inertia
+        ixx="0.00024368505298997"
+        ixy="5.45254176715344E-06"
+        ixz="-5.94931936589084E-07"
+        iyy="0.000215702971891822"
+        iyz="6.40696359483457E-06"
+        izz="0.000174945243517477" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="Thumb_rot">
+    <inertial>
+      <origin
+        xyz="0.0362364955523771 0.00668437770488218 -0.0351473520950847"
+        rpy="0 0 0" />
+      <mass
+        value="0.178494446349036" />
+      <inertia
+        ixx="3.55511960431494E-05"
+        ixy="-1.87663783233344E-06"
+        ixz="-7.87875918405009E-06"
+        iyy="4.7830269167639E-05"
+        iyz="-4.56660136506504E-06"
+        izz="2.16479699010905E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Thumb_rot.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_thumb_rot.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_thumb_rot"
+    type="revolute">
+    <origin
+      xyz="0.033806 -0.027174 0.082137"
+      rpy="-0.060476 0.087782 -0.60444" />
+    <parent
+      link="base_link" />
+    <child
+      link="Thumb_rot" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.35"
+      upper="0.35"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Thumb_MCP_Pitch">
+    <inertial>
+      <origin
+        xyz="-0.00105266270640016 0.000244170136546769 -0.00104032791511533"
+        rpy="0 0 0" />
+      <mass
+        value="1.55508836352695E-08" />
+      <inertia
+        ixx="1.39957952717425E-14"
+        ixy="3.94430452610506E-31"
+        ixz="1.97215226305253E-31"
+        iyy="1.39957952717425E-14"
+        iyz="4.93038065763132E-31"
+        izz="1.39957952717425E-14" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Thumb_MCP_Pitch.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Thumb_MCP_Pitch.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_thumb_mcp_pitch"
+    type="revolute">
+    <origin
+      xyz="0.049572 0.012465 -0.0022098"
+      rpy="1.0587 -1.2066 0.48367" />
+    <parent
+      link="Thumb_rot" />
+    <child
+      link="Thumb_MCP_Pitch" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.069"
+      upper="1.396"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Thumb_MCP_Yaw">
+    <inertial>
+      <origin
+        xyz="0.0232890653681961 -0.000259269267488114 -0.00244668770465117"
+        rpy="0 0 0" />
+      <mass
+        value="0.0676731109190579" />
+      <inertia
+        ixx="2.55213089578894E-06"
+        ixy="-1.15209972156133E-07"
+        ixz="-6.42247638667487E-07"
+        iyy="7.04219684284291E-06"
+        iyz="-1.62438169779966E-08"
+        izz="6.12789902571019E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Index_MCP_Yaw.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_PIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_thumb_mcp_yaw"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="-1.5708 0 -0.17819" />
+    <parent
+      link="Thumb_MCP_Pitch" />
+    <child
+      link="Thumb_MCP_Yaw" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.26"
+      upper="0.26"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Thumb_Middle_Phalanx">
+    <inertial>
+      <origin
+        xyz="0.00775986888795849 -0.00177740119507477 -0.00042311029960191"
+        rpy="0 0 0" />
+      <mass
+        value="0.0295434667315611" />
+      <inertia
+        ixx="7.87114988966308E-07"
+        ixy="-4.3574874373084E-08"
+        ixz="-8.32466348359751E-09"
+        iyy="1.55305457261286E-06"
+        iyz="2.17328726437322E-09"
+        izz="1.86700955481165E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Thumb_Middle_Phalanx.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_MIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_thumb_pip"
+    type="revolute">
+    <origin
+      xyz="0.054033 0 0.0095766"
+      rpy="1.5708 -0.17818 0" />
+    <parent
+      link="Thumb_MCP_Yaw" />
+    <child
+      link="Thumb_Middle_Phalanx" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.069"
+      upper="1.57"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Thumb_Distal_Phalanx">
+    <inertial>
+      <origin
+        xyz="0.00494201897430849 0.00565893664145822 0.0014452377520064"
+        rpy="0 0 0" />
+      <mass
+        value="0.0226880510233156" />
+      <inertia
+        ixx="1.22852774512175E-06"
+        ixy="-2.98153238556152E-07"
+        ixz="3.06271776801768E-10"
+        iyy="1.07924334076223E-06"
+        iyz="1.05927354180391E-08"
+        izz="1.29309970241189E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Thumb_Distal_Phalanx.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 1" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_DIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_thumb_dip"
+    type="revolute">
+    <origin
+      xyz="0.025 0 0"
+      rpy="0 0 -1.0072" />
+    <parent
+      link="Thumb_Middle_Phalanx" />
+    <child
+      link="Thumb_Distal_Phalanx" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="1.57"
+      effort="0"
+      velocity="0" />
+    <mimic
+      joint="revolute_thumb_pip"
+      multiplier="1"
+      offset="0" />
+  </joint>
+  <link
+    name="Index_MCP_Pitch">
+    <inertial>
+      <origin
+        xyz="0 8.67361737988404E-19 6.93889390390723E-18"
+        rpy="0 0 0" />
+      <mass
+        value="1.55508836352695E-08" />
+      <inertia
+        ixx="1.39957952717425E-14"
+        ixy="-1.20370621524202E-35"
+        ixz="0"
+        iyy="1.39957952717425E-14"
+        iyz="3.23579128230901E-32"
+        izz="1.39957952717425E-14" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Index_MCP_Pitch.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Index_MCP_Pitch.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_index_mcp_pitch"
+    type="revolute">
+    <origin
+      xyz="-0.0023244 -0.036779 0.11154"
+      rpy="-1.4835 -1.5708 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="Index_MCP_Pitch" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.069"
+      upper="1.396"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Index_MCP_Yaw">
+    <inertial>
+      <origin
+        xyz="0.0233540045604141 -0.000259250314705729 0.00171971591114928"
+        rpy="0 0 0" />
+      <mass
+        value="0.0676731215921303" />
+      <inertia
+        ixx="2.88856780323055E-06"
+        ixy="-1.10469701164083E-07"
+        ixz="-1.22562112469265E-06"
+        iyy="7.04212459246203E-06"
+        iyz="-3.64004670019284E-08"
+        izz="5.7914486598132E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Index_MCP_Yaw.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_PIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_index_mcp_yaw"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="-1.5708 0 -0.17819" />
+    <parent
+      link="Index_MCP_Pitch" />
+    <child
+      link="Index_MCP_Yaw" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.26"
+      upper="0.26"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Index_Middle_Phalanx">
+    <inertial>
+      <origin
+        xyz="0.007759692191847 -0.00177727750689339 -0.000423131838615531"
+        rpy="0 0 0" />
+      <mass
+        value="0.029543713899036" />
+      <inertia
+        ixx="7.87137400454539E-07"
+        ixy="-4.35415781311165E-08"
+        ixz="-8.3303096899022E-09"
+        iyy="1.55303725090546E-06"
+        iyz="2.17005094140847E-09"
+        izz="1.8670302947545E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Index_Middle_Phalanx.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_MIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_index_pip"
+    type="revolute">
+    <origin
+      xyz="0.053177 0 0.0095766"
+      rpy="1.5708 -0.17818 0" />
+    <parent
+      link="Index_MCP_Yaw" />
+    <child
+      link="Index_Middle_Phalanx" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.069"
+      upper="1.57"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Index_Distal_Phalanx">
+    <inertial>
+      <origin
+        xyz="0.00742361808176753 -0.00115463735901484 0.00144524644840852"
+        rpy="0 0 0" />
+      <mass
+        value="0.0226874242976021" />
+      <inertia
+        ixx="8.52515004709151E-07"
+        ixy="6.0599671317179E-08"
+        ixz="9.1393597614128E-09"
+        iyy="1.45516478032157E-06"
+        iyz="5.41938464600491E-09"
+        izz="1.29305310867773E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Index_Distal_Phalanx.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_DIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_index_dip"
+    type="revolute">
+    <origin
+      xyz="0.025 0 0"
+      rpy="0 0 0" />
+    <parent
+      link="Index_Middle_Phalanx" />
+    <child
+      link="Index_Distal_Phalanx" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="1.57"
+      effort="0"
+      velocity="0" />
+    <mimic
+      joint="revolute_index_pip"
+      multiplier="1"
+      offset="0" />
+  </joint>
+  <link
+    name="Middle_MCP_Pitch">
+    <inertial>
+      <origin
+        xyz="-1.38777878078145E-17 -8.67361737988404E-19 1.73472347597681E-18"
+        rpy="0 0 0" />
+      <mass
+        value="1.55508836352695E-08" />
+      <inertia
+        ixx="1.39957952717425E-14"
+        ixy="0"
+        ixz="-7.52316384526264E-37"
+        iyy="1.39957952717425E-14"
+        iyz="-1.40129846432482E-45"
+        izz="1.39957952717425E-14" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Middle_MCP_Pitch.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Middle_MCP_Pitch.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_middle_mcp_pitch"
+    type="revolute">
+    <origin
+      xyz="-0.0035 -0.01 0.12154"
+      rpy="0.0014449 -1.5708 -1.5722" />
+    <parent
+      link="base_link" />
+    <child
+      link="Middle_MCP_Pitch" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.069"
+      upper="1.396"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Middle_MCP_Yaw">
+    <inertial>
+      <origin
+        xyz="0.0233539041654981 -0.000259281718289059 0.0017195478022842"
+        rpy="0 0 0" />
+      <mass
+        value="0.0676722704341892" />
+      <inertia
+        ixx="2.88853397053652E-06"
+        ixy="-1.10498284868779E-07"
+        ixz="-1.22562062657644E-06"
+        iyy="7.04199869825277E-06"
+        iyz="-3.64050993102876E-08"
+        izz="5.79129480535713E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Middle_MCP_Yaw.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_PIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_middle_mcp_yaw"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="-1.5708 0 -0.17818" />
+    <parent
+      link="Middle_MCP_Pitch" />
+    <child
+      link="Middle_MCP_Yaw" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.26"
+      upper="0.26"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Middle_Middle_Phalanx">
+    <inertial>
+      <origin
+        xyz="0.00775967606665431 -0.00177726806304347 -0.000423136941101193"
+        rpy="0 0 0" />
+      <mass
+        value="0.0295437666350202" />
+      <inertia
+        ixx="7.87140076952594E-07"
+        ixy="-4.35389666806245E-08"
+        ixz="-8.33036392200836E-09"
+        iyy="1.55303983133657E-06"
+        iyz="2.16951511149813E-09"
+        izz="1.86703596165431E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Middle_Middle_Phalanx.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_MIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_middle_pip"
+    type="revolute">
+    <origin
+      xyz="0.053177 0 0.0095766"
+      rpy="1.5708 -0.17818 0" />
+    <parent
+      link="Middle_MCP_Yaw" />
+    <child
+      link="Middle_Middle_Phalanx" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.069"
+      upper="1.57"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Middle_Distal_Phalanx">
+    <inertial>
+      <origin
+        xyz="0.00742355667373351 -0.00115461805983697 0.00144525689146853"
+        rpy="0 0 0" />
+      <mass
+        value="0.0226873233215518" />
+      <inertia
+        ixx="8.52513763019444E-07"
+        ixy="6.05987195064238E-08"
+        ixz="9.13916647145857E-09"
+        iyy="1.45515794902136E-06"
+        iyz="5.41967880678988E-09"
+        izz="1.29304608651733E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Middle_Distal_Phalanx.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_DIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_middle_dip"
+    type="revolute">
+    <origin
+      xyz="0.025 0 0"
+      rpy="0 0 0" />
+    <parent
+      link="Middle_Middle_Phalanx" />
+    <child
+      link="Middle_Distal_Phalanx" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="1.57"
+      effort="0"
+      velocity="0" />
+    <mimic
+      joint="revolute_middle_pip"
+      multiplier="1"
+      offset="0" />
+  </joint>
+  <link
+    name="Ring_MCP_Pitch">
+    <inertial>
+      <origin
+        xyz="0 8.67361737988404E-19 0"
+        rpy="0 0 0" />
+      <mass
+        value="1.55508836352695E-08" />
+      <inertia
+        ixx="1.39957952717425E-14"
+        ixy="0"
+        ixz="1.43492962746861E-42"
+        iyy="1.39957952717425E-14"
+        iyz="-1.10872722239251E-37"
+        izz="1.39957952717425E-14" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Ring_MCP_Pitch.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Ring_MCP_Pitch.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_ring_mcp_pitch"
+    type="revolute">
+    <origin
+      xyz="-0.00233 0.016783 0.11654"
+      rpy="1.4835 -1.5708 3.1415" />
+    <parent
+      link="base_link" />
+    <child
+      link="Ring_MCP_Pitch" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.069"
+      upper="1.396"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Ring_MCP_Yaw">
+    <inertial>
+      <origin
+        xyz="0.0233539200829776 -0.000259280030911659 0.00171960539602342"
+        rpy="0 0 0" />
+      <mass
+        value="0.0676725890180578" />
+      <inertia
+        ixx="2.88855374187173E-06"
+        ixy="-1.10503970644276E-07"
+        ixz="-1.22562397178799E-06"
+        iyy="7.04203097099806E-06"
+        iyz="-3.64092810946337E-08"
+        izz="5.79134035952153E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Ring_MCP_Yaw.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_PIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_ring_mcp_yaw"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="-1.5708 0 -0.17818" />
+    <parent
+      link="Ring_MCP_Pitch" />
+    <child
+      link="Ring_MCP_Yaw" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.26"
+      upper="0.26"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Ring_Middle_Phalanx">
+    <inertial>
+      <origin
+        xyz="0.00775966712873505 -0.00177726100220847 -0.000423150211351211"
+        rpy="0 0 0" />
+      <mass
+        value="0.0295437347620288" />
+      <inertia
+        ixx="7.87136691391978E-07"
+        ixy="-4.35361437098925E-08"
+        ixz="-8.33074992692593E-09"
+        iyy="1.55304010746797E-06"
+        iyz="2.16977653678596E-09"
+        izz="1.86703638071053E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Ring_Middle_Phalanx.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_MIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_ring_pip"
+    type="revolute">
+    <origin
+      xyz="0.053177 0 0.0095766"
+      rpy="1.5708 -0.17818 0" />
+    <parent
+      link="Ring_MCP_Yaw" />
+    <child
+      link="Ring_Middle_Phalanx" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.069"
+      upper="1.57"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Ring_Distal_Phalanx">
+    <inertial>
+      <origin
+        xyz="0.0074235572714535 -0.0011546224643205 0.00144525459942273"
+        rpy="0 0 0" />
+      <mass
+        value="0.0226873335195876" />
+      <inertia
+        ixx="8.52513795798611E-07"
+        ixy="6.05989855297472E-08"
+        ixz="9.14012360803469E-09"
+        iyy="1.45515914939938E-06"
+        iyz="5.42000186509089E-09"
+        izz="1.29304694366033E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Ring_Distal_Phalanx.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_DIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_ring_dip"
+    type="revolute">
+    <origin
+      xyz="0.025 0 0"
+      rpy="0 0 0" />
+    <parent
+      link="Ring_Middle_Phalanx" />
+    <child
+      link="Ring_Distal_Phalanx" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="1.57"
+      effort="0"
+      velocity="0" />
+    <mimic
+      joint="revolute_ring_pip"
+      multiplier="1"
+      offset="0" />
+  </joint>
+  <link
+    name="Pinky_MCP_Pitch">
+    <inertial>
+      <origin
+        xyz="-3.46944695195361E-16 -5.21284404531031E-15 -6.93889390390723E-18"
+        rpy="0 0 0" />
+      <mass
+        value="1.55508836352695E-08" />
+      <inertia
+        ixx="1.39957952717425E-14"
+        ixy="-3.44383110592467E-41"
+        ixz="2.86985925493723E-42"
+        iyy="1.39957952717425E-14"
+        iyz="-9.53178410376209E-38"
+        izz="1.39957952717425E-14" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Pinky_MCP_Pitch.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Pinky_MCP_Pitch.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_pinky_mcp_pitch"
+    type="revolute">
+    <origin
+      xyz="0.0011768 0.04336 0.097543"
+      rpy="1.3963 -1.5708 3.1415" />
+    <parent
+      link="base_link" />
+    <child
+      link="Pinky_MCP_Pitch" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.069"
+      upper="1.396"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Pinky_MCP_Yaw">
+    <inertial>
+      <origin
+        xyz="0.0233539835908446 -0.000259287916514542 0.0017196442277051"
+        rpy="0 0 0" />
+      <mass
+        value="0.0676728112532772" />
+      <inertia
+        ixx="2.88856080303293E-06"
+        ixy="-1.10493541782482E-07"
+        ixz="-1.22561369880099E-06"
+        iyy="7.0421153337708E-06"
+        iyz="-3.64140235607113E-08"
+        izz="5.7914317606325E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Pinky_MCP_Yaw.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_PIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_pinky_mcp_yaw"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="-1.5708 0 -0.17818" />
+    <parent
+      link="Pinky_MCP_Pitch" />
+    <child
+      link="Pinky_MCP_Yaw" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.26"
+      upper="0.26"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Pinky_Middle_Phalanx">
+    <inertial>
+      <origin
+        xyz="0.00775970916453103 -0.00177726189723935 -0.000423165884305333"
+        rpy="0 0 0" />
+      <mass
+        value="0.0295437409813729" />
+      <inertia
+        ixx="7.87129250479017E-07"
+        ixy="-4.35378949068518E-08"
+        ixz="-8.33359246494377E-09"
+        iyy="1.55305091562296E-06"
+        iyz="2.17152321050078E-09"
+        izz="1.86704083771824E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Pinky_Middle_Phalanx.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_MIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_pinky_pip"
+    type="revolute">
+    <origin
+      xyz="0.053177 0 0.0095766"
+      rpy="1.5708 -0.17818 0" />
+    <parent
+      link="Pinky_MCP_Yaw" />
+    <child
+      link="Pinky_Middle_Phalanx" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.069"
+      upper="1.57"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Pinky_Distal_Phalanx">
+    <inertial>
+      <origin
+        xyz="0.00742354856923602 -0.00115462128547901 0.00144525907356892"
+        rpy="0 0 0" />
+      <mass
+        value="0.0226873183929393" />
+      <inertia
+        ixx="8.52513699663284E-07"
+        ixy="6.06000710333685E-08"
+        ixz="9.13983599748464E-09"
+        iyy="1.45515746616059E-06"
+        iyz="5.41995064574228E-09"
+        izz="1.29304562314314E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/Pinky_Distal_Phalanx.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="./meshes/collmesh_DIP.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="revolute_pinky_dip"
+    type="revolute">
+    <origin
+      xyz="0.025 0 0"
+      rpy="0 0 0" />
+    <parent
+      link="Pinky_Middle_Phalanx" />
+    <child
+      link="Pinky_Distal_Phalanx" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="1.57"
+      effort="0"
+      velocity="0" />
+    <mimic
+      joint="revolute_pinky_pip"
+      multiplier="1"
+      offset="0" />
+  </joint>
+</robot>

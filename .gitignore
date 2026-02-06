@@ -23,6 +23,12 @@ dextrah_lab/assets/*
 !dextrah_lab/assets/kuka_inspirehand_modified/**
 !dextrah_lab/assets/tg2_inspirehand/
 !dextrah_lab/assets/tg2_inspirehand/**
+!dextrah_lab/assets/fr3_tekken_adof/
 !dextrah_lab/assets/fr3_tekken_adof/**
+!dextrah_lab/assets/FrankaFR3/
+!dextrah_lab/assets/FrankaFR3/**
+!dextrah_lab/assets/tekken_adof/
+!dextrah_lab/assets/tekken_adof/**
+
 reference/
 # dextrah_lab/stored_policies/
