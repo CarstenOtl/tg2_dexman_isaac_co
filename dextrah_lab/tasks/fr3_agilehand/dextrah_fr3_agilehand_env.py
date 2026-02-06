@@ -403,17 +403,47 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         if num_unique_objects < 1:
             raise ValueError(f"No objects found under assets/{self.cfg.objects_dir}/USD")
 
-        # Hardcode observation sizes (base + num_unique_objects).
-        # num_actuated = 13, num_hand_bodies = 6 -> student obs = 96
-        self.cfg.num_student_observations = 78
-        # Teacher: base 86 + num_unique_objects (object one-hot)
-        self.cfg.num_teacher_observations = 86 + num_unique_objects
+        # Compute observation sizes dynamically from robot dimensions.
+        # NOTE: self.actuated_dof_indices / self.num_hand_bodies are not yet available
+        # here (set in __init__ after super().__init__), and self.robot.num_joints
+        # requires the PhysX view which isn't ready yet.
+        # Derive all counts from the config lists instead.
+        num_actuated = len(self.cfg.actuated_joint_names)   # e.g. 23
+        num_hand_bodies = len(self.cfg.hand_body_names)     # e.g. 6
+        # Total DOFs including mimic joints (PhysX counts them as DOFs).
+        # get_dof_projected_joint_forces() returns one value per DOF.
+        num_dofs = len(self.cfg.starting_robot_dof_friction_coefficients)  # e.g. 28
+
+        # Policy obs: dof_pos(act) + dof_vel(act) + hand_pos(hb*3) + hand_vel(hb*3)
+        #           + obj_pos(3) + obj_rot(4) + obj_goal(3)
+        #           + onehot(num_unique) + obj_scale(1) + actions(act)
+        teacher_base = (num_actuated * 2
+                        + num_hand_bodies * 3 + num_hand_bodies * 3
+                        + 3 + 4 + 3
+                        + 1          # object_scale
+                        + num_actuated)  # actions
+        self.cfg.num_teacher_observations = teacher_base + num_unique_objects
+
+        # Student obs (placeholder — adjust if distillation pipeline changes)
+        self.cfg.num_student_observations = self.cfg.num_teacher_observations
+
         if self.cfg.distillation:
             self.cfg.num_observations = self.cfg.num_student_observations
         else:
             self.cfg.num_observations = self.cfg.num_teacher_observations
-        # Critic: base 132 + num_unique_objects (object one-hot)
-        self.cfg.num_states = 132 + num_unique_objects
+
+        # Critic obs: dof_pos(act) + dof_vel(act) + hand_pos(hb*3) + hand_vel(hb*6)
+        #           + hand_forces(3) + measured_torque(num_dofs)
+        #           + obj_pos(3) + obj_rot(4) + obj_vel(6) + obj_goal(3)
+        #           + onehot(num_unique) + obj_scale(1) + actions(act)
+        critic_base = (num_actuated * 2
+                       + num_hand_bodies * 3 + num_hand_bodies * 6
+                       + 3          # hand_forces[:, :3]
+                       + num_dofs   # measured_joint_torque (per-DOF, excl. mimic)
+                       + 3 + 4 + 6 + 3
+                       + 1          # object_scale
+                       + num_actuated)  # actions
+        self.cfg.num_states = critic_base + num_unique_objects
 
         self.cfg.state_space = self.cfg.num_states
         self.cfg.observation_space = self.cfg.num_observations

@@ -222,10 +222,10 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_object_distance_body_names = hand_body_names
 
     # Palm body name for computing palm direction vectors
-    palm_body_name = "tekken_left_adof/base_link"
+    palm_body_name = "base_link"
     
     # Hand workspace body name (typically the hand base or arm flange)
-    hand_workspace_body_name = "tekken_left_adof/base_link"
+    hand_workspace_body_name = "base_link"
 
     # Optional URDF for forward-kinematics hand point taskmap.
     hand_points_urdf_path = None
@@ -634,16 +634,30 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     num_adr_increments = 50
     starting_adr_increments = 0 # 0 for no DR up to num_adr_increments for max DR 
 
-    # Default dof friction coefficients
-    # NOTE: these are set based on how far out they will scale multiplicatively
-    # with the above robot_joint_friction EventTerm above.
+    # Default friction coefficients for all 28 joints (DOFs) in USD order.
+    # NOTE: PhysX treats mimic/DIP joints as DOFs, so all 28 must be listed.
+    # These are scaled multiplicatively by the robot_joint_friction EventTerm.
+    #   0-6:   fr3_joint1..7
+    #   7-10:  index/middle/pinky/ring _mcp_pitch
+    #   11:    thumb_rot
+    #   12-15: index/middle/pinky/ring _mcp_yaw
+    #   16:    thumb_mcp_pitch
+    #   17-20: index/middle/pinky/ring _pip
+    #   21:    thumb_mcp_yaw
+    #   22-25: index/middle/pinky/ring _dip  (mimic, still counted as DOF)
+    #   26:    thumb_pip
+    #   27:    thumb_dip  (mimic, still counted as DOF)
     starting_robot_dof_friction_coefficients = [
-        1., 1., 1., 1., 1., 1., 1., # arm joints
-        0.01, 0.01, 0.01,   # index finger joints # default 0.01
-        0.01, 0.01, 0.01,   # middle finger joints
-        0.01, 0.01, 0.01,   # ring finger joints
-        0.01, 0.01, 0.01,   # little finger joints
-        0.01, 0.01, 0.01, 0.01, # thumb finger joints
+        1., 1., 1., 1., 1., 1., 1.,       # arm joints (7)
+        0.01, 0.01, 0.01, 0.01,           # index/middle/pinky/ring mcp_pitch (4)
+        0.01,                              # thumb_rot (1)
+        0.01, 0.01, 0.01, 0.01,           # index/middle/pinky/ring mcp_yaw (4)
+        0.01,                              # thumb_mcp_pitch (1)
+        0.01, 0.01, 0.01, 0.01,           # index/middle/pinky/ring pip (4)
+        0.01,                              # thumb_mcp_yaw (1)
+        0.01, 0.01, 0.01, 0.01,           # index/middle/pinky/ring dip (4, mimic)
+        0.01,                              # thumb_pip (1)
+        0.01,                              # thumb_dip (1, mimic)
     ]
 
     # domain randomization config
