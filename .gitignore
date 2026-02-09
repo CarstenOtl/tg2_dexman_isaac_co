@@ -32,3 +32,6 @@ dextrah_lab/assets/*
 
 reference/
 # dextrah_lab/stored_policies/
+build/
+devel/
+.catkin_workspace

@@ -76,6 +76,12 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         super().__init__(cfg, render_mode, **kwargs)
 
         self.num_robot_dofs = self.robot.num_joints
+        # Optional distillation-only episode cap (separate from base max_episode_length).
+        self.distill_max_episode_length = None
+        if self.cfg.distillation and self.cfg.distillation_episode_length_s is not None:
+            step_dt = self.cfg.sim_dt * self.cfg.decimation
+            if step_dt > 0:
+                self.distill_max_episode_length = int(self.cfg.distillation_episode_length_s / step_dt)
         # Track whether any arm link is in contact with the table (per-env mask).
         self.arm_table_contact_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         # Track hand-object contact counts per env.
@@ -102,7 +108,6 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         self.actuated_dof_indices = list()
         for joint_name in cfg.actuated_joint_names:
             self.actuated_dof_indices.append(self.robot.joint_names.index(joint_name))
-
         # actions are 1:1 with actuated joints
         self.cfg.num_actions = len(self.actuated_dof_indices)
         self.num_actions = self.cfg.num_actions
@@ -229,7 +234,9 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
             DextrahADR(self.event_manager, self.cfg.adr_cfg_dict, self.cfg.adr_custom_cfg_dict)
         self.step_since_last_dr_change = 0
         if self.cfg.distillation:
-            self.cfg.starting_adr_increments = self.cfg.num_adr_increments
+            # self.cfg.starting_adr_increments = self.cfg.num_adr_increments
+            self.cfg.starting_adr_increments = 0 #disable adr for distillation now
+            
         self.dextrah_adr.set_num_increments(self.cfg.starting_adr_increments)
         self.local_adr_increment = torch.tensor(
             self.cfg.starting_adr_increments,
@@ -296,64 +303,7 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         # How many steps to print reward breakdowns for (debugging aid).
         self._reward_debug_steps_remaining = getattr(self.cfg, "debug_reward_steps", 0)
 
-        # original camera poses
-        self.camera_pos_orig = torch.tensor(
-            self.cfg.camera_pos
-        ).to(self.device).unsqueeze(0)
-        self.camera_rot_orig = np.array(self.cfg.camera_rot)
-        self.camera_rot_eul_orig = R.from_quat(
-            self.camera_rot_orig[[1, 2, 3, 0]]
-        ).as_euler('xyz', degrees=True)[None, :]
-        # tf = np.array([
-        #     9.979802254757542679e-01, 5.805126464282436838e-02, -2.579767882449228097e-02, -6.452117743594977251e-01,
-        #     2.867907587635045233e-02, -4.936231931159993508e-02, 9.983691061120923971e-01, -7.328016905360382749e-01,
-        #     5.668315593050039097e-02, -9.970924792142141779e-01, -5.092747518000630136e-02, 4.559887081479024329e-01,
-        #     0.000000000000000000e+00, 0.000000000000000000e+00, 0.000000000000000000e+00, 1.000000000000000000e+00
-        # ]).reshape(4,4)
-        tf = np.array([
-            7.416679444534866883e-02,-9.902696855667120213e-01,1.177507386359286923e-01,-7.236400044878017468e-01,
-            -1.274026398887237732e-01,1.076995435286611930e-01,9.859864987275952508e-01,-6.886495877727516479e-01,
-            -9.890742408692511090e-01,-8.812921292808308105e-02,-1.181752422362273985e-01,6.366771698474239516e-01,
-            0.000000000000000000e+00,0.000000000000000000e+00,0.000000000000000000e+00,1.000000000000000000e+00
-        ]).reshape(4,4)
-        self.camera_pose = np.tile(
-            tf, (self.num_envs, 1, 1)
-        )
-        self.right_to_left_pose = np.array([
-            [-1., 0., 0., 0.065],
-            [0., -1., 0., -0.062],
-            [0., 0., 1., 0.],
-            [0., 0., 0., 1.],
-        ])
-
-        self.camera_right_pos_orig = torch.tensor(
-            self.right_to_left_pose[:3, 3]
-        ).to(self.device).unsqueeze(0)
-        self.camera_right_rot_orig = R.from_matrix(
-            self.right_to_left_pose[:3, :3]
-        ).as_quat()
-        self.camera_right_rot_eul_orig = R.from_quat(
-            self.camera_right_rot_orig
-        ).as_euler('xyz', degrees=True)[None, :]
-        self.camera_right_pose = np.tile(
-            self.right_to_left_pose, (self.num_envs, 1, 1)
-        )
-        self.intrinsic_matrix = torch.tensor(
-            self.cfg.intrinsic_matrix,
-            device=self.device, dtype=torch.float64
-        )
-        
-        # self.right_to_left_pose = np.array([
-        #     [-0.99990465,  0.00241203,  0.01359653,  0.06590756],
-        #     [-0.00238818, -0.99999558,  0.00177028, -0.0547107 ],
-        #     [0.01360074,  0.00173764,  0.999906  , -0.00340657],
-        #     [0.        ,  0.        ,  0.        ,  1.        ]
-        # ])
-
-        self.left_pos = torch.zeros(self.num_envs, 3).to(self.device)
-        self.left_rot = torch.zeros(self.num_envs, 4).to(self.device)
-        self.right_pos = torch.zeros(self.num_envs, 3).to(self.device)
-        self.right_rot = torch.zeros(self.num_envs, 4).to(self.device)
+        self._ensure_camera_buffers()
 
         # Set the starting default joint friction coefficients
         friction_coeff = torch.tensor(self.cfg.starting_robot_dof_friction_coefficients,
@@ -398,18 +348,87 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         # Hardcode observation sizes (base + num_unique_objects).
         # num_actuated = 13, num_hand_bodies = 6 -> student obs = 96
         self.cfg.num_student_observations = 78
-        # Teacher: base 86 + num_unique_objects (object one-hot)
-        self.cfg.num_teacher_observations = 86 + num_unique_objects
+        # Teacher: base 86 + 1 (constant one-hot placeholder)
+        self.cfg.num_teacher_observations = 86 + 1
         if self.cfg.distillation:
             self.cfg.num_observations = self.cfg.num_student_observations
         else:
             self.cfg.num_observations = self.cfg.num_teacher_observations
-        # Critic: base 132 + num_unique_objects (object one-hot)
-        self.cfg.num_states = 132 + num_unique_objects
+        # Critic: base 132 + 1 (constant one-hot placeholder)
+        self.cfg.num_states = 132 + 1
 
         self.cfg.state_space = self.cfg.num_states
         self.cfg.observation_space = self.cfg.num_observations
         self.cfg.action_space = self.cfg.num_actions
+
+    def _ensure_camera_buffers(self) -> None:
+        if hasattr(self, "camera_pose") and hasattr(self, "left_pos"):
+            return
+
+        # original camera poses
+        self.camera_pos_orig = torch.tensor(
+            self.cfg.camera_pos_left,
+            device=self.device,
+        ).unsqueeze(0)
+        self.camera_rot_orig = np.array(self.cfg.camera_rot_left)
+        self.camera_rot_eul_orig = R.from_quat(
+            self.camera_rot_orig[[1, 2, 3, 0]]
+        ).as_euler('xyz', degrees=True)[None, :]
+        # tf = np.array([
+        #     9.979802254757542679e-01, 5.805126464282436838e-02, -2.579767882449228097e-02, -6.452117743594977251e-01,
+        #     2.867907587635045233e-02, -4.936231931159993508e-02, 9.983691061120923971e-01, -7.328016905360382749e-01,
+        #     5.668315593050039097e-02, -9.970924792142141779e-01, -5.092747518000630136e-02, 4.559887081479024329e-01,
+        #     0.000000000000000000e+00, 0.000000000000000000e+00, 0.000000000000000000e+00, 1.000000000000000000e+00
+        # ]).reshape(4,4)
+        tf = np.array([
+            7.416679444534866883e-02,-9.902696855667120213e-01,1.177507386359286923e-01,-7.236400044878017468e-01,
+            -1.274026398887237732e-01,1.076995435286611930e-01,9.859864987275952508e-01,-6.886495877727516479e-01,
+            -9.890742408692511090e-01,-8.812921292808308105e-02,-1.181752422362273985e-01,6.366771698474239516e-01,
+            0.000000000000000000e+00,0.000000000000000000e+00,0.000000000000000000e+00,1.000000000000000000e+00
+        ]).reshape(4,4)
+        self.camera_pose = np.tile(
+            tf, (self.num_envs, 1, 1)
+        )
+        # Stereo calibration: left-to-right transform (T in mm -> meters).
+        self.right_to_left_pose = np.array([
+            [0.99998835, 0.00352318, -0.00329847, -0.06169578743],
+            [-0.00354673, 0.99996805, -0.00716339, 0.00073945444],
+            [0.00327312, 0.00717500, 0.99996890, -0.00253082306],
+            [0.0, 0.0, 0.0, 1.0],
+        ])
+
+        self.camera_right_pos_orig = torch.tensor(
+            self.right_to_left_pose[:3, 3],
+            device=self.device,
+        ).unsqueeze(0)
+        self.camera_right_rot_orig = R.from_matrix(
+            self.right_to_left_pose[:3, :3]
+        ).as_quat()
+        self.camera_right_rot_eul_orig = R.from_quat(
+            self.camera_right_rot_orig
+        ).as_euler('xyz', degrees=True)[None, :]
+        self.camera_right_pose = np.tile(
+            self.right_to_left_pose, (self.num_envs, 1, 1)
+        )
+        if self.cfg.distillation:
+            if not hasattr(self.cfg, "intrinsic_matrix_left") or not hasattr(self.cfg, "intrinsic_matrix_right"):
+                raise RuntimeError("Camera intrinsics missing: set intrinsic_matrix_left/right in the env cfg.")
+            self.intrinsic_matrix_left = torch.tensor(
+                self.cfg.intrinsic_matrix_left,
+                device=self.device, dtype=torch.float64
+            )
+            self.intrinsic_matrix_right = torch.tensor(
+                self.cfg.intrinsic_matrix_right,
+                device=self.device, dtype=torch.float64
+            )
+        else:
+            self.intrinsic_matrix_left = None
+            self.intrinsic_matrix_right = None
+
+        self.left_pos = torch.zeros(self.num_envs, 3, device=self.device)
+        self.left_rot = torch.zeros(self.num_envs, 4, device=self.device)
+        self.right_pos = torch.zeros(self.num_envs, 3, device=self.device)
+        self.right_rot = torch.zeros(self.num_envs, 4, device=self.device)
 
     def _set_pos_marker(self, pos):
         pos = pos + self.scene.env_origins
@@ -420,6 +439,7 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         self.gt_pos_markers.visualize(pos, self.object_rot)
 
     def _setup_scene(self):
+        self._ensure_camera_buffers()
         # add robot, objects 
         # TODO: add goal objects?
         self.robot = Articulation(self.cfg.robot_cfg)
@@ -482,10 +502,20 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=1000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
+        
+        self._all_env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.int64)
         # add cameras
         if self.cfg.distillation:
-            self._tiled_camera = TiledCamera(self.cfg.tiled_camera)
-            self.scene.sensors["tiled_camera"] = self._tiled_camera
+            if not hasattr(self.cfg, "tiled_camera_left") or not hasattr(self.cfg, "tiled_camera_right"):
+                raise RuntimeError("Expected tiled_camera_left and tiled_camera_right in env cfg when distillation=True.")
+            self._tiled_camera_left = TiledCamera(self.cfg.tiled_camera_left)
+            self.scene.sensors["tiled_camera_left"] = self._tiled_camera_left
+            self._tiled_camera_right = TiledCamera(self.cfg.tiled_camera_right)
+            self.scene.sensors["tiled_camera_right"] = self._tiled_camera_right
+            self.left_pos[:] = torch.tensor(self.cfg.camera_pos_left, device=self.device)
+            self.left_rot[:] = torch.tensor(self.cfg.camera_rot_left, device=self.device)
+            self.right_pos[:] = torch.tensor(self.cfg.camera_right_pos, device=self.device)
+            self.right_rot[:] = torch.tensor(self.cfg.camera_right_rot, device=self.device)
 
         # Determine obs sizes for policies and VF
         self._setup_policy_params()
@@ -550,13 +580,21 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         if not sub_dirs:
             raise ValueError(f"No objects found under {objects_full_path}")
 
-        # Single-object training: pick the first object for all envs.
-        self.num_unique_objects = 1
-        self.multi_object_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        self.multi_object_idx_onehot = F.one_hot(
-            self.multi_object_idx, num_classes=self.num_unique_objects
-        ).float()
-        selected_object_name = sub_dirs[0]
+        if self.cfg.distillation:
+            # Track all available objects for multi-teacher distillation.
+            self.object_names = list(sub_dirs)
+            self.num_unique_objects = len(self.object_names)
+            # Deterministic assignment of object indices across envs.
+            object_indices = [i % self.num_unique_objects for i in range(self.num_envs)]
+        else:
+            # Single-object training: pick the first object for all envs.
+            self.object_names = [sub_dirs[0]]
+            self.num_unique_objects = 1
+            object_indices = [0 for _ in range(self.num_envs)]
+
+        self.multi_object_idx = torch.tensor(object_indices, dtype=torch.long, device=self.device)
+        # Constant one-hot placeholder (length 1) regardless of object identity.
+        self.multi_object_idx_onehot = torch.ones((self.num_envs, 1), dtype=torch.float, device=self.device)
 
         stage = omni.usd.get_context().get_stage()
         self.object_mat_prims = list()
@@ -598,7 +636,7 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
 
         for i in range(self.num_envs):
             # TODO: check to see that the below config settings make sense
-            object_name = selected_object_name
+            object_name = self.object_names[object_indices[i]]
             object_usd_path = objects_full_path + "/" + object_name + "/" + object_name + ".usd"
             print('Object name', object_name)
             print('object usd path', object_usd_path)
@@ -727,7 +765,7 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
         critic_obs = self.compute_critic_observations()
 
         if self.use_camera and not self.simulate_stereo:
-            depth_map = self._tiled_camera.data.output["depth"].clone()
+            depth_map = self._tiled_camera_left.data.output["depth"].clone()
             mask = depth_map.permute((0, 3, 1, 2)) > self.cfg.d_max
             depth_map[depth_map <= 1e-8] = 10
             depth_map[depth_map > self.cfg.d_max] = 0.
@@ -745,33 +783,32 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
                 "policy": student_policy_obs,
                 # "policy": teacher_policy_obs,
                 "img": depth_map.permute((0, 3, 1, 2)),
-                "rgb": self._tiled_camera.data.output["rgb"].clone().permute((0, 3, 1, 2)) / 255.,
+                "rgb": self._tiled_camera_left.data.output["rgb"].clone().permute((0, 3, 1, 2)) / 255.,
                 "expert_policy": teacher_policy_obs,
                 "critic": critic_obs,
                 "aux_info": aux_info,
                 "mask": mask
             }
         elif self.simulate_stereo:
-            left_rgb = self._tiled_camera.data.output["rgb"].clone() / 255.
-            left_depth = self._tiled_camera.data.output["depth"].clone()
+            if self._tiled_camera_right is None:
+                raise RuntimeError("simulate_stereo requires tiled_camera_right")
+            left_rgb = self._tiled_camera_left.data.output["rgb"].clone() / 255.
+            left_depth = self._tiled_camera_left.data.output["depth"].clone()
             left_mask = left_depth > self.cfg.d_max*10
             left_depth[left_depth <= 1e-8] = 10
             left_depth[left_depth > self.cfg.d_max] = 0.
             left_depth[left_depth < self.cfg.d_min] = 0.
+
+            right_rgb = self._tiled_camera_right.data.output["rgb"].clone() / 255.
+            right_depth = self._tiled_camera_right.data.output["depth"].clone()
+            right_mask = right_depth > self.cfg.d_max*10
+            right_depth[right_depth <= 1e-8] = 10
+            right_depth[right_depth > self.cfg.d_max] = 0.
+            right_depth[right_depth < self.cfg.d_min] = 0.
+
             right_to_world = torch.from_numpy(
                 np.matmul(self.camera_pose, self.camera_right_pose)
             ).to(self.device)
-            right_to_world_rot = torch.tensor(R.from_matrix(
-                right_to_world[:, :3, :3].cpu().numpy()
-            ).as_quat()[:, [3, 0, 1, 2]]).to(self.device)
-            self._tiled_camera.set_world_poses(
-                positions=right_to_world[:, :3, 3],
-                orientations=right_to_world_rot,
-                env_ids=self.robot._ALL_INDICES,
-                convention="ros"
-            )
-            self.sim.render()
-            self._tiled_camera.update(0, force_recompute=True)
             object_pos_world = torch.cat(
                 [
                     self.object_pos,
@@ -796,40 +833,11 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
                 object_pos_world.unsqueeze(-1)
             )[:, :3, :]
             obj_uv_right = torch.matmul(
-                self.intrinsic_matrix,
+                self.intrinsic_matrix_right,
                 obj_pos_right
             ).squeeze(-1)
             obj_uv_right[:, :2] /= obj_uv_right[:, 2:3]
-            # right image is flipped
-            obj_uv_right[:, 0] = self.cfg.img_width - obj_uv_right[:, 0]
-            obj_uv_right[:, 1] = self.cfg.img_height - obj_uv_right[:, 1]
 
-
-            # self.sim.render()
-            # self._tiled_camera.update(0, force_recompute=True)
-            right_rgb = self._tiled_camera.data.output["rgb"].clone() / 255.
-            right_depth = self._tiled_camera.data.output["depth"].clone()
-            right_mask = right_depth > self.cfg.d_max*10
-            right_depth[right_depth <= 1e-8] = 10
-            right_depth[right_depth > self.cfg.d_max] = 0.
-            right_depth[right_depth < self.cfg.d_min] = 0.
-            self._tiled_camera.set_world_poses(
-                positions=self.left_pos,
-                orientations=self.left_rot,
-                env_ids=self.robot._ALL_INDICES,
-                convention="ros"
-            )
-
-            object_pos_world = torch.cat(
-                [
-                    self.object_pos,
-                    torch.ones(
-                        self.object_pos.shape[0], 1,
-                        device=self.device,
-                        dtype=right_to_world.dtype
-                    )
-                ], dim=-1
-            )
             T_left_world = torch.eye(4, device=self.device, dtype=right_to_world.dtype).unsqueeze(0).repeat(
                 self.num_envs, 1, 1
             )
@@ -843,7 +851,7 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
                 object_pos_world.unsqueeze(-1)
             )[:, :3, :]
             obj_uv_left = torch.matmul(
-                self.intrinsic_matrix,
+                self.intrinsic_matrix_left,
                 obj_pos_left
             ).squeeze(-1)
             obj_uv_left[:, :2] /= obj_uv_left[:, 2:3]
@@ -1174,8 +1182,11 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
 
         # Terminate rollout if maximum episode length reached
         if self.cfg.distillation:
+            max_len = self.distill_max_episode_length
+            if max_len is None:
+                max_len = self.max_episode_length
             time_out = torch.logical_or(
-                self.episode_length_buf >= self.max_episode_length - 1,
+                self.episode_length_buf >= max_len - 1,
                 self.time_in_success_region >= self.cfg.success_timeout
             )
         else:
@@ -1186,7 +1197,7 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
 
     def _reset_idx(self, env_ids: Sequence[int] | None):
         if env_ids is None:
-            env_ids = self.robot._ALL_INDICES
+            env_ids = self._all_env_ids
 
         if self.cfg.disable_out_of_reach_done:
             if env_ids.shape[0] != self.num_envs:
@@ -1328,8 +1339,8 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
                 (self.local_adr_increment == self.global_min_adr_increment):
                 self.step_since_last_dr_change = 0
                 self.dextrah_adr.increase_ranges(increase_counter=True)
-                self.event_manager.reset(env_ids=self.robot._ALL_INDICES)
-                self.event_manager.apply(env_ids=self.robot._ALL_INDICES, mode="reset", global_env_step_count=0)
+                self.event_manager.reset(env_ids=self._all_env_ids)
+                self.event_manager.apply(env_ids=self._all_env_ids, mode="reset", global_env_step_count=0)
                 self.local_adr_increment = torch.tensor(self.dextrah_adr.num_increments(), device=self.device, dtype=torch.int64)
             else:
                 #print('not increasing DR ranges')
@@ -1361,7 +1372,7 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
             ).cpu().numpy()
             self.left_pos[env_ids] = new_pos + self.scene.env_origins[env_ids]
             self.left_rot[env_ids] = new_rots_quat
-            self._tiled_camera.set_world_poses(
+            self._tiled_camera_left.set_world_poses(
                 positions=new_pos + self.scene.env_origins[env_ids],
                 orientations=new_rots_quat,
                 env_ids=env_ids,
@@ -1384,6 +1395,21 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
                 'xyz', new_rots, degrees=True
             ).as_matrix()
             self.camera_right_pose[np_env_ids, :3, 3] = new_pos.cpu().numpy()
+            if self._tiled_camera_right is not None:
+                right_to_world = torch.from_numpy(
+                    np.matmul(self.camera_pose[np_env_ids], self.camera_right_pose[np_env_ids])
+                ).to(self.device).float()
+                right_to_world_rot = torch.tensor(
+                    R.from_matrix(right_to_world[:, :3, :3].cpu().numpy()).as_quat()[:, [3, 0, 1, 2]]
+                ).to(self.device).float()
+                self.right_pos[env_ids] = right_to_world[:, :3, 3]
+                self.right_rot[env_ids] = right_to_world_rot
+                self._tiled_camera_right.set_world_poses(
+                    positions=right_to_world[:, :3, 3],
+                    orientations=right_to_world_rot,
+                    env_ids=env_ids,
+                    convention="ros"
+                )
 
 
             if self.cfg.disable_dome_light_randomization:
@@ -1460,6 +1486,8 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
                         if idx not in env_ids:
                             continue
                         for arm_shader in arm_shader_prim:
+                            if arm_shader is None or not arm_shader.IsValid():
+                                continue
                             arm_shader.GetAttribute("inputs:reflection_roughness_constant").Set(
                                 np.random.uniform(0.2, 1.)
                             )
@@ -1472,6 +1500,8 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
                     for i in np_env_ids:
                         shader_path = f"/World/envs/env_{i}/table/Looks/OmniPBR/Shader"
                         shader_prim = self.stage.GetPrimAtPath(shader_path)
+                        if shader_prim is None or not shader_prim.IsValid():
+                            continue
                         shader_prim.GetAttribute("inputs:diffuse_texture").Set(
                             random.choice(self.table_texture_files)
                         )

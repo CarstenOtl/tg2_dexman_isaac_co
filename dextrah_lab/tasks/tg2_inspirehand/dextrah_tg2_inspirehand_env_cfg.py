@@ -121,7 +121,9 @@ class DextrahTG2InspirehandEnvCfg(DirectRLEnvCfg):
                         "test_2",
                         "multi_objects",
                         "_single_object",
-                        "playback"]
+                        "playback",
+                        "distill_multi_objects"
+                        ]
 
     # Toggle for using cuda graph
     use_cuda_graph = False
@@ -130,6 +132,8 @@ class DextrahTG2InspirehandEnvCfg(DirectRLEnvCfg):
     sim_dt = 1/120.
     decimation = 2 # 60 Hz
     episode_length_s = 10. #10.0
+    # Optional shorter episode length used only when distillation=True.
+    distillation_episode_length_s = 5.0
     num_sim_steps_to_render=2 # renders every 4 sim steps, so 60 Hz
     num_actions = 13 # 1:1 joint position targets for 7 arm + 6 hand DOF
     success_timeout = 2.
@@ -278,40 +282,80 @@ class DextrahTG2InspirehandEnvCfg(DirectRLEnvCfg):
         -9.890742408692511090e-01,-8.812921292808308105e-02,-1.181752422362273985e-01,6.366771698474239516e-01,
         0.000000000000000000e+00,0.000000000000000000e+00,0.000000000000000000e+00,1.000000000000000000e+00
     ]).reshape(4,4)
-    camera_pos = tf[:3, 3].tolist()
-    # camera_rot = [0.6887834, -0.7242703, -0.0299371, -0.0106609]
-    camera_rot = [ 0.51567701, -0.52073085,  0.53658829,  0.41831759]
-    del tf # this is hacky but it needs to be done because omega conf doesn't support np.ndarray as a primitive
-    camera_rand_rot_range = 3
-    camera_rand_pos_range = 0.03
 
-    # horizontal fov: 48, vertical fov is h:w ratio
-    horizontal_aperture = 21.02
-    focal_length = 23.59
-    img_width = int(160 * 2)
-    img_height = int(120 * 2)
-    tiled_camera: TiledCameraCfg = TiledCameraCfg(
-        prim_path="/World/envs/env_.*/Camera",
-        offset=TiledCameraCfg.OffsetCfg(pos=camera_pos, rot=camera_rot, convention="ros"),
+    # camera pose in world frame
+    ## left camera world pose
+    # NOTE on rotation conventions (important for future tuning):
+    # - The camera offsets below are used with `convention="ros"` in TiledCameraCfg.
+    # - The UI "Orientation X/Y/Z" values are Euler XYZ in the UI camera frame, and
+    #   they do NOT map 1:1 to the config quaternions.
+    # - Empirically (from the legacy config), UI X=+90 deg corresponds to a quaternion
+    #   that is equivalent to Euler XYZ = -90 deg in the config convention.
+    # - In our current setup there is also an observed +50 deg offset, so the mapping
+    #   we use is: config_euler_x ≈ -(UI_x + 50 deg).
+    #   Example: UI X=65 deg -> config Euler XYZ = -115 deg -> wxyz = [0.5373, -0.8434, 0, 0].
+    # - The right camera is then derived from the left using the stereo calibration
+    #   (R, T) in `jetson_stereo.npz`: R_right = R_left * R_lr, t_right = t_left + R_left * T_lr.
+    # ANYWAY:
+    # The result we want is for the camera looking to the right and a little down at the table so the object will always be seen.
+    camera_pos_left = [-0.5, -1.0, 0.8]
+    camera_rot_left = [0.5372996083468239, -0.8433914458128857, 0.0, 0.0]  # Euler XYZ (-115, 0, 0) deg, wxyz
+    camera_right_pos = [-0.56169578743, -1.00260621, 0.8003994]
+    camera_right_rot = [0.540317838, -0.841457551, -0.00237342659, 0.000435944969]
+    del tf # this is hacky but it needs to be done because omega conf doesn't support np.ndarray as a primitive
+    camera_rand_rot_range = 0 #default 3
+    camera_rand_pos_range = 0 # default 0.03
+
+    # Pixel-unit aperture/focal length scaled from 1280x720 calibration to 320x240.
+    # Original 1280x720 intrinsics:
+    #   K_left = [[723.55907804, 0, 625.63351615], [0, 722.15930726, 407.23531937], [0, 0, 1]]
+    #   K_right = [[724.52534592, 0, 705.39581567], [0, 724.36605896, 442.60710023], [0, 0, 1]]
+    img_width = 320
+    img_height = 240
+    horizontal_aperture = float(img_width)
+    left_focal_length = 180.88976951
+    right_focal_length = 181.13133648
+    tiled_camera_left: TiledCameraCfg = TiledCameraCfg(
+        prim_path="/World/envs/env_.*/CameraLeft",
+        offset=TiledCameraCfg.OffsetCfg(pos=camera_pos_left, rot=camera_rot_left, convention="ros"),
         data_types=["rgb", "depth"],
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=focal_length, focus_distance=400.0, horizontal_aperture=horizontal_aperture, clipping_range=(0.01, 2.)
+            focal_length=left_focal_length,
+            focus_distance=400.0,
+            horizontal_aperture=horizontal_aperture,
+            clipping_range=(0.01, 2.),
+        ),
+        width=img_width,
+        height=img_height,
+    )
+    tiled_camera_right: TiledCameraCfg = TiledCameraCfg(
+        prim_path="/World/envs/env_.*/CameraRight",
+        offset=TiledCameraCfg.OffsetCfg(pos=camera_right_pos, rot=camera_right_rot, convention="ros"),
+        data_types=["rgb", "depth"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=right_focal_length,
+            focus_distance=400.0,
+            horizontal_aperture=horizontal_aperture,
+            clipping_range=(0.01, 2.),
         ),
         width=img_width,
         height=img_height,
     )
 
-    fov = 2 * math.atan(horizontal_aperture / (2 * focal_length))
+    fov = 2 * math.atan(horizontal_aperture / (2 * left_focal_length))
     focal_px = img_width * 0.5 / math.tan(fov / 2)
-    a = focal_px
-    b = img_width * 0.5
-    c = focal_px
-    d = img_height * 0.5
-    intrinsic_matrix = [
-        [a, 0., b],
-        [0., c, d],
-        [0., 0., 1.]
+    intrinsic_matrix_left = [
+        [180.88976951, 0.0, 156.40837904],
+        [0.0, 240.71976909, 135.74510646],
+        [0.0, 0.0, 1.0],
     ]
+    intrinsic_matrix_right = [
+        [181.13133648, 0.0, 176.34895392],
+        [0.0, 241.45535299, 147.53570008],
+        [0.0, 0.0, 1.0],
+    ]
+    # legacy single-K fallback (left)
+    # intrinsic_matrix = intrinsic_matrix_left
 
     # Contact sensor on hand links to fetch per-link contact forces
     palm_object_contact_sensor: ContactSensorCfg = ContactSensorCfg(
@@ -610,9 +654,9 @@ class DextrahTG2InspirehandEnvCfg(DirectRLEnvCfg):
 
     # Object spawning params
     x_center = -0.55
-    x_width = 0.5#0.4
+    x_width = 0.5 # default 0.5
     y_center = 0.1
-    y_width = 0.8 #0.5
+    y_width = 0.8  # default 0.5
 
     # DR Controls
     enable_adr = True

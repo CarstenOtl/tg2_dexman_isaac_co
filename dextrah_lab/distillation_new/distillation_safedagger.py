@@ -1,19 +1,13 @@
 import torch
-from torchvision import transforms
-import random
-import torch.distributed as dist
-from torch.optim.lr_scheduler import LambdaLR
-from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.cuda.amp import autocast, GradScaler
 import torchvision.utils as vutils
 import yaml
 import os
+import glob
 import numpy as np
 import matplotlib.pyplot as plt
 import warp as wp
 import pathlib
-from PIL import Image
-import glob
 import time
 import math
 
@@ -28,7 +22,6 @@ from rl_games.common import vecenv
 from rl_games.algos_torch.running_mean_std import RunningMeanStd
 from rl_games.algos_torch.self_play_manager import SelfPlayManager
 from rl_games.algos_torch import torch_ext
-from rl_games.common import schedulers
 from rl_games.common.experience import ExperienceBuffer
 from rl_games.common.a2c_common import swap_and_flatten01
 from rl_games.algos_torch.a2c_continuous import A2CAgent
@@ -37,12 +30,13 @@ from datetime import datetime
 from tensorboardX import SummaryWriter
 import wandb
 
-from depth_augs import DepthAug
-from rgb_augs import RgbAug
 from typing import Dict
 
-from isaaclab.sensors import save_images_to_file
-
+# Imitation loss options (imitation_loss_type):
+# - "kl": KL(N_teacher || N_student) over action distributions.
+# - "nll": -log pi_student(a_teacher_sample) using teacher sampled actions.
+# - "mse": MSE between teacher sampled actions and student sampled actions.
+# - "l2": legacy weighted L2 on mus (by 1/sigma^2) + L2 on sigmas.
 
 def l2(model, target):
     """Computes the L2 norm between model and target.
@@ -59,6 +53,28 @@ def rescale_actions(low, high, action):
     m = (high + low) / 2.0
     scaled_action = action * d + m
     return scaled_action
+
+def gaussian_kl(mu_student, sigma_student, mu_teacher, sigma_teacher, eps=1e-6):
+    """KL(N_teacher || N_student) per sample, summed over action dims."""
+    sigma_student = torch.clamp(sigma_student, min=eps)
+    sigma_teacher = torch.clamp(sigma_teacher, min=eps)
+    var_student = sigma_student ** 2
+    var_teacher = sigma_teacher ** 2
+    mu_term = (mu_teacher - mu_student) ** 2 / (2.0 * var_student)
+    sigma_term = torch.log(sigma_student / sigma_teacher) + var_teacher / (2.0 * var_student) - 0.5
+    kl = mu_term + sigma_term
+    return kl.sum(-1), mu_term.sum(-1), sigma_term.sum(-1)
+
+def gaussian_nll(mu_student, sigma_student, actions, eps=1e-6):
+    """Negative log-likelihood of actions under N(mu_student, sigma_student), summed over dims."""
+    sigma_student = torch.clamp(sigma_student, min=eps)
+    var_student = sigma_student ** 2
+    nll = 0.5 * (
+        ((actions - mu_student) ** 2) / var_student
+        + 2.0 * torch.log(sigma_student)
+        + math.log(2.0 * math.pi)
+    )
+    return nll.sum(-1)
 
 def adjust_state_dict_keys(checkpoint_state_dict, model_state_dict):
     adjusted_state_dict = {}
@@ -98,20 +114,22 @@ def adjust_state_dict_keys(checkpoint_state_dict, model_state_dict):
 
 class SafeDagger:
     def __init__(self, env, config, summaries_dir, nn_dir):
-        self.world_size = int(os.environ['WORLD_SIZE'])  # Total number of processes
-        self.rank = int(os.environ['RANK'])  # Global rank of this process
-        self.local_rank = int(os.environ['LOCAL_RANK']) # local rank of the process 
-        torch.cuda.set_device(self.local_rank)
-        wp.set_device(f"cuda:{self.local_rank}")
+        self.world_size = 1
+        self.rank = 0
+        self.local_rank = 0
+        if torch.cuda.is_available():
+            torch.cuda.set_device(self.local_rank)
+            wp.set_device(f"cuda:{self.local_rank}")
+        else:
+            wp.set_device("cpu")
 
         self.env = env
         self.ov_env = env.env
         self.num_envs = self.ov_env.num_envs
         self.num_actions = self.ov_env.num_actions
-        self.device = self.local_rank
+        self.device = torch.device("cuda", self.local_rank) if torch.cuda.is_available() else torch.device("cpu")
         self.config = config
         self.student_network_params = self.load_param_dict(self.config["student"]["cfg"])["params"]
-        self.use_data_aug = self.config["student"]["data_aug"]
         self.teacher_network_params = self.load_param_dict(self.config["teacher"]["cfg"])["params"]
         self.student_network = self.load_networks(self.student_network_params)
         self.teacher_network = self.load_networks(self.teacher_network_params)
@@ -141,31 +159,30 @@ class SafeDagger:
             'normalize_input': self.normalize_input,
         }
         self.student_model = self.student_network.build(self.student_model_config).to(self.device)
-        for param in self.student_model.parameters():
-            dist.broadcast(param.data, src=0)
-        self.student_model_ddp = DDP(self.student_model, device_ids=[self.local_rank], find_unused_parameters=True)
-        self.teacher_model = self.teacher_network.build(self.teacher_model_config).to(self.device)
-        self.warm_up_lr = 1e-5
-        self.peak_lr = 1e-3
-        params = [{"params": self.student_model_ddp.parameters(), "lr": self.warm_up_lr, "eps": 1e-8}]
-        # self.optimizer = torch.optim.Adam(params)
-        self.optimizer = torch.optim.Adam(self.student_model_ddp.parameters(), lr=1e-4, eps=1e-8)
-        self.warmup_epochs = 2000
-        self.max_epochs = 100_000
-        self.num_cycles = 1.
-        # self.scheduler = self.cosine_schedule_with_warmup(
-        #     self.optimizer,
-        #     num_warmup_steps=self.warmup_epochs,
-        #     num_training_steps=self.max_epochs,
-        #     num_cycles=self.num_cycles
-        # )
-        self.num_warmup_steps = 1000
+        self.teacher_models = None
+        self.teacher_model = None
+        self.teacher_ckpt_dir = None
+        self.multi_teacher = False
+        teacher_ckpt = self.config["teacher"]["ckpt"]
+        if teacher_ckpt is not None and os.path.isdir(teacher_ckpt):
+            self.teacher_ckpt_dir = teacher_ckpt
+            self.multi_teacher = True
+            self.teacher_models = self._build_teacher_pool(teacher_ckpt)
+            self.teacher_model = self.teacher_models[0]
+        else:
+            self.teacher_model = self.teacher_network.build(self.teacher_model_config).to(self.device)
+        self.imitation_loss_type = self.config.get("imitation_loss_type", "kl")
+        if self.imitation_loss_type not in {"kl", "nll", "l2", "mse"}:
+            raise ValueError(f"Unsupported imitation_loss_type: {self.imitation_loss_type}")
+        if self.rank == 0:
+            print(f"Using imitation loss: {self.imitation_loss_type}")
+        self.optimizer = torch.optim.Adam(self.student_model.parameters(), lr=2e-4, eps=1e-8) # default lr = 1e-4
         self.num_iters = 100_000
 
         # load weights for student and teacher
         if self.config["student"]["ckpt"] is not None:
             self.set_weights(self.config["student"]["ckpt"], "student")
-        if self.config["teacher"]["ckpt"] is not None:
+        if not self.multi_teacher and self.config["teacher"]["ckpt"] is not None:
             self.set_weights(self.config["teacher"]["ckpt"], "teacher")
         # get the observation type of the student and teacher
         self.student_obs_type = self.config["student"]["obs_type"]
@@ -203,6 +220,8 @@ class SafeDagger:
             parent_path = str(pathlib.Path(__file__).parent.resolve())
             summaries_dir = os.path.join(parent_path, summaries_dir)
             self.nn_dir = os.path.join(parent_path, nn_dir)
+            self.debug_dir = os.path.join(os.path.dirname(self.nn_dir), "debug")
+            os.makedirs(self.debug_dir, exist_ok=True)
             if self.use_wandb:
                 wandb.login(key=os.environ["WANDB_API_KEY"])
                 # wandb.tensorboard.patch(root_logdir=summaries_dir)
@@ -215,15 +234,22 @@ class SafeDagger:
                 )
         else:
             self.use_wandb = False
+            self.debug_dir = None
+        self.debug_save_interval_s = 1.0
+        sim_dt = getattr(self.ov_env.cfg, "sim_dt", None)
+        if sim_dt is None and hasattr(self.ov_env.cfg, "sim"):
+            sim_dt = getattr(self.ov_env.cfg.sim, "dt", 0.0)
+        decimation = getattr(self.ov_env.cfg, "decimation", 1)
+        self._debug_step_dt = float(sim_dt * decimation) if sim_dt is not None else 0.0
+        self._debug_sim_time = 0.0
+        self._debug_max_images_per_channel = 20
+        self._debug_saved_left = 0
+        self._debug_saved_right = 0
         self.scaler = GradScaler()
         wp.init()
-        self.depth_aug = DepthAug(f"cuda:{self.local_rank}")
-        self.use_depth_aug = self.ov_env.cfg.aug_depth
-        self.img_aug_type = self.ov_env.cfg.img_aug_type
         self.aux_coeff = self.ov_env.cfg.aux_coeff
-        self.depth_aug_cfg = self.ov_env.cfg.depth_randomization_cfg_dict
         self.stereo = self.ov_env.cfg.simulate_stereo
-        self.unsafe_l2_threshold = 0.1
+        self.unsafe_l2_threshold = 0.5 # default 0.1
         self.viz_imgs = False
         if self.viz_imgs:
             self.fig, (self.ax1, self.ax2) = plt.subplots(1, 2, figsize=(10, 5))
@@ -249,47 +275,6 @@ class SafeDagger:
 
             self.fig.canvas.draw()
             plt.show(block=False)
-
-        if self.use_data_aug and self.img_aug_type == "rgb":
-            self.rgb_aug = RgbAug(
-                device=self.device,
-                all_env_inds=self.ov_env.robot._ALL_INDICES,
-                use_stereo=self.stereo,
-                background_cfg={
-                    "dir": os.path.join(
-                        str(pathlib.Path(__file__).parent.parent.resolve()),
-                        "assets", "background_imgs", "voc_resized"
-                    ),
-                    "height": self.ov_env.cfg.img_height,
-                    "width": self.ov_env.cfg.img_width,
-                    "aug_prob": 0.5
-                },
-                color_cfg={
-                    "aug_prob": 1.,
-                    "saturation_range": [0.5, 1.5],
-                    "contrast_range": [0.5, 1.5],
-                    "brightness_range": [0.5, 1.5],
-                    "hue_range": [-0.15, 0.15]
-                },
-                motion_blur_cfg={
-                    "aug_prob": 0.1,
-                    "kernel_sizes": [9, 11, 13, 15, 17],
-                    "angle_range": [0, 2*np.pi],
-                    "direction_range": [-1, 1]
-                }
-            )
-            voc_imgs_dir = os.path.join(
-                str(pathlib.Path(__file__).parent.parent.resolve()),
-                "assets", "background_imgs", "voc_resized"
-            )
-            voc_imgs = glob.glob(os.path.join(voc_imgs_dir, "*.jpg"))[:10]
-            self.background_imgs = [
-                Image.open(img_name).convert("RGB")
-                for img_name in voc_imgs
-            ]
-            self.background_img_transform = transforms.Compose([
-                transforms.ToTensor()
-            ])
 
         self.init_tensors()
 
@@ -322,8 +307,15 @@ class SafeDagger:
             self.num_seqs = self.horizon_length // self.seq_length
 
         if self.is_teacher_rnn:
-            self.teacher_hidden_states = self.teacher_model.get_default_rnn_state()
-            self.teacher_hidden_states = [s.to(self.device) for s in self.teacher_hidden_states]
+            if self.multi_teacher:
+                self.teacher_hidden_states_pool = []
+                for model in self.teacher_models:
+                    states = model.get_default_rnn_state()
+                    self.teacher_hidden_states_pool.append([s.to(self.device) for s in states])
+                self.teacher_hidden_states = None
+            else:
+                self.teacher_hidden_states = self.teacher_model.get_default_rnn_state()
+                self.teacher_hidden_states = [s.to(self.device) for s in self.teacher_hidden_states]
             # self.num_seqs = self.horizon_length // self.seq_length
 
         self.env_counter = torch.zeros(self.num_envs, dtype=torch.int).to(self.device)
@@ -351,7 +343,11 @@ class SafeDagger:
 
     def distill(self):
         self.student_model.train()
-        self.teacher_model.eval()
+        if self.multi_teacher:
+            for model in self.teacher_models:
+                model.eval()
+        else:
+            self.teacher_model.eval()
         # torch.set_float32_matmul_precision('high')
 
         obs = self.env.reset()[0]
@@ -371,34 +367,6 @@ class SafeDagger:
                 self.finetune_backbone = False
             else:
                 self.finetune_backbone = True
-
-            if self.img_aug_type == "depth" and self.use_depth_aug:
-                obs["img"] = self.augment_depth(obs["img"])
-                obs["img"][obs["img"] > self.ov_env.cfg.d_max] = 0.
-                obs["img"][obs["img"] < self.ov_env.cfg.d_min] = 0.
-
-            if self.use_data_aug and self.img_aug_type == "rgb":
-                if self.stereo:
-                    imgs = {
-                        "left_img": obs["img_left"],
-                        "right_img": obs["img_right"]
-                    }
-                    masks = {
-                        "left_mask": obs["mask_left"],
-                        "right_mask": obs["mask_right"]
-                    }
-                    aug_output = self.rgb_aug.apply(imgs, masks)
-                    obs["img_left"] = aug_output["left_img"]
-                    obs["img_right"] = aug_output["right_img"]
-                    obs['img_right'] = torch.flip(obs['img_right'], dims=(2,3))
-                else:
-                    if self.img_aug_type == "rgb":
-                        obs["rgb"] = self.rgb_aug.apply(obs["rgb"], obs["mask"])
-                        self.rgb_buffers[even_indices] = obs['rgb'][even_indices]
-                        obs['rgb'] = self.rgb_buffers
-            else:
-                obs['img_right'] = torch.flip(obs['img_right'], dims=(2,3))
-
 
             if self.viz_imgs:
                 if self.stereo:
@@ -493,14 +461,43 @@ class SafeDagger:
                 l2_loss_per_env = weighted_l2(
                     actions_student["mus"], actions_teacher["mus"], weights
                 )
-                student_loss = (
-                    self.loss(
+                l2_loss_mean = l2_loss_per_env.mean()
+                mu_loss = None
+                sigma_loss = None
+                if self.imitation_loss_type == "kl":
+                    kl_per_env, kl_mu_per_env, kl_sigma_per_env = gaussian_kl(
+                        actions_student["mus"],
+                        actions_student["sigmas"],
+                        actions_teacher["mus"],
+                        actions_teacher["sigmas"],
+                    )
+                    imitation_loss = self.reduce_loss(kl_per_env)
+                    mu_loss = self.reduce_loss(kl_mu_per_env)
+                    sigma_loss = self.reduce_loss(kl_sigma_per_env)
+                elif self.imitation_loss_type == "nll":
+                    nll_per_env = gaussian_nll(
+                        actions_student["mus"],
+                        actions_student["sigmas"],
+                        actions_teacher["actions"],
+                    )
+                    imitation_loss = self.reduce_loss(nll_per_env)
+                elif self.imitation_loss_type == "mse":
+                    mse_per_env = torch.mean(
+                        (actions_student["actions"] - actions_teacher["actions"]) ** 2, dim=-1
+                    )
+                    imitation_loss = self.reduce_loss(mse_per_env)
+                    mu_loss = imitation_loss
+                else:
+                    mu_loss = self.loss(
                         actions_student["mus"], actions_teacher["mus"],
                         fn="weighted_l2", weights=weights
-                    ) +
-                    self.loss(actions_student["sigmas"], actions_teacher["sigmas"])
-                )
-                total_loss += student_loss + self.aux_coeff*sum(aux_loss)
+                    )
+                    sigma_loss = self.loss(actions_student["sigmas"], actions_teacher["sigmas"])
+                    imitation_loss = mu_loss + sigma_loss
+                aux_sum = sum(aux_loss) if aux_loss else 0.0
+                aux_sum_tensor = aux_sum if torch.is_tensor(aux_sum) else torch.tensor(aux_sum, device=self.device)
+                total_loss_step = imitation_loss + self.aux_coeff * aux_sum_tensor
+                total_loss += total_loss_step
                 self.unsafe = self.check_unsafe(l2_loss_per_env=l2_loss_per_env, obs=obs)
                 beta = float(self.unsafe.float().mean().item())
             # pos = torch.tensor([
@@ -512,7 +509,17 @@ class SafeDagger:
             # self.ov_env._set_pos_marker(aux_out["object_pos"])
 
             if self.rank == 0:
-                self.log_information(log_counter, total_loss, aux_loss, beta)
+                self.log_information(
+                    log_counter,
+                    total_loss_step,
+                    imitation_loss,
+                    aux_loss,
+                    aux_sum_tensor,
+                    beta,
+                    l2_loss_mean,
+                    mu_loss,
+                    sigma_loss,
+                )
 
             log_counter += 1
             self.env_counter += 1
@@ -524,7 +531,6 @@ class SafeDagger:
                         self.student_model.parameters(), 1.0
                     )
                     self.optimizer.step()
-                    # self.scheduler.step()
                     self.optimizer.zero_grad()
                     for i, s in enumerate(self.student_hidden_states):
                         self.student_hidden_states[i] = s.detach()
@@ -534,7 +540,6 @@ class SafeDagger:
                 self.optimizer.zero_grad()
                 total_loss.backward()
                 self.optimizer.step()
-                # self.scheduler.step()
                 total_loss = 0.
             end_time = time.time()
             # print(f"Time taken for backward and step: {end_time - start_time} seconds")
@@ -542,11 +547,30 @@ class SafeDagger:
             stepping_actions = actions_student["actions"] if self.step_student_actions else actions_teacher["actions"]
             if self.unsafe.any():
                 stepping_actions = stepping_actions.clone()
-                stepping_actions[self.unsafe] = actions_teacher["actions"][self.unsafe]
+                stepping_actions[self.unsafe] = actions_teacher["actions"][self.unsafe].to(
+                    dtype=stepping_actions.dtype
+                )
 
             obs, rew, out_of_reach, timed_out, info = self.env.step(
                 stepping_actions.detach()
             )
+
+            if self.rank == 0 and self.debug_dir is not None and self.stereo:
+                self._debug_sim_time += self._debug_step_dt
+                if self._debug_sim_time >= self.debug_save_interval_s:
+                    self._debug_sim_time -= self.debug_save_interval_s
+                    if self._debug_saved_left < self._debug_max_images_per_channel:
+                        left = obs["img_left"][0].detach().cpu()
+                        vutils.save_image(
+                            left, os.path.join(self.debug_dir, f"left_env0_step{log_counter:06d}.png")
+                        )
+                        self._debug_saved_left += 1
+                    if self._debug_saved_right < self._debug_max_images_per_channel:
+                        right = obs["img_right"][0].detach().cpu()
+                        vutils.save_image(
+                            right, os.path.join(self.debug_dir, f"right_env0_step{log_counter:06d}.png")
+                        )
+                        self._debug_saved_right += 1
 
             self.frame += self.num_envs
             self.current_rewards += rew.unsqueeze(-1)
@@ -561,7 +585,6 @@ class SafeDagger:
                         self.student_model.parameters(), 1.0
                     )
                     self.optimizer.step()
-                    # self.scheduler.step()
                     self.optimizer.zero_grad()
                     for i, s in enumerate(self.student_hidden_states):
                         self.student_hidden_states[i] = s.detach()
@@ -577,12 +600,14 @@ class SafeDagger:
                 self.env_counter[all_done_indices] = 0
 
             if self.is_teacher_rnn and len(all_done_indices) > 0:
-                for s in self.teacher_hidden_states:
-                    s[:, all_done_indices, ...] *= 0.
+                if self.multi_teacher:
+                    for states in self.teacher_hidden_states_pool:
+                        self._zero_rnn_states(states, all_done_indices)
+                else:
+                    for s in self.teacher_hidden_states:
+                        s[:, all_done_indices, ...] *= 0.
 
             done_indices = all_done_indices[:]
-            if self.use_data_aug and self.img_aug_type == "rgb":
-                self.rgb_aug.reset(done_indices)
             self.game_rewards.update(self.current_rewards[done_indices])
             self.game_lengths.update(self.current_lengths[done_indices])
             not_dones = 1.0 - self.dones.float()
@@ -609,35 +634,24 @@ class SafeDagger:
         if self.rank == 0 and self.use_wandb:
             wandb.finish()
 
-    def cosine_schedule_with_warmup(self, optimizer, num_warmup_steps, num_training_steps, num_cycles=0.5, init_lr_frac= 0.01):
-        def lr_lambda(current_step):
-            if current_step < num_warmup_steps:
-                return init_lr_frac + (1 - init_lr_frac) * float(current_step) / float(max(1, num_warmup_steps))
-            progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
-            return max(0.0, 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * progress)))
-
-        return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-
-    def augment_depth(self, depth_nchw):
-        depth_nhw = depth_nchw[:, 0]
-        depths = torch.clone(depth_nhw)
-        self.depth_aug.add_correlated_noise(
-            depth_nhw, depths, **self.depth_aug_cfg["correlated_noise"]
-        )
-        self.depth_aug.add_normal_noise(
-            depths, **self.depth_aug_cfg["normal_noise"]
-        )
-        self.depth_aug.add_pixel_dropout_and_randu(
-            depths, **self.depth_aug_cfg["pixel_dropout_and_randu"]
-        )
-        self.depth_aug.add_sticks(
-            depths, **self.depth_aug_cfg["sticks"]
-        )
-
-        return depths.unsqueeze(1)
-
-    def log_information(self, log_counter, total_loss, aux_loss=None, beta=None):
-        student_loss = total_loss if aux_loss is None else total_loss - self.aux_coeff*sum(aux_loss)
+    def log_information(
+        self,
+        log_counter,
+        total_loss,
+        imitation_loss=None,
+        aux_loss=None,
+        aux_sum=None,
+        beta=None,
+        l2_loss_mean=None,
+        mu_loss=None,
+        sigma_loss=None,
+    ):
+        if imitation_loss is None:
+            imitation_loss = total_loss if aux_loss is None else total_loss - self.aux_coeff * sum(aux_loss)
+        if aux_sum is None:
+            aux_sum = sum(aux_loss) if aux_loss else 0.0
+        if aux_sum is not None and not torch.is_tensor(aux_sum):
+            aux_sum = torch.tensor(aux_sum, device=self.device)
         if beta is None:
             beta = 0.
 
@@ -654,11 +668,27 @@ class SafeDagger:
                     "total_loss", total_loss.detach().cpu().numpy(), self.frame
                 )
                 self.writer.add_scalar(
-                    "imitation_loss", student_loss.detach().cpu().numpy(), self.frame
+                    "imitation_loss", imitation_loss.detach().cpu().numpy(), self.frame
                 )
+                if aux_sum is not None:
+                    self.writer.add_scalar(
+                        "aux_loss_total", aux_sum.detach().cpu().numpy(), self.frame
+                    )
+                if mu_loss is not None:
+                    self.writer.add_scalar(
+                        "mu_loss", mu_loss.detach().cpu().numpy(), self.frame
+                    )
+                if sigma_loss is not None:
+                    self.writer.add_scalar(
+                        "sigma_loss", sigma_loss.detach().cpu().numpy(), self.frame
+                    )
                 self.writer.add_scalar(
                     "beta", beta, self.frame
                 )
+                if l2_loss_mean is not None:
+                    self.writer.add_scalar(
+                        "l2_loss_mean", l2_loss_mean.detach().cpu().numpy(), self.frame
+                    )
                 if beta > 0.95:
                     perf = self.ov_env.in_success_region.float().mean().cpu().numpy()
                 else:
@@ -669,12 +699,27 @@ class SafeDagger:
                 if self.use_wandb:
                     wandb.log({
                         "in_success_region": perf,
-                        "imitation_loss": student_loss.detach().cpu().numpy(),
+                        "imitation_loss": imitation_loss.detach().cpu().numpy(),
                         "total_loss": total_loss.detach().cpu().numpy(),
                         "lr": self.optimizer.param_groups[0]["lr"],
                         "beta": beta,
                         "iteration": self.frame
                     })
+                    if aux_sum is not None:
+                        wandb.log({
+                            "aux_loss_total": aux_sum.detach().cpu().numpy(),
+                            "iteration": self.frame
+                        })
+                    if mu_loss is not None:
+                        wandb.log({
+                            "mu_loss": mu_loss.detach().cpu().numpy(),
+                            "iteration": self.frame
+                        })
+                    if sigma_loss is not None:
+                        wandb.log({
+                            "sigma_loss": sigma_loss.detach().cpu().numpy(),
+                            "iteration": self.frame
+                        })
                 if self.is_aux:
                     for idx, name in enumerate(self.aux_loss_names):
                         self.writer.add_scalar(
@@ -690,11 +735,19 @@ class SafeDagger:
             print("="*10)
             print("ITERATION:", log_counter)
             print("LR: ", self.optimizer.param_groups[0]["lr"])
-            print("Imitation Loss: ", student_loss)
+            print("Imitation Loss: ", imitation_loss)
+            if aux_sum is not None:
+                print("Aux Loss (total): ", aux_sum)
+            if mu_loss is not None:
+                print("Mu Loss: ", mu_loss)
+            if sigma_loss is not None:
+                print("Sigma Loss: ", sigma_loss)
             if self.is_aux:
                 print("Aux Loss: ", aux_loss)
             print("Total Loss: ", total_loss)
             print("Beta: ", beta)
+            if l2_loss_mean is not None:
+                print("L2 Loss Mean: ", l2_loss_mean)
             if self.game_rewards.current_size > 0:
                 print("\tMean Rewards: ", mean_rewards)
                 print("\tMean Length: ", mean_lengths)
@@ -708,6 +761,11 @@ class SafeDagger:
             images = wandb.Image(image_grid, caption="Top: Network Pred, Bottom: GT")
             wandb.log({"predictions vs ground truth": images})
 
+    def reduce_loss(self, loss_per_env):
+        rnn_masks = None
+        losses, _ = torch_ext.apply_masks([loss_per_env.unsqueeze(1)], rnn_masks)
+        return losses[0]
+
     def check_unsafe(self, l2_loss_per_env=None, obs=None, out_of_reach=None, timed_out=None, info=None):
         """Placeholder: override with task-specific unsafe logic."""
         if l2_loss_per_env is not None:
@@ -720,6 +778,97 @@ class SafeDagger:
             if "in_unsafe_region" in info:
                 return torch.as_tensor(info["in_unsafe_region"], device=self.device, dtype=torch.bool)
         return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+    def _build_teacher_pool(self, ckpt_root):
+        if not hasattr(self.ov_env, "object_names"):
+            raise ValueError("Environment does not expose object_names for multi-teacher loading.")
+        object_names = list(self.ov_env.object_names)
+        if len(object_names) == 0:
+            raise ValueError("No object names found for multi-teacher loading.")
+        ckpt_map = {}
+        missing = []
+        for name in object_names:
+            subdir = os.path.join(ckpt_root, name)
+            if not os.path.isdir(subdir):
+                missing.append(name)
+                continue
+            candidates = sorted(glob.glob(os.path.join(subdir, "*.pth")))
+            if len(candidates) == 0:
+                missing.append(name)
+                continue
+            ckpt_map[name] = candidates[0]
+        if missing:
+            missing_str = ", ".join(missing)
+            raise ValueError(f"Missing teacher checkpoints for objects: {missing_str} (root: {ckpt_root})")
+
+        models = []
+        for name in object_names:
+            model = self.teacher_network.build(self.teacher_model_config).to(self.device)
+            self.set_weights(ckpt_map[name], "teacher", model_override=model)
+            models.append(model)
+        return models
+
+    def _select_rnn_states(self, states, indices):
+        indices = indices.flatten()
+        selected = []
+        for s in states:
+            if s.dim() == 2:
+                selected.append(s.index_select(0, indices))
+            else:
+                selected.append(s.index_select(1, indices))
+        return selected
+
+    def _writeback_rnn_states(self, states, indices, new_states):
+        indices = indices.flatten()
+        for i, s in enumerate(states):
+            ns = new_states[i]
+            if ns.dtype != s.dtype:
+                ns = ns.to(dtype=s.dtype)
+            if s.dim() == 2:
+                s.index_copy_(0, indices, ns)
+            else:
+                s.index_copy_(1, indices, ns)
+
+    def _zero_rnn_states(self, states, indices):
+        if indices.numel() == 0:
+            return
+        indices = indices.flatten()
+        for s in states:
+            if s.dim() == 2:
+                s[indices] = 0
+            else:
+                s[:, indices, ...] = 0
+
+    def _get_actions_multi_teacher(self, obs):
+        mus = torch.zeros((self.num_envs, self.num_actions), device=self.device)
+        sigmas = torch.zeros_like(mus)
+        obj_indices = self.ov_env.multi_object_idx
+
+        for obj_idx, model in enumerate(self.teacher_models):
+            env_mask = obj_indices == obj_idx
+            if not torch.any(env_mask):
+                continue
+            idx = env_mask.nonzero(as_tuple=False).flatten()
+            batch_dict = {
+                "is_train": False,
+                "obs": obs[self.teacher_obs_type][idx],
+                "prev_actions": self.prev_actions_teacher[idx],
+            }
+            if self.is_teacher_rnn:
+                states = self._select_rnn_states(self.teacher_hidden_states_pool[obj_idx], idx)
+                batch_dict["rnn_states"] = states
+                batch_dict["seq_length"] = 1
+                batch_dict["rnn_masks"] = None
+            res_dict = model(batch_dict)
+            if self.is_teacher_rnn:
+                self._writeback_rnn_states(
+                    self.teacher_hidden_states_pool[obj_idx],
+                    idx,
+                    res_dict["rnn_states"],
+                )
+            mus[idx] = res_dict["mus"].to(dtype=mus.dtype)
+            sigmas[idx] = res_dict["sigmas"].to(dtype=sigmas.dtype)
+        return mus, sigmas
 
     def get_actions(self, obs, policy_type):
         aux = None
@@ -764,7 +913,7 @@ class SafeDagger:
                 batch_dict["seq_length"] = 1
                 batch_dict["rnn_masks"] = None
             batch_dict["finetune_backbone"] = self.finetune_backbone
-            res_dict = self.student_model_ddp(batch_dict)
+            res_dict = self.student_model(batch_dict)
             mus = res_dict["mus"]
             sigmas = res_dict["sigmas"]
             # self.ov_env._set_gt_pos_marker(gt_pos.repeat(self.num_envs, 1))
@@ -777,20 +926,23 @@ class SafeDagger:
             if self.is_aux:
                 aux = res_dict["rnn_states"][1]
         else:
-            batch_dict = {
-                "is_train": False,
-                "obs": obs[self.teacher_obs_type],
-                "prev_actions": self.prev_actions_teacher,
-            }
-            if self.is_teacher_rnn:
-                batch_dict["rnn_states"] = self.teacher_hidden_states
-                batch_dict["seq_length"] = 1
-                batch_dict["rnn_masks"] = None
-            res_dict = self.teacher_model(batch_dict)
-            if self.is_teacher_rnn:
-                self.teacher_hidden_states = res_dict["rnn_states"]
-            mus = res_dict["mus"]
-            sigmas = res_dict["sigmas"]
+            if self.multi_teacher:
+                mus, sigmas = self._get_actions_multi_teacher(obs)
+            else:
+                batch_dict = {
+                    "is_train": False,
+                    "obs": obs[self.teacher_obs_type],
+                    "prev_actions": self.prev_actions_teacher,
+                }
+                if self.is_teacher_rnn:
+                    batch_dict["rnn_states"] = self.teacher_hidden_states
+                    batch_dict["seq_length"] = 1
+                    batch_dict["rnn_masks"] = None
+                res_dict = self.teacher_model(batch_dict)
+                if self.is_teacher_rnn:
+                    self.teacher_hidden_states = res_dict["rnn_states"]
+                mus = res_dict["mus"]
+                sigmas = res_dict["sigmas"]
         distr = torch.distributions.Normal(mus, sigmas, validate_args=False)
         selected_action = distr.sample().squeeze()
         # clamp selected action between 1 and -1
@@ -814,7 +966,7 @@ class SafeDagger:
         )
         return losses[0]
 
-    def set_weights(self, ckpt, policy_type):
+    def set_weights(self, ckpt, policy_type, model_override=None):
         """Set the weights of the model."""
         weights = torch_ext.load_checkpoint(ckpt)
         if policy_type == "student":
@@ -827,7 +979,7 @@ class SafeDagger:
             # self.optimizer.load_state_dict(weights['optimizer'])
             # self.frame = weights.get('frame', 0)
         else:
-            model = self.teacher_model
+            model = model_override if model_override is not None else self.teacher_model
         model.load_state_dict(weights["model"])
         if self.normalize_input and 'running_mean_std' in weights:
             model.running_mean_std.load_state_dict(weights["running_mean_std"])
