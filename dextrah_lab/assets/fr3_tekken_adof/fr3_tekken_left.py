@@ -22,17 +22,22 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
         # usd_path=str(ROBOT_USD_PATH),
         activate_contact_sensors=True,  # enable contact sensors if any are defined, for dexsuite tasks
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
-            disable_gravity=False,
-            max_depenetration_velocity=30.0,
+            disable_gravity=True,
+            retain_accelerations=True,
+            linear_damping=0.001,
+            angular_damping=0.0,
+            max_linear_velocity=500.0, # default 1000
+            max_angular_velocity=500.0, # default 1000
+            max_depenetration_velocity=5.0,
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True,
             solver_position_iteration_count=10,
             solver_velocity_iteration_count=4,
+            sleep_threshold=0.005,  # Add sleep threshold like TG2
             stabilization_threshold=0.0005,
-            # fixed_root_link=True,
         ),
-        joint_drive_props=sim_utils.JointDrivePropertiesCfg(drive_type="force"),
+        # joint_drive_props=sim_utils.JointDrivePropertiesCfg(drive_type="force"),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.0),
@@ -41,7 +46,7 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
             "fr3_joint1": 0.0,
             "fr3_joint2": 0.0,
             "fr3_joint3": 0.0,
-            "fr3_joint4": -0.4,
+            "fr3_joint4": -0.9599,  # -55 degrees
             "fr3_joint5": 0.0,
             "fr3_joint6": 1.7453,  # 100 degrees
             "fr3_joint7": 0.0,
@@ -76,38 +81,38 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
     actuators={
         "franka_arm": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[1-7]"],
-            effort_limit_sim=600.0,
-            velocity_limit_sim=None,
-            stiffness=60000.0,
-            damping=6000.0,
+            effort_limit_sim=200.0,
+            velocity_limit_sim=2.175,
+            stiffness=80.0,  # Reduced from 400 (closer to TG2's 10-60 range)
+            damping=8.0,      # Reduced from 40 (closer to TG2's 1-3 range)
         ),
         "thumb_rot": ImplicitActuatorCfg(
             joint_names_expr=["revolute_thumb_rot"],
-            effort_limit_sim=300.0,
+            effort_limit_sim=10.0,
             velocity_limit_sim=20.0,
-            stiffness=100.5,
-            damping=0.5,
+            stiffness=20.0,
+            damping=2.0,
         ),
         "mcp_pitch": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_pitch"],
-            effort_limit_sim=100.0,
-            velocity_limit_sim=300.0,
-            stiffness=10.5,
-            damping=0.2,
+            effort_limit_sim=10.0,
+            velocity_limit_sim=15.0,
+            stiffness=10.0,
+            damping=1.0,
         ),
         "mcp_yaw": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_yaw"],
-            effort_limit_sim=100.0,
-            velocity_limit_sim=300.0,
-            stiffness=10.5,
-            damping=0.2,
+            effort_limit_sim=10.0,
+            velocity_limit_sim=15.0,
+            stiffness=10.0,
+            damping=1.0,
         ),
         "pip": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_pip"],
-            effort_limit_sim=100.0,
-            velocity_limit_sim=300.0,
-            stiffness=10.5,
-            damping=0.2,
+            effort_limit_sim=10.0,
+            velocity_limit_sim=15.0,
+            stiffness=10.0,
+            damping=1.0,
         ),
         #
         # "franka_tekken_actuators": ImplicitActuatorCfg(
@@ -147,7 +152,7 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
         #     },
         # ),
     },
-    # soft_joint_pos_limit_factor=1.0
+    soft_joint_pos_limit_factor=0.9,
 )
 
 # Create a variant of the config with explicit actuators for stability

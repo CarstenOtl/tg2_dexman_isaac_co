@@ -1271,6 +1271,10 @@ class DextrahTG2InspirehandEnv(DirectRLEnv):
 
         # Poll robot and object data
         self._compute_intermediate_values()
+        
+        # Compute reward-related intermediate values (hand-object distances, etc.)
+        # This ensures hand_to_object_pos_error is properly initialized at reset
+        self.compute_intermediate_reward_values()
 
         # Reset success signals
         self.in_success_region[env_ids] = False

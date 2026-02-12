@@ -49,7 +49,7 @@ params:
   load_path: '' # path to the checkpoint to load
 
   config:
-    name: dextrah_lstm
+    name: dextrah_tekken_lstm
     full_experiment_name: "" # comment it if you are not doing batch training
     env_name: rlgpu
     device: 'cuda:0'

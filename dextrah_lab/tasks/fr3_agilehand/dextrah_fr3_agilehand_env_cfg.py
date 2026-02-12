@@ -126,7 +126,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                         "test_2",
                         "multi_objects",
                         "_single_object",
-                        "playback"]
+                        "playback",
+                        "distill_multi_objects"
+                        ]
 
     # Toggle for using cuda graph
     use_cuda_graph = False
@@ -135,6 +137,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     sim_dt = 1/120.
     decimation = 2 # 60 Hz
     episode_length_s = 10. #10.0
+    # Optional shorter episode length used only when distillation=True.
+    distillation_episode_length_s = 5.0
     num_sim_steps_to_render=2 # renders every 4 sim steps, so 60 Hz
     num_actions = 23 # 1:1 joint position targets for 7 arm + 16 hand DOF
     success_timeout = 2.
@@ -171,6 +175,36 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     # robot
     robot_cfg: ArticulationCfg = FR3_TEK_LEFT_CONFIG.replace(
         prim_path="/World/envs/env_.*/Robot"
+    ).replace(
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 0.25),  # Raise robot to table height (matching TG2 config)
+            rot=(0.0, 0.0, 0.0, 1.0),
+            joint_pos={
+                "fr3_joint1": 0.0,
+                "fr3_joint2": 0.0,
+                "fr3_joint3": 0.0,
+                "fr3_joint4": -0.9599,  # -55 degrees
+                "fr3_joint5": 0.0,
+                "fr3_joint6": 1.7453,  # 100 degrees
+                "fr3_joint7": 0.0,
+                "revolute_thumb_rot": 0.0,
+                "revolute_thumb_mcp_pitch": 0.0,
+                "revolute_thumb_mcp_yaw": 0.0,
+                "revolute_thumb_pip": 0.0,
+                "revolute_index_mcp_pitch": 0.0,
+                "revolute_index_mcp_yaw": 0.0,
+                "revolute_index_pip": 0.0,
+                "revolute_middle_mcp_pitch": 0.0,
+                "revolute_middle_mcp_yaw": 0.0,
+                "revolute_middle_pip": 0.0,
+                "revolute_ring_mcp_pitch": 0.,
+                "revolute_ring_mcp_yaw": 0.0,
+                "revolute_ring_pip": 0.0,
+                "revolute_pinky_mcp_pitch": 0.0,
+                "revolute_pinky_mcp_yaw": 0.0,
+                "revolute_pinky_pip": 0.0,
+            },
+        )
     )
     actuated_joint_names = [
         "fr3_joint1",
@@ -180,7 +214,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "fr3_joint5",
         "fr3_joint6",
         "fr3_joint7",
-        # Tekken ADoF hand joints
+        # Tekken ADoF hand joints (16 actuated, DIPs are mimic joints)
         "revolute_thumb_rot",
         "revolute_thumb_mcp_pitch",
         "revolute_thumb_mcp_yaw",
@@ -281,36 +315,65 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         -9.890742408692511090e-01,-8.812921292808308105e-02,-1.181752422362273985e-01,6.366771698474239516e-01,
         0.000000000000000000e+00,0.000000000000000000e+00,0.000000000000000000e+00,1.000000000000000000e+00
     ]).reshape(4,4)
-    camera_pos = tf[:3, 3].tolist()
-    # camera_rot = [0.6887834, -0.7242703, -0.0299371, -0.0106609]
-    camera_rot = [ 0.51567701, -0.52073085,  0.53658829,  0.41831759]
+    # camera pose in world frame
+    ## left camera world pose
+    # NOTE on rotation conventions (important for future tuning):
+    # - The camera offsets below are used with `convention="ros"` in TiledCameraCfg.
+    # - The UI "Orientation X/Y/Z" values are Euler XYZ in the UI camera frame, and
+    #   they do NOT map 1:1 to the config quaternions.
+    # ANYWAY:
+    # The result we want is for the camera looking to the right and a little down at the table so the object will always be seen.
+    camera_pos_left = tf[:3, 3].tolist()
+    # camera_rot_left = [0.6887834, -0.7242703, -0.0299371, -0.0106609]
+    camera_rot_left = [ 0.51567701, -0.52073085,  0.53658829,  0.41831759]
+    # TODO: update these for your actual stereo right camera calibration
+    # Convert to native Python floats to avoid OmegaConf errors
+    camera_right_pos = [float(tf[0, 3] - 0.06169578743), float(tf[1, 3] - 0.00260621), float(tf[2, 3] + 0.0003994)]
+    camera_right_rot = [0.51567701, -0.52073085, 0.53658829, 0.41831759]  # placeholder, same as left
     del tf # this is hacky but it needs to be done because omega conf doesn't support np.ndarray as a primitive
     camera_rand_rot_range = 3
     camera_rand_pos_range = 0.03
 
     # horizontal fov: 48, vertical fov is h:w ratio
-    horizontal_aperture = 21.02
-    focal_length = 23.59
     img_width = int(160 * 2)
     img_height = int(120 * 2)
-    tiled_camera: TiledCameraCfg = TiledCameraCfg(
-        prim_path="/World/envs/env_.*/Camera",
-        offset=TiledCameraCfg.OffsetCfg(pos=camera_pos, rot=camera_rot, convention="ros"),
+    horizontal_aperture = 21.02
+    focal_length_val = 23.59
+    left_focal_length = focal_length_val
+    right_focal_length = focal_length_val
+    tiled_camera_left: TiledCameraCfg = TiledCameraCfg(
+        prim_path="/World/envs/env_.*/CameraLeft",
+        offset=TiledCameraCfg.OffsetCfg(pos=camera_pos_left, rot=camera_rot_left, convention="ros"),
         data_types=["rgb", "depth"],
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=focal_length, focus_distance=400.0, horizontal_aperture=horizontal_aperture, clipping_range=(0.01, 2.)
+            focal_length=left_focal_length, focus_distance=400.0, horizontal_aperture=horizontal_aperture, clipping_range=(0.01, 2.)
+        ),
+        width=img_width,
+        height=img_height,
+    )
+    tiled_camera_right: TiledCameraCfg = TiledCameraCfg(
+        prim_path="/World/envs/env_.*/CameraRight",
+        offset=TiledCameraCfg.OffsetCfg(pos=camera_right_pos, rot=camera_right_rot, convention="ros"),
+        data_types=["rgb", "depth"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=right_focal_length, focus_distance=400.0, horizontal_aperture=horizontal_aperture, clipping_range=(0.01, 2.)
         ),
         width=img_width,
         height=img_height,
     )
 
-    fov = 2 * math.atan(horizontal_aperture / (2 * focal_length))
+    fov = 2 * math.atan(horizontal_aperture / (2 * left_focal_length))
     focal_px = img_width * 0.5 / math.tan(fov / 2)
     a = focal_px
     b = img_width * 0.5
     c = focal_px
     d = img_height * 0.5
-    intrinsic_matrix = [
+    intrinsic_matrix_left = [
+        [a, 0., b],
+        [0., c, d],
+        [0., 0., 1.]
+    ]
+    intrinsic_matrix_right = [
         [a, 0., b],
         [0., c, d],
         [0., 0., 1.]
@@ -563,26 +626,27 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
 
     # reward weights
     # phase 1: reaching
-    hand_to_object_weight = 5. #default 1
-    hand_to_object_sharpness = 10. #default 10
+    hand_to_object_weight = 8. #default 1, prev 5
+    hand_to_object_sharpness = 4. #default 10, prev 10 -- lower = wider gradient at distance
     palm_direction_alignment_weight = 0.1
     in_grip_alignment_weight = 0.1
-    palm_down_local_axis = (-1.0, 0.0, 0.0)
+    palm_down_local_axis = (1.0, 0.0, 0.0)
     palm_finger_alignment_weight = 1.0
     palm_finger_local_axis = (0.0, -1.0, 0.0)
     palm_finger_direction_target = (-1.0, -1.0, 0.0)
-    palm_linear_velocity_penalty_weight = 0.005
-    approach_speed_penalty_weight = 0.001
-    action_rate_penalty_weight = 0.01
-    hand_action_rate_penalty_scale = 3.0 # default = 5.0
-    
-    joint_velocity_penalty_weight = 5e-4
-    hand_joint_velocity_penalty_scale = 3.0
+    palm_linear_velocity_penalty_weight = 0.0  # prev 0.005 -- removed to avoid "don't move" signal
+    approach_speed_penalty_weight = 0.0        # prev 0.001 -- removed to avoid "don't move" signal
+    action_rate_penalty_weight = 0.005         # prev 0.01 -- halved to allow exploration
+    hand_action_rate_penalty_scale = 2.0       # prev 3.0
+
+    joint_velocity_penalty_weight = 1e-4       # prev 5e-4 -- reduced to avoid freezing
+    hand_joint_velocity_penalty_scale = 2.0    # prev 3.0
 
     # phase 2: contact
     hand_object_contact_weight = 0.1 #default 0.1
     good_grasp_weight = 10.0 # default 10.0 # too obsessed in finding a good contact, actually finds one
     finger_curl_reg_weight = -0.1
+    ## TODO: what does this do? 
     finger_curl_reg_min = -2.0
     finger_curl_reg_max = 0.0
 

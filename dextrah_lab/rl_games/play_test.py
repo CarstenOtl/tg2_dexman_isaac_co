@@ -61,6 +61,8 @@ from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
 import dextrah_lab.tasks.dextrah_kuka_allegro.gym_setup
 import dextrah_lab.tasks.dextrah_kuka_inspirehand.gym_setup
 import dextrah_lab.tasks.tg2_inspirehand.gym_setup
+import dextrah_lab.tasks.fr3_agilehand.gym_setup
+
 
 def _prepare_single_object_dir(base_objects_dir: str, object_name: str) -> str:
     """Create a single-object view while preserving the original one-hot length.

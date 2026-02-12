@@ -1,6 +1,11 @@
 *egg-info
-__pycache__
-*.pyc
+
+# Python cache files (recursive)
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
 *.swp
 logs
 *.npy
@@ -29,6 +34,11 @@ dextrah_lab/assets/*
 !dextrah_lab/assets/FrankaFR3/**
 !dextrah_lab/assets/tekken_adof/
 !dextrah_lab/assets/tekken_adof/**
+
+# Re-ignore Python cache in assets folders (must come after negation patterns)
+dextrah_lab/assets/**/__pycache__/
+dextrah_lab/assets/**/*.py[cod]
+dextrah_lab/assets/**/*$py.class
 
 reference/
 # dextrah_lab/stored_policies/
