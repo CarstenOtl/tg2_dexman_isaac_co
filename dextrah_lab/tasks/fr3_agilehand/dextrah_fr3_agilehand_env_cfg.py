@@ -187,7 +187,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                 "fr3_joint5": 0.0,
                 "fr3_joint6": 1.7453,  # 100 degrees
                 "fr3_joint7": 0.0,
-                "revolute_thumb_rot": 0.0,
+                "revolute_thumb_rot": -0.5,
                 "revolute_thumb_mcp_pitch": 0.0,
                 "revolute_thumb_mcp_yaw": 0.0,
                 "revolute_thumb_pip": 0.0,
@@ -234,25 +234,19 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     ]
     
     ## Updated with actual body names from the FR3+Tekken USD file
+    # hand_body_names: Used for observations (fingertip positions/velocities)
+    # Now using rigid-body tip frames that appear in body_names
     hand_body_names = [
-        "base_link",
-        "Index_Distal_Phalanx",
-        "Middle_Distal_Phalanx",
-        "Ring_Distal_Phalanx",
-        "Pinky_Distal_Phalanx",
-        "Thumb_Distal_Phalanx",
+        "base_link",              # Palm
+        "Thumb_Tip",              # Rigid-body tip frames
+        "Index_Tip",
+        "Middle_Tip",
+        "Ring_Tip",
+        "Pinky_Tip",
     ]
-    # hand_object_distance_body_names = [
-    #     # "palm",
-    #     "palm_center",
-    #     "index_tip",
-    #     "middle_tip",
-    #     "ring_tip",
-    #     "little_tip",
-    #     "thumb_tip",
-    # ]
-
-    # TODO: Add dummy object here to calculate distance better
+    
+    # hand_object_distance_body_names: Used for hand-to-object distance reward
+    # Uses the same tip frames for precise distance calculation
     hand_object_distance_body_names = hand_body_names
 
     # Palm body name for computing palm direction vectors
@@ -385,7 +379,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         update_period=0.0,
         history_length=6,
         debug_vis=False,
-        # Focus on contacts with the cube and table (add other objects as needed)
+        # Filter to only include object contacts (excludes robot self-collisions and table)
         filter_prim_paths_expr=[
             "/World/envs/env_.*/object/.*/baseLink/",
         ],
@@ -406,8 +400,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot/tekken_left_adof/Index_Distal_Phalanx",
         update_period=0.0,
         history_length=6,
-        debug_vis=False,
-        # Focus on contacts with the cube and table (add other objects as needed)
+        debug_vis=True,  # Enable to see sensor location
+        track_pose=True,  # Track sensor pose
+        # Filter to only include object contacts (excludes robot self-collisions and table)
         filter_prim_paths_expr=[
             "/World/envs/env_.*/object/.*/baseLink/",
         ],
@@ -428,8 +423,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot/tekken_left_adof/Middle_Distal_Phalanx",
         update_period=0.0,
         history_length=6,
-        debug_vis=False,
-        # Focus on contacts with the cube and table (add other objects as needed)
+        debug_vis=True,
+        track_pose=True,
+        # Filter to only include object contacts (excludes robot self-collisions and table)
         filter_prim_paths_expr=[
             "/World/envs/env_.*/object/.*/baseLink/",
         ],
@@ -450,8 +446,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot/tekken_left_adof/Ring_Distal_Phalanx",
         update_period=0.0,
         history_length=6,
-        debug_vis=False,
-        # Focus on contacts with the cube and table (add other objects as needed)
+        debug_vis=True,
+        track_pose=True,
+        # Filter to only include object contacts (excludes robot self-collisions and table)
         filter_prim_paths_expr=[
             "/World/envs/env_.*/object/.*/baseLink/",
         ],
@@ -472,8 +469,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot/tekken_left_adof/Pinky_Distal_Phalanx",
         update_period=0.0,
         history_length=6,
-        debug_vis=False,
-        # Focus on contacts with the cube and table (add other objects as needed)
+        debug_vis=True,
+        track_pose=True,
+        # Filter to only include object contacts (excludes robot self-collisions and table)
         filter_prim_paths_expr=[
             "/World/envs/env_.*/object/.*/baseLink/",
         ],
@@ -516,8 +514,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot/tekken_left_adof/Thumb_Distal_Phalanx",
         update_period=0.0,
         history_length=6,
-        debug_vis=False,
-        # Focus on contacts with the cube and table (add other objects as needed)
+        debug_vis=True,
+        track_pose=True,
+        # Filter to only include object contacts (excludes robot self-collisions and table)
         filter_prim_paths_expr=[
             "/World/envs/env_.*/object/.*/baseLink/",
         ],
@@ -626,34 +625,34 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
 
     # reward weights
     # phase 1: reaching
-    hand_to_object_weight = 8. #default 1, prev 5
-    hand_to_object_sharpness = 4. #default 10, prev 10 -- lower = wider gradient at distance
+    hand_to_object_weight = 5. #default 1, prev 5
+    hand_to_object_sharpness = 8. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
     palm_direction_alignment_weight = 0.1
-    in_grip_alignment_weight = 0.1
-    palm_down_local_axis = (1.0, 0.0, 0.0)
-    palm_finger_alignment_weight = 1.0
-    palm_finger_local_axis = (0.0, -1.0, 0.0)
-    palm_finger_direction_target = (-1.0, -1.0, 0.0)
+    in_grip_alignment_weight = 0.5
+    palm_down_local_axis = (1.0, 0.0, 0.0) # x axis of agile-hand points in the direction of palm
+    palm_finger_alignment_weight = 0.0  # Disabled - let robot find optimal approach direction
+    palm_finger_local_axis = (0.0, 0.0, 1.0) # palm axis that points in the direction of the fingers in palm frame
+    palm_finger_direction_target = (0.0, 0.0, -1.0) # not used when weight=0
     palm_linear_velocity_penalty_weight = 0.0  # prev 0.005 -- removed to avoid "don't move" signal
-    approach_speed_penalty_weight = 0.0        # prev 0.001 -- removed to avoid "don't move" signal
-    action_rate_penalty_weight = 0.005         # prev 0.01 -- halved to allow exploration
-    hand_action_rate_penalty_scale = 2.0       # prev 3.0
+    approach_speed_penalty_weight = 0.001        # prev 0.001 -- removed to avoid "don't move" signal
+    action_rate_penalty_weight = 0.01         # prev 0.01 -- halved to allow exploration
+    hand_action_rate_penalty_scale = 3.0       # prev 3.0
 
-    joint_velocity_penalty_weight = 1e-4       # prev 5e-4 -- reduced to avoid freezing
-    hand_joint_velocity_penalty_scale = 2.0    # prev 3.0
+    joint_velocity_penalty_weight = 5e-4       # prev 5e-4 -- reduced to avoid freezing
+    hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
 
     # phase 2: contact
-    hand_object_contact_weight = 0.1 #default 0.1
+    hand_object_contact_weight = 0.1  # Reduced from 0.1 to prevent premature finger closing
     good_grasp_weight = 10.0 # default 10.0 # too obsessed in finding a good contact, actually finds one
-    finger_curl_reg_weight = -0.1
+    finger_curl_reg_weight = -0.5
     ## TODO: what does this do? 
-    finger_curl_reg_min = -2.0
-    finger_curl_reg_max = 0.0
+    finger_curl_reg_min = -3.0 # max penalty for finger curl
+    finger_curl_reg_max = 0.0 # min penalty for finger curl 
 
     #phase 3: lifting
-    object_to_goal_weight = 8 #default 5 
+    object_to_goal_weight = 10 #default 5 
     in_success_region_at_rest_weight = 10. #default10
-    lift_sharpness = 8.5 #default 8.5
+    lift_sharpness = 6.5 #default 8.5
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
@@ -784,7 +783,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "object_rot_bias": (0.0, 0.08), # rad
         },
         "robot_spawn": {
-            "joint_pos_noise": (0., 0.35),
+            # TODO: Re-enable joint position noise after verifying open hand behavior
+            # Original value was (0., 0.35) which adds ±20° randomization at reset
+            "joint_pos_noise": (0., 0.0),  # Temporarily disabled for debugging
             "joint_vel_noise": (0., 1.)
         },
         "robot_state_noise": {
@@ -795,8 +796,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         },
         "reward_weights": {
             "object_to_goal_sharpness": (-15., -20.),
-            # "lift_weight": (5., 2.5) # default = (5,0)
-            "lift_weight": (10., 10)
+            # "_weight": (5., 2.5) # default = (5,0)
+            "lift_weight": (25., 30.)  # Increased from (20,20) for stronger lifting incentive
         },
         "pd_targets": {
             "velocity_target_factor": (1., 0.)

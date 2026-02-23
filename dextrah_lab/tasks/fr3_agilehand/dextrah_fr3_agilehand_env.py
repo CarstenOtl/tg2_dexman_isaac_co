@@ -1056,6 +1056,10 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.extras["episode_length_reward"] = episode_length_reward.mean()
         self.extras["palm_linear_velocity_penalty"] = palm_lin_vel_penalty.mean()
         self.extras["approach_speed_penalty"] = approach_speed_penalty.mean()
+        
+        # DEBUG: Add distance and contact count for debugging
+        self.extras["hand_to_object_distance"] = self.hand_to_object_pos_error.mean()
+        self.extras["object_contact_count"] = self.object_contact_counts.mean()  # Track actual contact count
 
         reward_terms = {
             # approach phase
@@ -1066,7 +1070,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             # "in_grip_align": in_grip_alignment_reward,
             
             # grasp phase
-            # "contact": contact_reward,
+            "contact": contact_reward,  # ENABLED for debugging
             "good_grasp": good_grasp_reward,
             "episode_length": episode_length_reward,
             # "approach_speed_penalty": approach_speed_penalty,
@@ -1596,12 +1600,14 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         contact_links = [[] for _ in range(self.num_envs)]
         contact_fingers = [set() for _ in range(self.num_envs)]
 
+        # Map actual link names to finger names
         tip_links = {
-            "index_tip": "index",
-            "middle_tip": "middle",
-            "ring_tip": "ring",
-            "pinky_tip": "pinky",
-            "thumb_tip": "thumb",
+            "Index_Distal_Phalanx": "index",
+            "Middle_Distal_Phalanx": "middle",
+            "Ring_Distal_Phalanx": "ring",
+            "Pinky_Distal_Phalanx": "pinky",
+            "Thumb_Distal_Phalanx": "thumb",
+            "base_link": "palm",  # Palm contact
         }
 
         def _finger_name(link: str) -> str | None:
@@ -2046,6 +2052,7 @@ def compute_rewards(
     good_grasp_reward = good_grasp_weight * good_grasp_mask.to(contact_count.dtype)
 
     # Reward for making contact with the object (more contacts -> higher reward).
+    # Filter in ContactSensorCfg should prevent robot self-collisions from being counted
     contact_reward = contact_count_weight * contact_count
     
     # penalize on joint velocity

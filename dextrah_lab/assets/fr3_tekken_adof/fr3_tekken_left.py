@@ -51,30 +51,30 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
             "fr3_joint6": 1.7453,  # 100 degrees
             "fr3_joint7": 0.0,
             ### ADOF joint limits
-            # Thumb Rot: [-0.34 , 0.34] ==> [-20 , 20] deg
+            # Thumb Rot: [-0.54 , 0.54] ==> [-30 , 30] deg
             # MCP Pitch: [0 , 1.22] ==> [0 , ~70 deg]
             # MCP Yaw: [-0.26 , 0.26] ==> [-15 deg , 15 deg]
             # PIP: [0 , 1.57] ==> [0 , 90 deg]
-            "revolute_thumb_rot": 0.0,
-            "revolute_thumb_mcp_pitch": 0.1,
+            "revolute_thumb_rot": -0.5, #change this to -30 deg in rad
+            "revolute_thumb_mcp_pitch": 0.0,
             "revolute_thumb_mcp_yaw": 0.0,
-            "revolute_thumb_pip": 0.1,
+            "revolute_thumb_pip": 0.0,
             # # "revolute_thumb_dip": 0.0,
-            "revolute_index_mcp_pitch": 0.1,
+            "revolute_index_mcp_pitch": 0.0,
             "revolute_index_mcp_yaw": 0.0,
-            "revolute_index_pip": 0.1,
+            "revolute_index_pip": 0.0,
             # # "revolute_index_dip": 0.0,
-            "revolute_middle_mcp_pitch": 0.1,
+            "revolute_middle_mcp_pitch": 0.0,
             "revolute_middle_mcp_yaw": 0.0,
-            "revolute_middle_pip": 0.1,
+            "revolute_middle_pip": 0.0,
             # # "revolute_middle_dip": 0.0,
-            "revolute_ring_mcp_pitch": 0.1,
+            "revolute_ring_mcp_pitch": 0.0,
             "revolute_ring_mcp_yaw": 0.0,
-            "revolute_ring_pip": 0.1,
+            "revolute_ring_pip": 0.0,
             # # "revolute_ring_dip": 0.0,
-            "revolute_pinky_mcp_pitch": 0.1,
+            "revolute_pinky_mcp_pitch": 0.0,
             "revolute_pinky_mcp_yaw": 0.0,
-            "revolute_pinky_pip": 0.1,
+            "revolute_pinky_pip": 0.0,
             # # "revolute_pinky_dip": 0.0,
         },
     ),
