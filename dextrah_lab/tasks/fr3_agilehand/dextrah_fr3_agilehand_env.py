@@ -152,6 +152,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.hand_workspace_body_idx = self.robot.body_names.index(
             self.cfg.hand_workspace_body_name
         )
+        print(f"[DEBUG] Palm body name: '{self.cfg.palm_body_name}' -> index {self.palm_body_idx}")
 
         def _normalize_vector(vec: torch.Tensor) -> torch.Tensor:
             norm = torch.norm(vec)
@@ -249,6 +250,15 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         # Track success statistics
         self.in_success_region = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self.time_in_success_region = torch.zeros(self.num_envs, device=self.device)
+        
+        # Termination statistics (for debug output)
+        self.term_counts = {
+            "obj_out": 0,
+            "hand_far": 0,
+            "hand_close": 0,
+            "palm_flip": 0,
+            "arm_contact": 0,
+        }
         
         # Unit tensors - used in creating random object rotations during spawn
         self.x_unit_tensor = torch.tensor([1, 0, 0], dtype=torch.float, device=self.device).repeat((self.num_envs, 1))
@@ -1088,29 +1098,30 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         
         # total_reward = hand_to_object_reward + object_to_goal_reward +\
         #                finger_curl_reg + lift_reward + palm_direction_alignment_reward + palm_finger_alignment_reward + contact_reward + action_rate_penalty + episode_length_reward + palm_lin_vel_penalty
-        # Optional reward debug printout for the first N steps.
-        if self._reward_debug_steps_remaining < 0:
+        # Optional reward debug printout every 100 steps when enabled
+        if self._reward_debug_steps_remaining < 0 and self.common_step_counter % 100 == 0:
             step_id = int(self.episode_length_buf.max().item())
+            
+            # Build termination summary
+            term_summary = ", ".join([f"{k}={v}" for k, v in self.term_counts.items() if v > 0])
+            if not term_summary:
+                term_summary = "none"
+            
             print(
                 f"[REWARD DEBUG] step={step_id} "
-                f"total_mean={total_reward.mean().item():.4f} "
-                f"hand_obj={hand_to_object_reward.mean().item():.4f} "
-                f"obj_goal={object_to_goal_reward.mean().item():.4f} "
-                f"lift={lift_reward.mean().item():.4f} "
-                f"palm_align={palm_direction_alignment_reward.mean().item():.4f} "
-                f"palm_finger_align={palm_finger_alignment_reward.mean().item():.4f} "
-                f"in_grip_align={in_grip_alignment_reward.mean().item():.4f} "
-                f"contact={contact_reward.mean().item():.4f} "
-                f"good_grasp={good_grasp_reward.mean().item():.4f} "
-                f"finger_curl={finger_curl_reg.mean().item():.4f} "
-                f"joint_vel_pen={joint_vel_penalty.mean().item():.4f} "
-                f"action_rate_pen={action_rate_penalty.mean().item():.4f} "
-                f"ep_len={episode_length_reward.mean().item():.4f} "
-                f"approach_pen={approach_speed_penalty.mean().item():.4f} "
-                f"palm_lin_vel_pen={palm_lin_vel_penalty.mean().item():.4f} "
-                f"vel_max={self.robot_dof_vel.abs().max().item():.3f} "
-                f"action_delta_max={self.action_delta.abs().max().item():.3f}"
+                f"total={total_reward.mean().item():.3f} "
+                f"hand_obj={hand_to_object_reward.mean().item():.3f} "
+                f"contact={contact_reward.mean().item():.3f} "
+                f"palm_align={palm_direction_alignment_reward.mean().item():.3f} "
+                f"lift={lift_reward.mean().item():.3f} "
+                f"good_grasp={good_grasp_reward.mean().item():.3f} "
+                f"action_rate={action_rate_penalty.mean().item():.3f} "
+                f"| TERM: {term_summary}"
             )
+            
+            # Reset termination counts after printing
+            for key in self.term_counts:
+                self.term_counts[key] = 0
             self._reward_debug_steps_remaining -= 1
 
         # Log other information
@@ -1180,38 +1191,15 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             | palm_flipped
         )
 #============================================================================================================================
-        # if out_of_reach.any():
-        #     env_ids = torch.nonzero(out_of_reach, as_tuple=False).squeeze(-1).tolist()
-        #     print(f"termination triggered in envs: {env_ids}")
-
-        #     object_fail = (
-        #         object_outside_upper_x
-        #         | object_outside_lower_x
-        #         | object_outside_upper_y
-        #         | object_outside_lower_y
-        #         | object_too_low
-        #     )
-        #     hand_fail = hand_too_far | hand_too_close | palm_flipped
-
-        #     if object_fail.any():
-        #         envs = torch.nonzero(object_fail & out_of_reach, as_tuple=False).squeeze(-1).tolist()
-        #         print(f"object out of range termination: envs {envs}")
-        #     if hand_fail.any():
-        #         envs = torch.nonzero(hand_fail & out_of_reach, as_tuple=False).squeeze(-1).tolist()
-        #         print(f"hand out of range termination: envs {envs}")
-        #         if hand_too_far.any():
-        #             envs = torch.nonzero(hand_too_far & out_of_reach, as_tuple=False).squeeze(-1).tolist()
-        #             print(f"hand too far: envs {envs}")
-        #         if hand_too_close.any():
-        #             envs = torch.nonzero(hand_too_close & out_of_reach, as_tuple=False).squeeze(-1).tolist()
-        #             print(f"hand too close: envs {envs}")
-        #         if palm_flipped.any():
-        #             envs = torch.nonzero(palm_flipped & out_of_reach, as_tuple=False).squeeze(-1).tolist()
-        #             print(f"palm flipped: envs {envs}")
-        #     if self.arm_table_contact_mask.any():
-        #         envs = torch.nonzero(self.arm_table_contact_mask & out_of_reach, as_tuple=False).squeeze(-1).tolist()
-        #         print(f"arm colliding with the table termination: envs {envs}")
-        #     # input("debugging termination conditions")
+        # Accumulate termination counts for debug output (printed with reward debug every 100 steps)
+        if out_of_reach.any():
+            object_fail = (object_outside_upper_x | object_outside_lower_x | object_outside_upper_y | object_outside_lower_y | object_too_low)
+            self.term_counts["obj_out"] += object_fail.sum().item()
+            self.term_counts["hand_far"] += hand_too_far.sum().item()
+            self.term_counts["hand_close"] += hand_too_close.sum().item()
+            self.term_counts["palm_flip"] += palm_flipped.sum().item()
+            self.term_counts["arm_contact"] += self.arm_table_contact_mask.sum().item()
+            # input("debugging termination conditions")
 #===================================================================================================================================
 
         # Terminate rollout if maximum episode length reached
@@ -1762,9 +1750,11 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.palm_finger_direction_vec = torch.bmm(
             palm_rot, self._palm_finger_local_axis.expand(self.num_envs, 3, 1)
         ).squeeze(-1)
-        # # Debug: print palm direction in world frame per env
-        # for env_idx, vec in enumerate(self.palm_direction_vec.detach().cpu().numpy()):
-        #     print(f"[PalmDir] env {env_idx}: {vec}")
+        # Debug: print palm direction in world frame per env
+        if self.common_step_counter % 100 == 0:  # Print every 100 steps
+            for env_idx in range(min(3, self.num_envs)):  # Print first 3 envs
+                vec = self.palm_direction_vec[env_idx].detach().cpu().numpy()
+                print(f"[PalmDir] env {env_idx}: [{vec[0]:.3f}, {vec[1]:.3f}, {vec[2]:.3f}] (target: [0, 0, -1])")
         # input()
 
     def compute_intermediate_reward_values(self):
