@@ -631,9 +631,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     in_grip_alignment_weight = 0.5
     palm_down_local_axis = (1.0, 0.0, 0.0) # x axis of agile-hand points in the direction of palm
     palm_finger_alignment_weight = 0.0  # Disabled - let robot find optimal approach direction
-    palm_finger_local_axis = (0.0, 0.0, 1.0) # palm axis that points in the direction of the fingers in palm frame
-    palm_finger_direction_target = (0.0, 0.0, -1.0) # not used when weight=0
-    palm_linear_velocity_penalty_weight = 0.0  # prev 0.005 -- removed to avoid "don't move" signal
+    palm_finger_local_axis = (0.0, -1.0, 0.0) # palm axis that points in the direction of the fingers in palm frame
+    palm_finger_direction_target = (-1.0, -1.0, 0.0) # not used when weight=0
+    palm_linear_velocity_penalty_weight = 0.005 # prev 0.005 -- removed to avoid "don't move" signal
     approach_speed_penalty_weight = 0.001        # prev 0.001 -- removed to avoid "don't move" signal
     action_rate_penalty_weight = 0.01         # prev 0.01 -- halved to allow exploration
     hand_action_rate_penalty_scale = 3.0       # prev 3.0
@@ -644,8 +644,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     # phase 2: contact
     hand_object_contact_weight = 0.1  # Reduced from 0.1 to prevent premature finger closing
     good_grasp_weight = 10.0 # default 10.0 # too obsessed in finding a good contact, actually finds one
-    finger_curl_reg_weight = -0.5
-    ## TODO: what does this do? 
+    finger_curl_reg_weight = -0.1    ## TODO: what does this do? 
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl 
 
