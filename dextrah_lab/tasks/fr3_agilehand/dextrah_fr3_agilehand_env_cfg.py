@@ -185,8 +185,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                 "fr3_joint3": 0.0,
                 "fr3_joint4": -0.9599,  # -55 degrees
                 "fr3_joint5": 0.0,
-                "fr3_joint6": 1.7453,  # 100 degrees
-                "fr3_joint7": 0.0,
+                "fr3_joint6": 2.6180,  # 150 degrees
+                "fr3_joint7": 0.5236,  # 30 degrees
                 "revolute_thumb_rot": -0.5,
                 "revolute_thumb_mcp_pitch": 0.0,
                 "revolute_thumb_mcp_yaw": 0.0,
@@ -626,9 +626,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
 
     # reward weights
     # phase 1: reaching
-    hand_to_object_weight = 5. #default 1, prev 5
+    hand_to_object_weight = 10. #default 1, prev 5
     hand_to_object_sharpness = 8. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
-    palm_direction_alignment_weight = 0.0 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
+    palm_direction_alignment_weight = 3.0 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
     in_grip_alignment_weight = 0.5
     palm_down_local_axis = (1.0, 0.0, 0.0) # x axis of agile-hand points in the direction of palm
     palm_finger_alignment_weight = 0.0  # Disabled - let robot find optimal approach direction
@@ -645,7 +645,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     # phase 2: contact
     hand_object_contact_weight = 1.0  # Increased to make contact more valuable than hovering
     good_grasp_weight = 10.0 # default 10.0 # too obsessed in finding a good contact, actually finds one
-    finger_curl_reg_weight = -0.1    # penalization factor for finger curl
+    finger_curl_reg_weight = -0.3    # penalization factor for finger curl
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl 
 

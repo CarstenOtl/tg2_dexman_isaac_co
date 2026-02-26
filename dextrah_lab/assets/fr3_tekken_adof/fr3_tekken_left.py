@@ -48,8 +48,8 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
             "fr3_joint3": 0.0,
             "fr3_joint4": -0.9599,  # -55 degrees
             "fr3_joint5": 0.0,
-            "fr3_joint6": 1.7453,  # 100 degrees
-            "fr3_joint7": 0.0,
+            "fr3_joint6": 2.6180,  # 150 degrees
+            "fr3_joint7": 0.5236,  # 30 degrees
             ### ADOF joint limits
             # Thumb Rot: [-0.54 , 0.54] ==> [-30 , 30] deg
             # MCP Pitch: [0 , 1.22] ==> [0 , ~70 deg]
