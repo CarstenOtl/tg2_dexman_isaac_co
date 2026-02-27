@@ -795,7 +795,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "robot_joint_vel_bias": (0.0, 0.08), # rad
         },
         "reward_weights": {
-            "object_to_goal_sharpness": (-15., -20.),
+            "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
             "lift_weight": (25., 30.)  # Increased from (20,20) for stronger lifting incentive
         },
