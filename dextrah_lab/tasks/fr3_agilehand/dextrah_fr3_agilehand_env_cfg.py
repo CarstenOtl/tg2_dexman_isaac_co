@@ -180,13 +180,13 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             pos=(0.0, 0.0, 0.25),  # Raise robot to table height (matching TG2 config)
             rot=(0.0, 0.0, 0.0, 1.0),
             joint_pos={
-                "fr3_joint1": 0.0,
-                "fr3_joint2": 0.0,
-                "fr3_joint3": 0.0,
-                "fr3_joint4": -0.9599,  # -55 degrees
-                "fr3_joint5": 0.0,
-                "fr3_joint6": 2.6180,  # 150 degrees
-                "fr3_joint7": 0.5236,  # 30 degrees
+                "fr3_joint1": 0.3491,   # 20 degrees
+                "fr3_joint2": 0.6109,   # 35 degrees
+                "fr3_joint3": -0.8727,  # -50 degrees
+                "fr3_joint4": -0.8727,  # -50 degrees
+                "fr3_joint5": -0.3491,  # -20 degrees
+                "fr3_joint6": 2.6180,   # 150 degrees
+                "fr3_joint7": 0.0,      # 0 degrees
                 "revolute_thumb_rot": -0.5,
                 "revolute_thumb_mcp_pitch": 0.0,
                 "revolute_thumb_mcp_yaw": 0.0,
@@ -626,9 +626,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
 
     # reward weights
     # phase 1: reaching
-    hand_to_object_weight = 10. #default 1, prev 5
-    hand_to_object_sharpness = 8. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
-    palm_direction_alignment_weight = 3.0 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
+    hand_to_object_weight = 8. #default 1, prev 5
+    hand_to_object_sharpness = 5. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
+    palm_direction_alignment_weight = 1.0 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
     in_grip_alignment_weight = 0.5
     palm_down_local_axis = (1.0, 0.0, 0.0) # x axis of agile-hand points in the direction of palm
     palm_finger_alignment_weight = 0.0  # Disabled - let robot find optimal approach direction
@@ -637,22 +637,22 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     palm_linear_velocity_penalty_weight = 0.005 # prev 0.005 -- removed to avoid "don't move" signal
     approach_speed_penalty_weight = 0.001        # prev 0.001 -- removed to avoid "don't move" signal
     action_rate_penalty_weight = 0.01         # prev 0.01 -- halved to allow exploration
-    hand_action_rate_penalty_scale = 3.0       # prev 3.0
+    hand_action_rate_penalty_scale = 2.5       # prev 3.0
 
     joint_velocity_penalty_weight = 5e-4       # prev 5e-4 -- reduced to avoid freezing
     hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
 
     # phase 2: contact
-    hand_object_contact_weight = 1.0  # Increased to make contact more valuable than hovering
+    hand_object_contact_weight = 7.0  # Increased to make contact more valuable than hovering
     good_grasp_weight = 10.0 # default 10.0 # too obsessed in finding a good contact, actually finds one
-    finger_curl_reg_weight = -0.3    # penalization factor for finger curl
+    finger_curl_reg_weight = -0.5    # penalization factor for finger curl
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl 
 
     #phase 3: lifting
     object_to_goal_weight = 15 #default 5 
     in_success_region_at_rest_weight = 10. #default10
-    lift_sharpness = 6.5 #default 8.5
+    lift_sharpness = 7.5 #default 8.5
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   

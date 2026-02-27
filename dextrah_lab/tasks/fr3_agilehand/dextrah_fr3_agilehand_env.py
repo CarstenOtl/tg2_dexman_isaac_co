@@ -1774,9 +1774,9 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             0.
         )
 
-        # Object to hand points distance (average over selected bodies)
+        # Object to hand points distance (mean over selected bodies for smooth approach gradient)
         self.hand_to_object_pos_error = (
-            torch.norm(self.hand_object_distance_pos - self.object_pos[:, None, :], dim=-1).max(dim=-1).values
+            torch.norm(self.hand_object_distance_pos - self.object_pos[:, None, :], dim=-1).mean(dim=-1)
         )
         # self.hand_to_object_pos_error =\
         # torch.norm(self.hand_pos - self.object_pos[:, None, :], dim=-1).max(dim=-1).values
