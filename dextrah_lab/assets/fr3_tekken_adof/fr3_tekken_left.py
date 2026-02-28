@@ -31,7 +31,7 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
             max_depenetration_velocity=5.0,
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-            enabled_self_collisions=False,
+            enabled_self_collisions=True,
             solver_position_iteration_count=10,
             solver_velocity_iteration_count=4,
             sleep_threshold=0.005,  # Add sleep threshold like TG2
