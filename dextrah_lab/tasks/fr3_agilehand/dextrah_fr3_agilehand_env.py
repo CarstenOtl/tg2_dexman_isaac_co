@@ -259,6 +259,9 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             "palm_flip": 0,
             "arm_contact": 0,
         }
+        # Success / episode counters (accumulated between debug prints)
+        self._debug_success_count = 0
+        self._debug_episode_count = 0
         
         # Unit tensors - used in creating random object rotations during spawn
         self.x_unit_tensor = torch.tensor([1, 0, 0], dtype=torch.float, device=self.device).repeat((self.num_envs, 1))
@@ -966,7 +969,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 self.cfg.hand_to_object_sharpness,
                 self.cfg.object_to_goal_weight,
                 self.dextrah_adr.get_custom_param_value("reward_weights", "object_to_goal_sharpness"),
-                self.cfg.finger_curl_reg_weight,
+                self.dextrah_adr.get_custom_param_value("reward_weights", "finger_curl_reg"),
                 lift_weight,
                 self.cfg.lift_sharpness,
                 self.cfg.palm_direction_alignment_weight,  
@@ -1098,30 +1101,80 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         
         # total_reward = hand_to_object_reward + object_to_goal_reward +\
         #                finger_curl_reg + lift_reward + palm_direction_alignment_reward + palm_finger_alignment_reward + contact_reward + action_rate_penalty + episode_length_reward + palm_lin_vel_penalty
-        # Optional reward debug printout every 100 steps when enabled
-        if self._reward_debug_steps_remaining < 0 and self.common_step_counter % 100 == 0:
-            step_id = int(self.episode_length_buf.max().item())
-            
-            # Build termination summary
-            term_summary = ", ".join([f"{k}={v}" for k, v in self.term_counts.items() if v > 0])
-            if not term_summary:
-                term_summary = "none"
-            
-            print(
-                f"[REWARD DEBUG] step={step_id} "
-                f"total={total_reward.mean().item():.3f} "
-                f"hand_obj={hand_to_object_reward.mean().item():.3f} "
-                f"contact={contact_reward.mean().item():.3f} "
-                f"palm_align={palm_direction_alignment_reward.mean().item():.3f} "
-                f"lift={lift_reward.mean().item():.3f} "
-                f"good_grasp={good_grasp_reward.mean().item():.3f} "
-                f"action_rate={action_rate_penalty.mean().item():.3f} "
-                f"| TERM: {term_summary}"
-            )
-            
-            # Reset termination counts after printing
+        # Comprehensive reward / status table printed every 100 env-steps
+        if self._reward_debug_steps_remaining < 0 and self.common_step_counter % getattr(self.cfg, "debug_print_every_steps", 16) == 0:
+            W = 66  # table width
+            sep  = "=" * W
+            thin = "-" * W
+
+            # ---- header ----
+            adr_now   = self.dextrah_adr.num_increments()
+            adr_max   = self.cfg.num_adr_increments
+            frame     = self.common_step_counter * self.num_envs
+            step_id   = int(self.episode_length_buf.float().mean().item())
+            hdr = f" TRAINING │ avg_ep_step={step_id:<4d} │ frame={frame:<10d} │ ADR={adr_now}/{adr_max} "
+            print(sep)
+            print(hdr.center(W))
+            print(sep)
+
+            # ---- rewards table (two-column layout) ----
+            all_terms = [
+                ("total",        total_reward.mean().item()),
+                ("hand_to_obj",  hand_to_object_reward.mean().item()),
+                ("obj_to_goal",  object_to_goal_reward.mean().item()),
+                ("contact",      contact_reward.mean().item()),
+                ("lift",         lift_reward.mean().item()),
+                ("good_grasp",   good_grasp_reward.mean().item()),
+                ("palm_align",   palm_direction_alignment_reward.mean().item()),
+                ("finger_curl",  finger_curl_reg.mean().item()),
+                ("episode_len",  episode_length_reward.mean().item()),
+                ("action_rate",  action_rate_penalty.mean().item()),
+                ("joint_vel",    joint_vel_penalty.mean().item()),
+            ]
+            print(" REWARDS")
+            # pair up for two-column display
+            for i in range(0, len(all_terms), 2):
+                left  = all_terms[i]
+                right = all_terms[i + 1] if i + 1 < len(all_terms) else None
+                left_str  = f"  {left[0]:<14s} {left[1]:>8.3f}"
+                right_str = f"   {right[0]:<14s} {right[1]:>8.3f}" if right else ""
+                print(f"{left_str}{right_str}")
+            print(thin)
+
+            # ---- terminations ----
+            print(" TERMINATIONS  (since last print)")
+            term_parts = [f"{k}={v}" for k, v in self.term_counts.items()]
+            # wrap at W chars
+            line = "  "
+            for part in term_parts:
+                if len(line) + len(part) + 2 > W:
+                    print(line)
+                    line = "  "
+                line += part + "   "
+            if line.strip():
+                print(line)
+            print(thin)
+
+            # ---- success & lift ----
+            in_goal_pct  = self.in_success_region.float().mean().item() * 100.0
+            table_center_z = self.cfg.table_cfg.init_state.pos[2]
+            table_top_z_   = table_center_z + 0.5 * self.cfg.table_size_z
+            lift_height_   = table_top_z_ + getattr(self.cfg, "object_height_thresh", 0.0)
+            _lift_w        = self.dextrah_adr.get_custom_param_value("reward_weights", "lift_weight")
+            lift_ok_pct    = (((_lift_w != 0.0) & (self.object_pos[:, 2] > lift_height_)).float().mean().item() * 100.0)
+            ep_count = max(self._debug_episode_count, 1)
+            suc_pct  = self._debug_success_count / ep_count * 100.0
+            print(" SUCCESS")
+            print(f"  in_goal_now: {in_goal_pct:5.1f}%")
+            print(f"  successes  : {self._debug_success_count}/{self._debug_episode_count} episodes  ({suc_pct:.1f}%)")
+            print(f"  lifted_now : {lift_ok_pct:5.1f}%")
+            print(sep)
+
+            # Reset counters after printing
             for key in self.term_counts:
                 self.term_counts[key] = 0
+            self._debug_success_count = 0
+            self._debug_episode_count = 0
             self._reward_debug_steps_remaining -= 1
 
         # Log other information
@@ -1297,6 +1350,10 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         # Compute reward-related intermediate values (hand-object distances, etc.)
         # This ensures hand_to_object_pos_error is properly initialized at reset
         self.compute_intermediate_reward_values()
+
+        # Track success before clearing (for debug table)
+        self._debug_success_count += int(self.in_success_region[env_ids].sum().item())
+        self._debug_episode_count += len(env_ids)
 
         # Reset success signals
         self.in_success_region[env_ids] = False
@@ -1750,12 +1807,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.palm_finger_direction_vec = torch.bmm(
             palm_rot, self._palm_finger_local_axis.expand(self.num_envs, 3, 1)
         ).squeeze(-1)
-        # Debug: print palm direction in world frame per env
-        if self.common_step_counter % 100 == 0:  # Print every 100 steps
-            for env_idx in range(min(3, self.num_envs)):  # Print first 3 envs
-                vec = self.palm_direction_vec[env_idx].detach().cpu().numpy()
-                print(f"[PalmDir] env {env_idx}: [{vec[0]:.3f}, {vec[1]:.3f}, {vec[2]:.3f}] (target: [0, 0, -1])")
-        # input()
+        # PalmDir per-env print removed (absorbed into TRAINING STATUS table)
 
     def compute_intermediate_reward_values(self):
         # Calculate distance between object and its goal position

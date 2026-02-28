@@ -628,7 +628,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     # phase 1: reaching
     hand_to_object_weight = 8. #default 1, prev 5
     hand_to_object_sharpness = 5. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
-    palm_direction_alignment_weight = 1.0 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
+    palm_direction_alignment_weight = 1.5 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
     in_grip_alignment_weight = 0.5
     palm_down_local_axis = (1.0, 0.0, 0.0) # x axis of agile-hand points in the direction of palm
     palm_finger_alignment_weight = 0.0  # Disabled - let robot find optimal approach direction
@@ -672,6 +672,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
 
     # Optional: print per-step reward breakdown for the first N steps (debugging aid).
     debug_reward_steps = -1  # Enable to see reward breakdown every step
+    # How often to print the training status table (in env-steps; 16 = every rl_games epoch at horizon_length=16)
+    debug_print_every_steps = 16
     # Terminate if palm flips beyond this cosine threshold relative to target (-Z).
     palm_flip_cos_thresh = -0.3  # Allows up to ~108 degrees deviation from downward
 
@@ -785,8 +787,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "robot_spawn": {
             # TODO: Re-enable joint position noise after verifying open hand behavior
             # Original value was (0., 0.35) which adds ±20° randomization at reset
-            "joint_pos_noise": (0., 0.0),  # Temporarily disabled for debugging
-            "joint_vel_noise": (0., 1.)
+            "joint_pos_noise": (0., 0.8),  
+            "joint_vel_noise": (0., 1.),
         },
         "robot_state_noise": {
             "robot_joint_pos_noise": (0.0, 0.08), # rad
@@ -797,7 +799,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "reward_weights": {
             "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
-            "lift_weight": (25., 30.)  # Increased from (20,20) for stronger lifting incentive
+            "lift_weight": (20., 10.),  # Increased from (20,20) for stronger lifting incentive
+            "finger_curl_reg": (-0.2, -0.8),  # ADR: ramp up curl penalty to encourage better hand use
         },
         "pd_targets": {
             "velocity_target_factor": (1., 0.)
