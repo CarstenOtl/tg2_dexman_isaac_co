@@ -258,6 +258,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             "hand_close": 0,
             "palm_flip": 0,
             "arm_contact": 0,
+            "unstable": 0,
         }
         # Success / episode counters (accumulated between debug prints)
         self._debug_success_count = 0
@@ -1189,6 +1190,12 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         # print('reach reward', hand_to_object_reward.mean())
         # print('lift reward', lift_reward.mean())
 
+        # Guard against NaN/Inf from physics instabilities poisoning the rl_games
+        # replay buffer (which would corrupt value targets and crash training).
+        # The instability is already caught by robot_unstable termination; this
+        # just prevents the bad step's reward from entering the buffer.
+        total_reward = torch.nan_to_num(total_reward, nan=0.0, posinf=0.0, neginf=0.0)
+
         return total_reward
 
     def _get_dones(self) -> torch.Tensor:
@@ -1232,6 +1239,12 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         palm_flip_cos = torch.sum(self.palm_direction_vec * self._palm_dir_target_world, dim=-1)
         palm_flipped = palm_flip_cos < self.cfg.palm_flip_cos_thresh
 
+        # Physics instability termination: NaN or Inf in joint velocities or positions.
+        robot_unstable = (
+            ~torch.isfinite(self.robot_dof_vel).all(dim=-1)
+            | ~torch.isfinite(self.robot_dof_pos).all(dim=-1)
+        )
+
         out_of_reach = (
             object_outside_upper_x
             | object_outside_lower_x
@@ -1242,6 +1255,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             | hand_too_close
             | self.arm_table_contact_mask
             | palm_flipped
+            | robot_unstable
         )
 #============================================================================================================================
         # Accumulate termination counts for debug output (printed with reward debug every 100 steps)
@@ -1252,6 +1266,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             self.term_counts["hand_close"] += hand_too_close.sum().item()
             self.term_counts["palm_flip"] += palm_flipped.sum().item()
             self.term_counts["arm_contact"] += self.arm_table_contact_mask.sum().item()
+            self.term_counts["unstable"] += robot_unstable.sum().item()
             # input("debugging termination conditions")
 #===================================================================================================================================
 

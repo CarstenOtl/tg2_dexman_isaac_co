@@ -628,7 +628,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     # phase 1: reaching
     hand_to_object_weight = 8. #default 1, prev 5
     hand_to_object_sharpness = 5. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
-    palm_direction_alignment_weight = 1.5 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
+    palm_direction_alignment_weight = 1.3 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
     in_grip_alignment_weight = 0.5
     palm_down_local_axis = (1.0, 0.0, 0.0) # x axis of agile-hand points in the direction of palm
     palm_finger_alignment_weight = 0.0  # Disabled - let robot find optimal approach direction
@@ -799,7 +799,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "reward_weights": {
             "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
-            "lift_weight": (20., 10.),  # Increased from (20,20) for stronger lifting incentive
+            "lift_weight": (25., 10.),  # Increased from (20,20) for stronger lifting incentive
             "finger_curl_reg": (-0.2, -0.8),  # ADR: ramp up curl penalty to encourage better hand use
         },
         "pd_targets": {
