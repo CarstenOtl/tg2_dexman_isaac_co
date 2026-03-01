@@ -24,17 +24,19 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=True,
             retain_accelerations=True,
-            linear_damping=0.001,
-            angular_damping=0.0,
-            max_linear_velocity=500.0, # default 1000
-            max_angular_velocity=500.0, # default 1000
-            max_depenetration_velocity=5.0,
+            linear_damping=0.01,
+            angular_damping=0.01,       # was 0.0 — prevents free spinning on contact
+            max_linear_velocity=100.0,  # was 500 — tighter cap reduces instability
+            max_angular_velocity=100.0, # was 500
+            max_depenetration_velocity=1.0,  # was 5.0 — lower = smoother corrections, less bouncing
+            contact_offset=0.002,       # 2 mm shell: PhysX detects contact before penetration
+            rest_offset=0.0,            # allow objects to rest flush
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True,
-            solver_position_iteration_count=10,
-            solver_velocity_iteration_count=4,
-            sleep_threshold=0.005,  # Add sleep threshold like TG2
+            solver_position_iteration_count=16,  # was 10 — more iterations for accurate finger contacts
+            solver_velocity_iteration_count=8,   # was 4
+            sleep_threshold=0.005,
             stabilization_threshold=0.0005,
         ),
         # joint_drive_props=sim_utils.JointDrivePropertiesCfg(drive_type="force"),

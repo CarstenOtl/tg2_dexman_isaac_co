@@ -167,7 +167,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             dynamic_friction=1.0,
         ),
         physx=PhysxCfg(
-            bounce_threshold_velocity=0.2,
+            bounce_threshold_velocity=0.1,   # was 0.2 — catches slower collisions before bouncing
             gpu_max_rigid_patch_count=4 * 5 * 2**15,
             gpu_collision_stack_size= 2 ** 29
         ),
