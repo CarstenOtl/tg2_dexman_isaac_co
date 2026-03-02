@@ -626,10 +626,10 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
 
     # reward weights
     # phase 1: reaching
-    hand_to_object_weight = 6. #default 1, prev 5
+    hand_to_object_weight = 5. #default 1, prev 5
     hand_to_object_sharpness = 5. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
     
-    palm_direction_alignment_weight = 1.2 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
+    palm_direction_alignment_weight = 1 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
     in_grip_alignment_weight = 1. # 0.5
     
     palm_down_local_axis = (1.0, 0.0, 0.0) # x axis of agile-hand points in the direction of palm
@@ -647,7 +647,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
 
     # phase 2: contact
-    hand_object_contact_weight = 3.0  # Increased to make contact more valuable than hovering
+    hand_object_contact_weight = 2.0  # Increased to make contact more valuable than hovering
     good_grasp_weight = 5.0 # default 10.0 # too obsessed in finding a good contact, actually finds one
     finger_curl_reg_weight = -0.5    # penalization factor for finger curl
     finger_curl_reg_min = -3.0 # max penalty for finger curl
