@@ -646,6 +646,11 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     joint_velocity_penalty_weight = 5e-4       # prev 5e-4 -- reduced to avoid freezing
     hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
 
+    # # Penalty when any hand link is closer than (object_scale * factor) to object center —
+    # # discourages "phasing through" grasps. Set weight > 0 to enable (e.g. 2.0).
+    # penetration_penalty_weight = 0.0
+    # penetration_radius_factor = 0.03  # treat as penetration when min hand–object dist < scale * this
+
     # phase 2: contact
     hand_object_contact_weight = 2.0  # Increased to make contact more valuable than hovering
     good_grasp_weight = 5.0 # default 10.0 # too obsessed in finding a good contact, actually finds one

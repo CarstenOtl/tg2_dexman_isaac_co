@@ -28,12 +28,15 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
             angular_damping=0.0,
             max_linear_velocity=500.0, # default 1000
             max_angular_velocity=500.0, # default 1000
-            max_depenetration_velocity=5.0,
+            # Higher value so fingers cannot "phase through" objects: PhysX resolves
+            # penetration faster, making invalid grasps (curl-through) impossible.
+            max_depenetration_velocity=100.0,
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True,
-            solver_position_iteration_count=10,
-            solver_velocity_iteration_count=4,
+            # More iterations improve contact resolution for thin finger–object contacts.
+            solver_position_iteration_count=16,
+            solver_velocity_iteration_count=6,
             stabilization_threshold=0.0005,
             # fixed_root_link=True,
         ),

@@ -373,9 +373,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         if num_unique_objects_found < 1:
             raise ValueError(f"No objects found under assets/{self.cfg.objects_dir}/USD")
 
-        # Single-object training: _setup_objects() will use only 1 object at a time,
-        # so we need to match the one-hot encoding size used there.
-        num_unique_objects = 1
+        num_unique_objects = num_unique_objects_found
 
         # Compute observation sizes dynamically from robot dimensions.
         # NOTE: self.actuated_dof_indices / self.num_hand_bodies are not yet available
@@ -629,21 +627,17 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         if not sub_dirs:
             raise ValueError(f"No objects found under {objects_full_path}")
 
-        if self.cfg.distillation:
-            # Track all available objects for multi-teacher distillation.
-            self.object_names = list(sub_dirs)
-            self.num_unique_objects = len(self.object_names)
-            # Deterministic assignment of object indices across envs.
-            object_indices = [i % self.num_unique_objects for i in range(self.num_envs)]
-        else:
-            # Single-object training: pick the first object for all envs.
-            self.object_names = [sub_dirs[0]]
-            self.num_unique_objects = 1
-            object_indices = [0 for _ in range(self.num_envs)]
+        self.object_names = list(sub_dirs)
+        self.num_unique_objects = len(self.object_names)
 
-        self.multi_object_idx = torch.tensor(object_indices, dtype=torch.long, device=self.device)
-        # Constant one-hot placeholder (length 1) regardless of object identity.
-        self.multi_object_idx_onehot = torch.ones((self.num_envs, 1), dtype=torch.float, device=self.device)
+        # Distribute objects across envs using modular indexing
+        # [0, 1, ..., num_unique-1, 0, 1, ..., num_unique-1, ...]
+        self.multi_object_idx =\
+            torch.remainder(torch.arange(self.num_envs), self.num_unique_objects).to(self.device)
+
+        # One-hot encoding of object ID for policy/critic observation input
+        self.multi_object_idx_onehot = F.one_hot(
+            self.multi_object_idx, num_classes=self.num_unique_objects).float()
 
         stage = omni.usd.get_context().get_stage()
         self.object_mat_prims = list()
@@ -684,8 +678,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             self.object_scale = torch.ones_like(self.object_scale)
 
         for i in range(self.num_envs):
-            # TODO: check to see that the below config settings make sense
-            object_name = self.object_names[object_indices[i]]
+            object_name = sub_dirs[self.multi_object_idx[i]]
             object_usd_path = objects_full_path + "/" + object_name + "/" + object_name + ".usd"
             print('Object name', object_name)
             print('object usd path', object_usd_path)
@@ -1055,6 +1048,20 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         approach_speed = (palm_lin_vel * approach_dir).sum(dim=-1)
         approach_speed_penalty = -approach_speed_weight * torch.clamp(approach_speed, min=0.0) ** 2
 
+        # Penalize when any hand body is inside object (min hand–object dist < radius).
+        # Complements physics: discourages policies that rely on finger phasing through object.
+        penetration_penalty_weight = getattr(self.cfg, "penetration_penalty_weight", 0.0)
+        if penetration_penalty_weight > 0:
+            min_hand_object_dist = torch.norm(
+                self.hand_object_distance_pos - self.object_pos[:, None, :], dim=-1
+            ).min(dim=-1).values
+            radius = self.object_scale.squeeze(-1) * self.cfg.penetration_radius_factor
+            penetration_penalty = -penetration_penalty_weight * torch.clamp(
+                radius - min_hand_object_dist, min=0.0
+            )
+        else:
+            penetration_penalty = torch.zeros(self.num_envs, device=self.device, dtype=approach_speed_penalty.dtype)
+
         # Add reward signals to tensorboard
         self.extras["hand_to_object_reward"] = hand_to_object_reward.mean()
         self.extras["object_to_goal_reward"] = object_to_goal_reward.mean()
@@ -1070,6 +1077,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.extras["episode_length_reward"] = episode_length_reward.mean()
         self.extras["palm_linear_velocity_penalty"] = palm_lin_vel_penalty.mean()
         self.extras["approach_speed_penalty"] = approach_speed_penalty.mean()
+        self.extras["penetration_penalty"] = penetration_penalty.mean()
         
         # DEBUG: Add distance and contact count for debugging
         self.extras["hand_to_object_distance"] = self.hand_to_object_pos_error.mean()
@@ -1082,6 +1090,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             "finger_curl": finger_curl_reg,
             "palm_align": palm_direction_alignment_reward,
             # "in_grip_align": in_grip_alignment_reward,
+            "penetration_penalty": penetration_penalty,
             
             # grasp phase
             "contact": contact_reward,  # ENABLED for debugging
@@ -1241,7 +1250,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
 
         # Physics instability termination: NaN or Inf in joint velocities or positions.
         robot_unstable = (
-            ~torch.isfinite(self.robot_dof_vel).all(dim=-1)
+            ~torch.isfinite(self._robot_dof_vel_raw).all(dim=-1)
             | ~torch.isfinite(self.robot_dof_pos).all(dim=-1)
         )
 
@@ -1722,10 +1731,18 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             self.robot_joint_pos_bias
 
         self.robot_dof_vel = self.robot.data.joint_vel[:, self.actuated_dof_indices]
+        # Keep raw copy for termination check; sanitize for rewards/obs to avoid NaN/Inf in policy
+        self._robot_dof_vel_raw = self.robot_dof_vel.clone()
+        self.robot_dof_vel = torch.nan_to_num(
+            self.robot_dof_vel, nan=0.0, posinf=0.0, neginf=0.0
+        )
         self.robot_dof_vel_noisy = self.robot_dof_vel +\
             self.robot_joint_vel_noise_width *\
             2. * (torch.rand_like(self.robot_dof_vel) - 0.5) +\
             self.robot_joint_vel_bias
+        self.robot_dof_vel_noisy = torch.nan_to_num(
+            self.robot_dof_vel_noisy, nan=0.0, posinf=0.0, neginf=0.0
+        )
         self.robot_dof_vel_noisy *= self.dextrah_adr.get_custom_param_value(
             "observation_annealing"
             ,"coefficient"
@@ -1736,6 +1753,9 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         robot_dof_vel_noisy_full = self.robot.data.joint_vel.clone()
         robot_dof_pos_noisy_full[:, self.actuated_dof_indices] = self.robot_dof_pos_noisy
         robot_dof_vel_noisy_full[:, self.actuated_dof_indices] = self.robot_dof_vel_noisy
+        robot_dof_vel_noisy_full = torch.nan_to_num(
+            robot_dof_vel_noisy_full, nan=0.0, posinf=0.0, neginf=0.0
+        )
 
         # Robot fingertip and palm position. NOTE: currently not adding orientation
         self.hand_pos = self.robot.data.body_pos_w[:, self.hand_bodies]
