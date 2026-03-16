@@ -396,8 +396,14 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                         + num_actuated)  # actions
         self.cfg.num_teacher_observations = teacher_base + num_unique_objects
 
-        # Student obs (placeholder — adjust if distillation pipeline changes)
-        self.cfg.num_student_observations = self.cfg.num_teacher_observations
+        # Student obs: dof_pos(act) + dof_vel(act) + hand_pos(hb*3) + hand_vel(hb*3)
+        #            + obj_goal(3) + actions(act)
+        # (no object_pos, object_rot, onehot, or object_scale — those are teacher-only)
+        student_base = (num_actuated * 2
+                        + num_hand_bodies * 3 + num_hand_bodies * 3
+                        + 3              # object_goal
+                        + num_actuated)  # actions
+        self.cfg.num_student_observations = student_base
 
         if self.cfg.distillation:
             self.cfg.num_observations = self.cfg.num_student_observations
@@ -1907,14 +1913,14 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         obs = torch.cat(
             (
                 # robot
-                self.robot_dof_pos_noisy, # 0:23
+                self.robot_dof_pos_noisy, # 0:23  (23 actuated)
                 self.robot_dof_vel_noisy, # 23:46
-                self.hand_pos_noisy, # 46:61
-                self.hand_vel_noisy, # 61:76
+                self.hand_pos_noisy, # 46:64  (6 bodies * 3)
+                self.hand_vel_noisy, # 64:82  (6 bodies * 3)
                 # object goal
-                self.object_goal, # 76:79
+                self.object_goal, # 82:85
                 # last action
-                self.actions, # 79:90
+                self.actions, # 85:108  (23 actuated)
             ),
             dim=-1,
         )
