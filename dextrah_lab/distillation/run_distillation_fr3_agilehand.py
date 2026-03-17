@@ -137,7 +137,7 @@ def main(env_cfg, agent_cfg: dict):
         train_dir = "runs"
         experiment_name = (
             "FR3-Agilehand"
-            + datetime.now().strftime("_%d-%H-%M-%S")
+            + datetime.now().strftime("_%m_%d-%H-%M-%S")
         )
         experiment_dir = os.path.join(train_dir, experiment_name)
         nn_dir = os.path.join(experiment_dir, "nn")

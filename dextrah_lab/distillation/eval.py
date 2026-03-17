@@ -81,6 +81,8 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import the task setup
 import dextrah_lab.tasks.dextrah_kuka_allegro.gym_setup  # noqa: F401
+import dextrah_lab.tasks.fr3_agilehand.gym_setup  # noqa: F401
+
 
 from dextrah_lab.distillation.a2c_with_aux_depth import A2CBuilder as A2CWithAuxDepthBuilder
 from dextrah_lab.distillation.a2c_with_aux_cnn import A2CBuilder as A2CWithAuxCNNBuilder

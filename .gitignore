@@ -12,6 +12,9 @@ logs
 .thumbs/
 
 runs/
+${data}/
+*.etli
+dextrah_lab/distillation/*.pth
 pretrained_ckpts/
 wandb/
 outputs/
