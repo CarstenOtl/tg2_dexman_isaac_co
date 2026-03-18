@@ -23,6 +23,8 @@ parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy 
 parser.add_argument("--teacher", type=str, default=None, help="Teacher checkpoint to use")
 parser.add_argument("--play_policy", type=bool, default=False, help="Play a distilled policy.")
 parser.add_argument("--data_aug", action="store_true", default=False, help="Whether to use data augmentation for student")
+parser.add_argument("--mono", action="store_true", default=False, help="Use monocular instead of stereo (default: stereo)")
+parser.add_argument("--no_transformer", action="store_true", default=False, help="Disable transformer student (default: transformer)")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -101,18 +103,21 @@ def main(env_cfg, agent_cfg: dict):
     parent_path = str(pathlib.Path(__file__).parent.parent.parent.resolve())
     agent_cfg_folder = "dextrah_lab/tasks/fr3_agilehand/agents"
 
-    if ov_env.simulate_stereo:
-        student_cfg = os.path.join(
-            parent_path,
-            agent_cfg_folder,
-            "rl_games_ppo_stereo_transformer.yaml"
-        )
+    use_stereo = not args_cli.mono
+    use_transformer = not args_cli.no_transformer
+    vision_tag = "stereo" if use_stereo else "mono"
+    arch_tag = "transformer" if use_transformer else "cnn"
+
+    if use_stereo and use_transformer:
+        student_yaml = "rl_games_ppo_stereo_transformer.yaml"
+    elif not use_stereo and use_transformer:
+        student_yaml = "rl_games_ppo_mono_transformer.yaml"
+    elif use_stereo and not use_transformer:
+        student_yaml = "rl_games_ppo_lstm_scratch_cnn_aux_stereo.yaml"
     else:
-        student_cfg = os.path.join(
-            parent_path,
-            agent_cfg_folder,
-            "rl_games_ppo_mono_transformer.yaml"
-        )
+        student_yaml = "rl_games_ppo_lstm_scratch_cnn_aux.yaml"
+
+    student_cfg = os.path.join(parent_path, agent_cfg_folder, student_yaml)
 
     teacher_cfg = os.path.join(
         parent_path,
@@ -136,8 +141,8 @@ def main(env_cfg, agent_cfg: dict):
     if rank == 0:
         train_dir = "runs"
         experiment_name = (
-            "FR3-Agilehand"
-            + datetime.now().strftime("_%m_%d-%H-%M-%S")
+            "dextrah-fr3-agilehand"
+            + datetime.now().strftime("_%d-%H-%M-%S")
         )
         experiment_dir = os.path.join(train_dir, experiment_name)
         nn_dir = os.path.join(experiment_dir, "nn")
@@ -178,7 +183,7 @@ def main(env_cfg, agent_cfg: dict):
     dagger = Dagger(env, dagger_config, summaries_dir=summaries_dir, nn_dir=nn_dir)
     dagger.distill()
     if rank == 0:
-        dagger.save("fr3_agilehand_distilled")
+        dagger.save(f"dextrah_student_{vision_tag}_{arch_tag}")
 
 
 if __name__ == "__main__":

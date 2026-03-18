@@ -81,6 +81,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import the task setup
 import dextrah_lab.tasks.tg2_inspirehand.gym_setup  # noqa: F401
+import dextrah_lab.tasks.fr3_agilehand.gym_setup  # noqa: F401
 
 from dextrah_lab.distillation_new.a2c_stereo_transformer import (
     A2CBuilder as A2CStereoTransformerBuilder,

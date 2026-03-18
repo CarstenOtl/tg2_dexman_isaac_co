@@ -111,7 +111,6 @@ class Dagger:
         self.device = self.local_rank
         self.config = config
         self.student_network_params = self.load_param_dict(self.config["student"]["cfg"])["params"]
-        self.use_data_aug = self.config["student"]["data_aug"]
         self.teacher_network_params = self.load_param_dict(self.config["teacher"]["cfg"])["params"]
         self.student_network = self.load_networks(self.student_network_params)
         self.teacher_network = self.load_networks(self.teacher_network_params)
@@ -120,17 +119,18 @@ class Dagger:
         self.horizon_length = self.student_network_params["config"]["horizon_length"]
         self.normalize_value = self.student_network_params["config"]["normalize_value"]
         self.normalize_input = self.student_network_params["config"]["normalize_input"]
+        self.use_flow = self.student_network_params["network"]["transformer"]["use_flow"]
 
         # get student and teacher models
         self.num_actions_student = self.num_actions
         self.student_model_config = {
             "actions_num": self.num_actions_student,
             "input_shape": (self.ov_env.num_observations,),
-            "batch_size": self.num_envs,
             "num_seqs": self.num_envs,
             "value_size": self.value_size,
             'normalize_value': self.normalize_value,
             'normalize_input': self.normalize_input,
+            'num_envs': self.num_envs,
         }
         self.teacher_model_config = {
             "actions_num": self.num_actions,
@@ -147,20 +147,22 @@ class Dagger:
         self.teacher_model = self.teacher_network.build(self.teacher_model_config).to(self.device)
         self.warm_up_lr = 1e-5
         self.peak_lr = 1e-3
-        params = [{"params": self.student_model_ddp.parameters(), "lr": self.warm_up_lr, "eps": 1e-8}]
-        # self.optimizer = torch.optim.Adam(params)
-        self.optimizer = torch.optim.Adam(self.student_model_ddp.parameters(), lr=1e-4, eps=1e-8)
+        self.init_lr = 2e-4
+        self.optimizer = torch.optim.AdamW(
+            self.student_model_ddp.parameters(), lr=self.init_lr, eps=1e-8,
+            betas=(0.9, 0.95), weight_decay=1e-2
+        )
         self.warmup_epochs = 2000
         self.max_epochs = 100_000
         self.num_cycles = 1.
-        # self.scheduler = self.cosine_schedule_with_warmup(
-        #     self.optimizer,
-        #     num_warmup_steps=self.warmup_epochs,
-        #     num_training_steps=self.max_epochs,
-        #     num_cycles=self.num_cycles
-        # )
+        self.scheduler = self.cosine_schedule_with_warmup(
+            self.optimizer,
+            num_warmup_steps=self.warmup_epochs,
+            num_training_steps=self.max_epochs,
+            num_cycles=self.num_cycles
+        )
         self.num_warmup_steps = 1000
-        self.num_iters = 100_000
+        self.num_iters = 350000
 
         # load weights for student and teacher
         if self.config["student"]["ckpt"] is not None:
@@ -174,7 +176,7 @@ class Dagger:
         self.is_teacher_rnn = self.teacher_model.is_rnn()
         if self.is_rnn:
             self.seq_length = self.student_network_params["config"]["seq_length"]
-            self.seq_length = 1
+            self.seq_length = 30
             print("USING RNN")
         if self.is_teacher_rnn:
             print("USING TEACHER RNN")
@@ -184,7 +186,7 @@ class Dagger:
         else:
             self.is_aux = False
         self.step_student_actions = True
-        self.play_policy = self.config["play_policy"]
+        self.play_policy = False
         if self.play_policy is True:
             self.step_student_actions = True
 
@@ -199,7 +201,7 @@ class Dagger:
 
         if self.rank == 0:
             self.writer = SummaryWriter(summaries_dir)
-            self.use_wandb = False
+            self.use_wandb = True
             parent_path = str(pathlib.Path(__file__).parent.resolve())
             summaries_dir = os.path.join(parent_path, summaries_dir)
             self.nn_dir = os.path.join(parent_path, nn_dir)
@@ -213,18 +215,15 @@ class Dagger:
                     notes=os.environ["WANDB_NOTES"],
                     # sync_tensorboard=True,
                 )
-        else:
-            self.use_wandb = False
         self.scaler = GradScaler()
         wp.init()
         self.depth_aug = DepthAug(f"cuda:{self.local_rank}")
         self.use_depth_aug = self.ov_env.cfg.aug_depth
         self.img_aug_type = self.ov_env.cfg.img_aug_type
-        self.aux_coeff = self.ov_env.cfg.aux_coeff
         self.depth_aug_cfg = self.ov_env.cfg.depth_randomization_cfg_dict
         self.stereo = self.ov_env.cfg.simulate_stereo
-        self.viz_imgs = False
-        if self.viz_imgs:
+        self.viz_depth = False
+        if self.viz_depth:
             self.fig, (self.ax1, self.ax2) = plt.subplots(1, 2, figsize=(10, 5))
 
             x = np.linspace(0, 50., num=self.ov_env.cfg.img_width)
@@ -249,7 +248,7 @@ class Dagger:
             self.fig.canvas.draw()
             plt.show(block=False)
 
-        if self.use_data_aug and self.img_aug_type == "rgb":
+        if self.img_aug_type == "rgb":
             self.rgb_aug = RgbAug(
                 device=self.device,
                 all_env_inds=self.ov_env.robot._ALL_INDICES,
@@ -350,7 +349,7 @@ class Dagger:
     def distill(self):
         self.student_model.train()
         self.teacher_model.eval()
-        # torch.set_float32_matmul_precision('high')
+        torch.set_float32_matmul_precision('high')
 
         obs = self.env.reset()[0]
 
@@ -362,34 +361,39 @@ class Dagger:
         num_iters = self.num_iters
         num_iters_since_beta_dec = 0
 
+        self.aux_coeff = 1.
+        
         while log_counter < num_iters:
-            if log_counter < 15_000:
+            if log_counter < 2_000:
                 beta = 1.
             else:
-                beta = 0.
-                # if log_counter % 240 == 0 or num_iters_since_beta_dec > 1_000:
-                #     num_iters_since_beta_dec = 0
-                #     perf = self.ov_env.in_success_region.float().mean().cpu().numpy()
-                #     if perf > 0.2:
-                #         beta = max(beta - 0.05, 0.)
-                #         print(f"Changing beta to new value: {beta}")
-            beta = 0.
+                if log_counter % 240 == 0 or num_iters_since_beta_dec > 3_000:
+                    num_iters_since_beta_dec = 0
+                    perf = self.ov_env.in_success_region.float().mean().cpu().numpy()
+                    if perf > 0.5:
+                        beta = max(beta - 0.025, 0.)
+                        print(f"Changing beta to new value: {beta}")
             if self.play_policy:
                 beta = 0. if self.step_student_actions else 1.
-                self.optimizer.param_groups[0]["lr"] = 0.0
-            # beta = 0.
+                self.optimizer.param_groups[0]["lr"] = 1e-8
+            beta = 0.
 
-            if log_counter < 5000:
-                self.finetune_backbone = False
+            # save depth img from every other frame
+            # if self.img_aug_type == "depth":
+            even_indices = torch.where(self.env_counter % 2 == 0)[0]
+            if self.stereo:
+                self.depth_buffers_left[even_indices] = obs['depth_left'][even_indices]
+                self.depth_buffers_right[even_indices] = obs['depth_right'][even_indices]
+                obs['depth_left'] = self.depth_buffers_left
+                obs['depth_right'] = self.depth_buffers_right
             else:
-                self.finetune_backbone = True
+                self.depth_buffers[even_indices] = obs['img'][even_indices]
+                obs['img'] = self.depth_buffers
 
             if self.img_aug_type == "depth" and self.use_depth_aug:
                 obs["img"] = self.augment_depth(obs["img"])
-                obs["img"][obs["img"] > self.ov_env.cfg.d_max] = 0.
-                obs["img"][obs["img"] < self.ov_env.cfg.d_min] = 0.
 
-            if self.use_data_aug and self.img_aug_type == "rgb":
+            if self.img_aug_type == "rgb":
                 if self.stereo:
                     imgs = {
                         "left_img": obs["img_left"],
@@ -402,32 +406,23 @@ class Dagger:
                     aug_output = self.rgb_aug.apply(imgs, masks)
                     obs["img_left"] = aug_output["left_img"]
                     obs["img_right"] = aug_output["right_img"]
-                    # right image now kept in native orientation
+                    obs['img_right'] = torch.flip(obs['img_right'], dims=(2,3))
+                    self.rgb_buffers_left[even_indices] = obs['img_left'][even_indices]
+                    obs['img_left'] = self.rgb_buffers_left
+                    self.rgb_buffers_right[even_indices] = obs['img_right'][even_indices]
+                    obs['img_right'] = self.rgb_buffers_right
                 else:
-                    if self.img_aug_type == "rgb":
-                        obs["rgb"] = self.rgb_aug.apply(obs["rgb"], obs["mask"])
-                        self.rgb_buffers[even_indices] = obs['rgb'][even_indices]
-                        obs['rgb'] = self.rgb_buffers
-            else:
-                # right image now kept in native orientation
-                pass
+                    obs["rgb"] = self.rgb_aug.apply(obs["rgb"], obs["mask"])
+                    self.rgb_buffers[even_indices] = obs['rgb'][even_indices]
+                    obs['rgb'] = self.rgb_buffers
 
-            if self.viz_imgs:
+            self.finetune_backbone = True
+
+            if self.viz_depth:
                 if self.stereo:
-                    obj_uv_left = obs["obj_uv_left"][2].clone().detach().cpu().numpy()
-                    obj_uv_right = obs["obj_uv_right"][2].clone().detach().cpu().numpy()
-                    obj_uv_left[0] *= self.ov_env.cfg.img_width
-                    obj_uv_left[1] *= self.ov_env.cfg.img_height
-                    obj_uv_right[0] *= self.ov_env.cfg.img_width
-                    obj_uv_right[1] *= self.ov_env.cfg.img_height
-                    # plot object uv on top of rgb, need to be int
-                    obj_uv_left = obj_uv_left.astype(np.int32)
-                    obj_uv_right = obj_uv_right.astype(np.int32)
-                    rgb_img = obs["img_left"][2].clone().detach().cpu().numpy().transpose(1, 2, 0)
-                    # rgb_img[obj_uv_left[1]-4:obj_uv_left[1]+4, obj_uv_left[0]-4:obj_uv_left[0]+4, :] = [1, 1, 1]
+                    rgb_img = obs["img_left"][0].clone().detach().cpu().numpy().transpose(1, 2, 0)
                     self.rendered_img1.set_data(rgb_img)
-                    rgb_img = obs["img_right"][2].clone().detach().cpu().numpy().transpose(1, 2, 0)
-                    # rgb_img[obj_uv_right[1]-4:obj_uv_right[1]+4, obj_uv_right[0]-4:obj_uv_right[0]+4, :] = [1, 1, 1]
+                    rgb_img = obs["img_right"][0].clone().detach().cpu().numpy().transpose(1, 2, 0)
                     self.rendered_img2.set_data(rgb_img)
                 else:
                     rgb_img = obs["rgb"][0].clone().detach().cpu().numpy().transpose(1, 2, 0)
@@ -436,87 +431,62 @@ class Dagger:
                 self.fig.canvas.draw()
                 self.fig.canvas.flush_events()
             
-            # left_img = (obs["img_left"][0].clone().detach().cpu().numpy().transpose(1, 2, 0)*255).astype(np.uint8)
-            # right_img = (obs["img_right"][0].clone().detach().cpu().numpy().transpose(1, 2, 0)*255).astype(np.uint8)
-            # Image.fromarray(left_img).save("left_img.png")
-            # Image.fromarray(right_img).save("right_img.png")
-            # breakpoint()
+            with torch.no_grad():
+                actions_teacher = self.get_actions(obs, "teacher")
+                self.actions_teacher = actions_teacher["actions"]
             
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                with torch.no_grad():
-                    actions_teacher = self.get_actions(obs, "teacher")
-                    self.actions_teacher = actions_teacher["actions"]
+            if self.use_flow:
+                self.x1 = actions_teacher["actions"]
+                self.x0 = torch.randn_like(self.x1)
+                target_v = self.x1 - self.x0
 
-                start_time = time.time()
-                # with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                # imgs_real = torch.load('images1.pth') #[-0.7, 0.08, 0.295]
-                # imgs_real = torch.load('images2.pth') #[-0.65, 0.25,  0.3]
-                # real_img_left = imgs_real['left_img']
-                # real_img_right = imgs_real['right_img']
-                # obs['img_left'][:] = real_img_left #[:, torch.arange(3 - 1, -1, -1), :, :]
-                # obs['img_right'][:] = real_img_right #[:, torch.arange(3 - 1, -1, -1), :, :]
-                actions_student = self.get_actions(obs, "student")
+            start_time = time.time()
+            actions_student = self.get_actions(obs, "student")
 
-                aux_loss = list() if self.is_aux else [0.]
-                if actions_student["aux"] is not None:
-                    aux_out = actions_student["aux"]
-                    self.aux_loss_names = aux_out.keys()
-                    aux_gt = obs["aux_info"]
-                    mask = obs["mask_left"] if self.stereo else obs["mask"]
-                    # invert binary mask for depth
-                    mask = ~mask
-                    for aux_name in self.aux_loss_names:
-                        num_vals = aux_out[aux_name].shape[-1]
-                        if 'img' in aux_name:
-                            num_supervised_envs = aux_out[aux_name].shape[0]
-                            if "depth" in aux_name:
-                                depth_min = self.ov_env.cfg.d_min
-                                depth_max = self.ov_env.cfg.d_max
-                                aux_out[aux_name] = aux_out[aux_name]*(depth_max - depth_min) + depth_min
-                            aux_loss.append(
-                                torch.mean(
-                                    torch.norm(
-                                        ((aux_out[aux_name] - aux_gt[aux_name])), 
-                                        p=2, dim=(1,2,3)),
-                                )
+            aux_loss = list() if self.is_aux else [0.]
+            if actions_student["aux"] is not None:
+                aux_out = actions_student["aux"]
+                self.aux_loss_names = aux_out.keys()
+                aux_gt = obs["aux_info"]
+                mask = obs["mask_left"] if self.stereo else obs["mask"]
+                # invert binary mask for depth
+                mask = ~mask
+                for aux_name in self.aux_loss_names:
+                    num_vals = aux_out[aux_name].shape[-1]
+                    if 'img' in aux_name:
+                        num_supervised_envs = aux_out[aux_name].shape[0]
+                        if "depth" in aux_name:
+                            depth_min = self.ov_env.cfg.d_min
+                            depth_max = self.ov_env.cfg.d_max
+                            aux_out[aux_name] = aux_out[aux_name]*(depth_max - depth_min) + depth_min
+                        aux_loss.append(
+                            torch.mean(
+                                torch.norm(
+                                    ((aux_out[aux_name] - aux_gt[aux_name])), 
+                                    p=2, dim=(1,2,3)),
                             )
-                            # breakpoint()
-                            if self.rank == 0:
-                                self.log_img(aux_out[aux_name][:5], aux_gt[aux_name][:5])
-                        elif "uv" in aux_name:
-                            # find uvs that are between 0 and 1
-                            uv_mask = (aux_out[aux_name] >= 0) & (aux_out[aux_name] <= 1)
-                            uv_mask = uv_mask.all(dim=-1)
-                            aux_loss.append(
-                                self.loss(
-                                    aux_out[aux_name][uv_mask],
-                                    aux_gt[aux_name][uv_mask].reshape(
-                                        len(uv_mask), -1
-                                    )
-                                )
-                            )
-                        else:
-                            aux_loss.append(
-                                self.loss(aux_out[aux_name], aux_gt[aux_name].reshape(self.num_envs, -1)) #/ num_vals
-                            )
+                        )
+                        if self.rank == 0:
+                            self.log_img(aux_out[aux_name][:5], aux_gt[aux_name][:5])
+                    else:
+                        aux_loss.append(
+                            self.loss(aux_out[aux_name], aux_gt[aux_name].reshape(self.num_envs, -1)) #/ num_vals
+                        )
 
-                weights = 1 / actions_teacher['sigmas'][0]
-                weights = weights ** 2
+            weights = 1 / actions_teacher['sigmas'][0]
+            weights = weights ** 2
+            if self.use_flow:
+                student_loss = ((target_v - actions_student["mus"])**2).mean()
+            else:
                 student_loss = (
                     self.loss(
-                        actions_student["mus"], actions_teacher["mus"],
-                        fn="weighted_l2", weights=weights
-                    ) +
+                    actions_student["mus"], actions_teacher["mus"],
+                    fn="weighted_l2", weights=weights
+                ) +
                     self.loss(actions_student["sigmas"], actions_teacher["sigmas"])
                 )
-                total_loss += student_loss + self.aux_coeff*sum(aux_loss)
-            # pos = torch.tensor([
-            #     [self.ov_env.cfg.x_center+self.ov_env.cfg.x_width/2, self.ov_env.cfg.y_center+self.ov_env.cfg.y_width/2, 0.5],
-            #     [self.ov_env.cfg.x_center-self.ov_env.cfg.x_width/2, self.ov_env.cfg.y_center-self.ov_env.cfg.y_width/2, 0.5],
-            # ]).to(self.device)
-            # self.ov_env._set_pos_marker(pos)
-            # print(aux_out["object_pos"])
-            # self.ov_env._set_pos_marker(aux_out["object_pos"])
+
+            total_loss += student_loss + self.aux_coeff*sum(aux_loss)
 
             if self.rank == 0:
                 self.log_information(log_counter, total_loss, aux_loss, beta)
@@ -528,11 +498,7 @@ class Dagger:
             if self.is_rnn:
                 if log_counter % self.seq_length == 0:
                     total_loss.backward()
-                    torch.nn.utils.clip_grad_norm_(
-                        self.student_model.parameters(), 1.0
-                    )
                     self.optimizer.step()
-                    # self.scheduler.step()
                     self.optimizer.zero_grad()
                     for i, s in enumerate(self.student_hidden_states):
                         self.student_hidden_states[i] = s.detach()
@@ -542,10 +508,22 @@ class Dagger:
                 self.optimizer.zero_grad()
                 total_loss.backward()
                 self.optimizer.step()
-                # self.scheduler.step()
+                self.scheduler.step()
                 total_loss = 0.
             end_time = time.time()
             # print(f"Time taken for backward and step: {end_time - start_time} seconds")
+
+            if self.play_policy and self.step_student_actions and self.use_flow:
+                x = self.x0.clone()
+                num_steps = 2
+                for t in torch.linspace(0, 1, num_steps):
+                    with torch.no_grad():
+                        obs["time"] = t.expand(self.num_envs)
+                        obs["noised_actions"] = x
+                        actions_student = self.get_actions(obs, "student")
+                        x = x + 1 / num_steps * (actions_student["actions"])
+                
+                actions_student["actions"] = x
 
             if beta is None:
                 stepping_actions = actions_student["actions"] if self.step_student_actions else actions_teacher["actions"]
@@ -572,11 +550,7 @@ class Dagger:
             if self.is_rnn and len(all_done_indices) > 0:
                 if total_loss > 1e-8:
                     total_loss.backward()
-                    torch.nn.utils.clip_grad_norm_(
-                        self.student_model.parameters(), 1.0
-                    )
                     self.optimizer.step()
-                    # self.scheduler.step()
                     self.optimizer.zero_grad()
                     for i, s in enumerate(self.student_hidden_states):
                         self.student_hidden_states[i] = s.detach()
@@ -588,6 +562,8 @@ class Dagger:
                             self.student_hidden_states[i][:, all_done_indices[0]].permute((1, 0, 2))
                         )
                     self.student_hidden_states[i][:, all_done_indices] *= 0.
+                
+                self.student_model.a2c_network.reset_idx(all_done_indices)
 
                 self.env_counter[all_done_indices] = 0
 
@@ -596,8 +572,7 @@ class Dagger:
                     s[:, all_done_indices, ...] *= 0.
 
             done_indices = all_done_indices[:]
-            if self.use_data_aug and self.img_aug_type == "rgb":
-                self.rgb_aug.reset(done_indices)
+            self.rgb_aug.reset(done_indices)
             self.game_rewards.update(self.current_rewards[done_indices])
             self.game_lengths.update(self.current_lengths[done_indices])
             not_dones = 1.0 - self.dones.float()
@@ -609,7 +584,7 @@ class Dagger:
                 # if (
                 #     log_counter % 10000 == 0 and
                 #     log_counter > 10 and
-                #     self.optimizer.param_groups[0]["lr"] > 1.2*1e-4
+                #     self.optimizer.param_groups[0]["lr"] > 1.2*1e-5
                 # ):
                 #     self.optimizer.param_groups[0]["lr"] /= 1.2
                 if self.rank == 0 and log_counter % 5_000 == 0:
@@ -619,9 +594,10 @@ class Dagger:
                     )
                     self.save(ckpt_path)
 
-        if self.rank == 0 and self.use_wandb:
+        if self.use_wandb:
             wandb.finish()
 
+    
     def cosine_schedule_with_warmup(self, optimizer, num_warmup_steps, num_training_steps, num_cycles=0.5, init_lr_frac= 0.01):
         def lr_lambda(current_step):
             if current_step < num_warmup_steps:
@@ -648,6 +624,9 @@ class Dagger:
         )
 
         return depths.unsqueeze(1)
+
+    def sample_t(self):
+        return torch.rand(self.num_envs, device=self.device)
 
     def log_information(self, log_counter, total_loss, aux_loss=None, beta=None):
         student_loss = total_loss if aux_loss is None else total_loss - self.aux_coeff*sum(aux_loss)
@@ -724,30 +703,19 @@ class Dagger:
     def get_actions(self, obs, policy_type):
         aux = None
         if policy_type == "student":
-            # real_world_idx = 1
-            # real_world_names = ["obs.pth", "obs2.pth"]
-            # gt_pos = [[-0.7, 0.08, 0.295], [-0.65, 0.25, 0.3]]
-            # real_obs = torch.load(real_world_names[real_world_idx])
-            # gt_pos = torch.tensor(gt_pos[real_world_idx]).reshape(1, 3).to(self.device)
-            # arm_positions = [
-            #     -0.7875749180783324, -0.4724239581655329, 0.6733201341853008,
-            #     1.211750626464511, -1.7481902752912126, 0.9306101177413156, 0.6660046636382199
-            # ]
-            # hand_positions = [
-            #     -0.018107680695800783, 0.22323929877421064, 0.7489833809370932, 0.9548251041408286,
-            #     -0.013491997381184897, 0.34635377487752284, 0.8157332627176921, 0.8537238869226075,
-            #     -0.0008876314066569011, 0.4619233840242513, 0.8937560633628338, 0.8243432873622641,
-            #     1.175845324398397, 0.3547862732407634, 0.3690771388879395, 0.286438654928182
-            # ]
-            # robot_q = torch.tensor(arm_positions + hand_positions).to(self.device)
-            # obs[self.student_obs_type][:, :len(robot_q)] = robot_q
             batch_dict = {
                 "is_train": True,
-                # "obs": real_obs["proprio"].to(self.device).repeat(2,1),
                 "obs": obs[self.student_obs_type],
-                # "observations": obs[self.student_obs_type],
+                "observations": obs[self.student_obs_type],
                 "prev_actions": self.prev_actions_student,
             }
+            if self.use_flow and "time" not in obs:
+                t = self.sample_t()
+                obs["time"] = t
+                obs["noised_actions"] = (1 - t[:, None]) * self.x0 + t[:, None] * self.x1
+            if "time" in obs:
+                batch_dict["time"] = obs["time"]
+                batch_dict["noised_actions"] = obs["noised_actions"]
             if "img" in obs:
                 # mean_tensor = torch.mean(obs["img"], dim=(2, 3), keepdim=True)
                 batch_dict["img"] = obs["img"] #- mean_tensor
@@ -756,19 +724,13 @@ class Dagger:
             if "img_left" in obs:
                 batch_dict["img_left"] = obs["img_left"]
                 batch_dict["img_right"] = obs["img_right"]
-                # batch_dict["img_left"] = real_obs["left_img"].repeat(2,1,1,1).to(self.device)
-                # batch_dict["img_right"] = real_obs["right_img"].repeat(2,1,1,1).to(self.device)
             if self.is_rnn:
-                # batch_dict["rnn_states"] = [real_obs["hidden_state_1"], real_obs["hidden_state_2"]]
                 batch_dict["rnn_states"] = self.student_hidden_states
                 batch_dict["seq_length"] = 1
                 batch_dict["rnn_masks"] = None
-            batch_dict["finetune_backbone"] = self.finetune_backbone
             res_dict = self.student_model_ddp(batch_dict)
             mus = res_dict["mus"]
             sigmas = res_dict["sigmas"]
-            # self.ov_env._set_gt_pos_marker(gt_pos.repeat(self.num_envs, 1))
-            # breakpoint()
             if self.is_rnn:
                 if self.is_aux:
                     self.student_hidden_states = [s for s in res_dict["rnn_states"][0]]
@@ -793,9 +755,9 @@ class Dagger:
             sigmas = res_dict["sigmas"]
         distr = torch.distributions.Normal(mus, sigmas, validate_args=False)
         selected_action = distr.sample().squeeze()
-        # clamp selected action between 1 and -1
-        selected_action = torch.clamp(selected_action, -1., 1.)
 
+        if self.use_flow and policy_type == "student":
+            selected_action = mus + self.x0
         return {
             "mus": mus,
             "sigmas": sigmas,
@@ -851,3 +813,4 @@ class Dagger:
         with open(cfg_path, 'r') as f:
             config = yaml.safe_load(f)
         return config
+
