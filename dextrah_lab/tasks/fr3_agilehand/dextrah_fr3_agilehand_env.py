@@ -630,6 +630,13 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         sub_dirs = [object_name for object_name in sub_dirs if os.path.isdir(
             os.path.join(objects_full_path, object_name))]
 
+        # Exclude objects specified in config
+        exclude = set(getattr(self.cfg, "exclude_objects", []))
+        if exclude:
+            before = len(sub_dirs)
+            sub_dirs = [name for name in sub_dirs if name not in exclude]
+            print(f"[ObjectLoader] Excluded {before - len(sub_dirs)} objects: {exclude}")
+
         if not sub_dirs:
             raise ValueError(f"No objects found under {objects_full_path}")
 

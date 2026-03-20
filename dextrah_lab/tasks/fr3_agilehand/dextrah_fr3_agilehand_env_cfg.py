@@ -76,6 +76,26 @@ class EventCfg:
         },
     )
 
+    # -- fingertip friction (curriculum: start grippy, ADR decreases friction)
+    fingertip_physics_material = EventTerm(
+        func=mdp.randomize_rigid_body_material,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=[
+                "base_link",
+                "Index_Distal_Phalanx",
+                "Middle_Distal_Phalanx",
+                "Ring_Distal_Phalanx",
+                "Pinky_Distal_Phalanx",
+                "Thumb_Distal_Phalanx",
+            ]),
+            "static_friction_range": (2.0, 2.0),
+            "dynamic_friction_range": (1.5, 1.5),
+            "restitution_range": (1.0, 1.0),
+            "num_buckets": 250,
+        },
+    )
+
     # -- object
     # NOTE: no beginning randomization for these
     object_physics_material = EventTerm(
@@ -129,6 +149,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                         "playback",
                         "distill_multi_objects"
                         ]
+    # Objects to exclude from training (by folder name under USD/)
+    exclude_objects: list[str] = ["large_8_cuboid", "small_5_cuboid"]
 
     # Toggle for using cuda graph
     use_cuda_graph = False
@@ -187,7 +209,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                 "fr3_joint5": -0.3491,  # -20 degrees
                 "fr3_joint6": 2.6180,   # 150 degrees
                 "fr3_joint7": 0.0,      # 0 degrees
-                "revolute_thumb_rot": -0.5,
+                "revolute_thumb_rot": 0.0, # start in middle of thumb rotation range
                 "revolute_thumb_mcp_pitch": 0.0,
                 "revolute_thumb_mcp_yaw": 0.0,
                 "revolute_thumb_pip": 0.0,
@@ -626,10 +648,10 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
 
     # reward weights
     # phase 1: reaching
-    hand_to_object_weight = 5. #default 1, prev 5
+    hand_to_object_weight = 4. #default 1, prev 5
     hand_to_object_sharpness = 5. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
     
-    palm_direction_alignment_weight = 1 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
+    palm_direction_alignment_weight = 1.2 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
     in_grip_alignment_weight = 1. # 0.5
     
     palm_down_local_axis = (1.0, 0.0, 0.0) # x axis of agile-hand points in the direction of palm
@@ -652,16 +674,16 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     # penetration_radius_factor = 0.03  # treat as penetration when min hand–object dist < scale * this
 
     # phase 2: contact
-    hand_object_contact_weight = 2.0  # Increased to make contact more valuable than hovering
-    good_grasp_weight = 5.0 # default 10.0 # too obsessed in finding a good contact, actually finds one
-    finger_curl_reg_weight = -0.5    # penalization factor for finger curl
+    hand_object_contact_weight = 1.  # Increased to make contact more valuable than hovering
+    good_grasp_weight = 3.5 # default 10.0 # too obsessed in finding a good contact, actually finds one
+    finger_curl_reg_weight = -0.3    # penalization factor for finger curl
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl 
 
     #phase 3: lifting
-    object_to_goal_weight = 20 #default 5 
+    object_to_goal_weight = 10 #default 5 
     in_success_region_at_rest_weight = 10. #default10
-    lift_sharpness = 7.5 #default 8.5
+    lift_sharpness = 4.0 #default 8.5
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
@@ -752,6 +774,11 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "robot_joint_friction": {
             "friction_distribution_params": (0., 5.),
         },
+        "fingertip_physics_material": {
+            "static_friction_range": (0.4, 2.0),
+            "dynamic_friction_range": (0.3, 1.5),
+            "restitution_range": (0.8, 1.0),
+        },
         "object_physics_material": {
             "static_friction_range": (0.5, 1.2),
             "dynamic_friction_range": (0.3, 1.0),
@@ -773,8 +800,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     object_scale_min = 0.5
     deactivate_object_scaling = True
 
-    # TODO: what is this?
-    aux_coeff = 1.
+    aux_coeff = 1.  # this does: total_reward = total_reward + aux_coeff * aux_reward (where aux_reward is the reward from the aux task)
 
     # Dictionary of custom parameters for ADR
     # NOTE: first number in range is the starting value, second number is terminal value
@@ -806,9 +832,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "robot_joint_vel_bias": (0.0, 0.08), # rad
         },
         "reward_weights": {
-            "object_to_goal_sharpness": (-5., -10.),
+            "object_to_goal_sharpness": (-3., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
-            "lift_weight": (10., 5.),  # Increased from (20,20) for stronger lifting incentive
+            "lift_weight": (30., 10.),  # Increased to dominate contact reward and incentivize lifting
             "finger_curl_reg": (-0.1, -1),  # ADR: ramp up curl penalty to encourage better hand use
         },
         "pd_targets": {
