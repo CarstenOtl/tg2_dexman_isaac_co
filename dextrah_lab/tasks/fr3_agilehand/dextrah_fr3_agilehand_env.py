@@ -630,13 +630,6 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         sub_dirs = [object_name for object_name in sub_dirs if os.path.isdir(
             os.path.join(objects_full_path, object_name))]
 
-        # Exclude objects specified in config
-        exclude = set(getattr(self.cfg, "exclude_objects", []))
-        if exclude:
-            before = len(sub_dirs)
-            sub_dirs = [name for name in sub_dirs if name not in exclude]
-            print(f"[ObjectLoader] Excluded {before - len(sub_dirs)} objects: {exclude}")
-
         if not sub_dirs:
             raise ValueError(f"No objects found under {objects_full_path}")
 
@@ -969,7 +962,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 self.max_episode_length,
                 self.hand_to_object_pos_error,
                 self.object_to_object_goal_pos_error,
-                self.object_vertical_error,
+                self.object_height_above_table,
                 self.robot_dof_pos[:, 7:], # NOTE: only the finger joints
                 self.curled_q,
                 self.cfg.hand_to_object_weight,
@@ -1865,6 +1858,10 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         # Calculate vertical error
         self.object_vertical_error = torch.abs(self.object_goal[:, 2] - self.object_pos[:, 2])
 
+        # Height above table surface (clamped to 0 — can't go below table)
+        table_top_z = self.table_pos_z + self.cfg.table_size_z * 0.5
+        self.object_height_above_table = torch.clamp(self.object_pos[:, 2] - table_top_z, min=0.0)
+
         # Calculate whether object is within success region
         self.in_success_region = self.object_to_object_goal_pos_error < self.cfg.object_goal_tol
         # if not in success region, reset time in success region, else increment
@@ -2071,7 +2068,7 @@ def compute_rewards(
     max_episode_length: float,
     hand_to_object_pos_error: torch.Tensor,
     object_to_object_goal_pos_error: torch.Tensor,
-    object_vertical_error: torch.Tensor,
+    object_height_above_table: torch.Tensor,
     robot_dof_pos: torch.Tensor,
     curled_q: torch.Tensor,
     hand_to_object_weight: float,
@@ -2120,8 +2117,14 @@ def compute_rewards(
     finger_curl_reg =\
         finger_curl_reg_weight * finger_curl_dist ** 2
 
-    # Reward for lifting object off table and towards object goal
-    lift_reward = lift_weight * torch.exp(-lift_sharpness * object_vertical_error) * contact_mask
+    # Exponential lift reward with baseline subtraction.
+    # exp(sharpness * height) == 1.0 when height == 0 (on table), so subtracting 1
+    # gives exactly zero reward for just touching. Grows exponentially with lift height,
+    # creating strong advantage signal for trajectories that manage to lift even a few cm.
+    # Clamp height to prevent reward explosion from physics glitches.
+    clamped_height = object_height_above_table.clamp(min=0.0, max=0.5)
+    lift_reward = lift_weight * (torch.exp(lift_sharpness * clamped_height) - 1.0) * contact_mask
+    lift_reward = lift_reward.clamp(max=50.0)  # hard cap to prevent NaN propagation
 
     # Palm alignment penalty: squared angle (theta**2) from target direction.
     cos_sim = torch.sum(palm_dir * palm_dir_target, dim=-1).clamp(-1.0, 1.0)
@@ -2145,12 +2148,13 @@ def compute_rewards(
     # Filter in ContactSensorCfg should prevent robot self-collisions from being counted
     contact_reward = contact_count_weight * contact_count
     
-    # penalize on joint velocity
+    # penalize on joint velocity (clamped to prevent explosions)
     arm_vel = joint_vel[:, :7]
     hand_vel = joint_vel[:, 7:]
     joint_vel_penalty = -joint_vel_penalty_weight * (
         (arm_vel ** 2).sum(dim=-1) + hand_vel_scale * (hand_vel ** 2).sum(dim=-1)
     )
+    joint_vel_penalty = joint_vel_penalty.clamp(min=-30.0)
 
     # penalize on action rate
     arm_delta = action_delta[:, :7]

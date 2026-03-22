@@ -149,8 +149,6 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                         "playback",
                         "distill_multi_objects"
                         ]
-    # Objects to exclude from training (by folder name under USD/)
-    exclude_objects: list[str] = ["large_8_cuboid", "small_5_cuboid"]
 
     # Toggle for using cuda graph
     use_cuda_graph = False
@@ -202,13 +200,13 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             pos=(0.0, 0.0, 0.25),  # Raise robot to table height (matching TG2 config)
             rot=(0.0, 0.0, 0.0, 1.0),
             joint_pos={
-                "fr3_joint1": 0.3491,   # 20 degrees
-                "fr3_joint2": 0.6109,   # 35 degrees
-                "fr3_joint3": -0.8727,  # -50 degrees
-                "fr3_joint4": -0.8727,  # -50 degrees
-                "fr3_joint5": -0.3491,  # -20 degrees
-                "fr3_joint6": 2.6180,   # 150 degrees
-                "fr3_joint7": 0.0,      # 0 degrees
+                "fr3_joint1": 1.4748,   # 84.5 degrees
+                "fr3_joint2": 0.7941,   # 45.5 degrees
+                "fr3_joint3": -1.0996,  # -63.0 degrees
+                "fr3_joint4": -1.7436,  # -99.9 degrees
+                "fr3_joint5": 0.9373,   # 53.7 degrees
+                "fr3_joint6": 3.3967,   # 194.6 degrees
+                "fr3_joint7": -0.8920,  # -51.1 degrees
                 "revolute_thumb_rot": 0.0, # start in middle of thumb rotation range
                 "revolute_thumb_mcp_pitch": 0.0,
                 "revolute_thumb_mcp_yaw": 0.0,
@@ -651,7 +649,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_to_object_weight = 4. #default 1, prev 5
     hand_to_object_sharpness = 5. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
     
-    palm_direction_alignment_weight = 1.2 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
+    palm_direction_alignment_weight = 1.0 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
     in_grip_alignment_weight = 1. # 0.5
     
     palm_down_local_axis = (1.0, 0.0, 0.0) # x axis of agile-hand points in the direction of palm
@@ -662,7 +660,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     palm_linear_velocity_penalty_weight = 0.005 # prev 0.005 -- removed to avoid "don't move" signal
     approach_speed_penalty_weight = 0.001        # prev 0.001 -- removed to avoid "don't move" signal
     
-    action_rate_penalty_weight = 0.01         # prev 0.01 -- halved to allow exploration
+    action_rate_penalty_weight = 0.008         # prev 0.01 -- halved to allow exploration
     hand_action_rate_penalty_scale = 2.5       # prev 3.0
 
     joint_velocity_penalty_weight = 5e-4       # prev 5e-4 -- reduced to avoid freezing
@@ -674,8 +672,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     # penetration_radius_factor = 0.03  # treat as penetration when min hand–object dist < scale * this
 
     # phase 2: contact
-    hand_object_contact_weight = 1.  # Increased to make contact more valuable than hovering
-    good_grasp_weight = 3.5 # default 10.0 # too obsessed in finding a good contact, actually finds one
+    hand_object_contact_weight = 1.5  # Reduced so contact doesn't drown out lift signal
+    good_grasp_weight = 1.2 # Reduced - approach/grasp already learned, lift needs to dominate
     finger_curl_reg_weight = -0.3    # penalization factor for finger curl
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl 
@@ -683,7 +681,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     #phase 3: lifting
     object_to_goal_weight = 10 #default 5 
     in_success_region_at_rest_weight = 10. #default10
-    lift_sharpness = 4.0 #default 8.5
+    lift_sharpness = 3.0 #default 8.5
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
@@ -835,7 +833,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "object_to_goal_sharpness": (-3., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
             "lift_weight": (30., 10.),  # Increased to dominate contact reward and incentivize lifting
-            "finger_curl_reg": (-0.1, -1),  # ADR: ramp up curl penalty to encourage better hand use
+            "finger_curl_reg": (-0.05, -1),  # ADR: ramp up curl penalty to encourage better hand use
         },
         "pd_targets": {
             "velocity_target_factor": (1., 0.)
