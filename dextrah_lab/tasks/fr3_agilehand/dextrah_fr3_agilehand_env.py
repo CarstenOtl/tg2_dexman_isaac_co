@@ -937,6 +937,14 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         else:
             observations = {"policy": policy_obs, "critic": critic_obs}
 
+        # Sanitize observations to prevent NaN/Inf from physics instabilities
+        # corrupting the rl_games running mean/std and network weights.
+        for key in ("policy", "critic"):
+            if key in observations and isinstance(observations[key], torch.Tensor):
+                observations[key] = torch.nan_to_num(
+                    observations[key], nan=0.0, posinf=0.0, neginf=0.0
+                )
+
         return observations
 
     def _get_rewards(self) -> torch.Tensor:

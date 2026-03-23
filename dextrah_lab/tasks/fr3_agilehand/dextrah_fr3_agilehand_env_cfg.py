@@ -144,7 +144,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                         "test_object",
                         "test_object_0",
                         "test_2",
-                        "multi_objects",
+                        "multi_objects/3",
+                        "multi_objects/14",
                         "_single_object",
                         "playback",
                         "distill_multi_objects"
@@ -632,7 +633,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     )
 
     gt_pos_marker_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
-        prim_path="/Visuals/pos_marker",
+        prim_path="/Visuals/pos_marker_gt",
         markers={
             "goal": sim_utils.SphereCfg(
                 radius=0.01,
@@ -672,9 +673,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     # penetration_radius_factor = 0.03  # treat as penetration when min hand–object dist < scale * this
 
     # phase 2: contact
-    hand_object_contact_weight = 1.5  # Reduced so contact doesn't drown out lift signal
-    good_grasp_weight = 1.2 # Reduced - approach/grasp already learned, lift needs to dominate
-    finger_curl_reg_weight = -0.3    # penalization factor for finger curl
+    hand_object_contact_weight = 2.0  # Reduced so contact doesn't drown out lift signal
+    good_grasp_weight = 1.5 # Reduced - approach/grasp already learned, lift needs to dominate
+    finger_curl_reg_weight = -0.2    # penalization factor for finger curl
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl 
 
