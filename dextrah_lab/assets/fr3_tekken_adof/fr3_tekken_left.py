@@ -59,9 +59,9 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
             # MCP Yaw: [-0.26 , 0.26] ==> [-15 deg , 15 deg]
             # PIP: [0 , 1.57] ==> [0 , 90 deg]
             "revolute_thumb_rot": 0.0,
-            "revolute_thumb_mcp_pitch": 0.1,
+            "revolute_thumb_mcp_pitch": 0.0,
             "revolute_thumb_mcp_yaw": 0.0,
-            "revolute_thumb_pip": 0.1,
+            "revolute_thumb_pip": 0.0,
             # # "revolute_thumb_dip": 0.0,
             "revolute_index_mcp_pitch": 0.1,
             "revolute_index_mcp_yaw": 0.0,

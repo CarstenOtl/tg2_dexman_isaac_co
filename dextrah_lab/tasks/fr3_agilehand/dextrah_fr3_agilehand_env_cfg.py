@@ -43,7 +43,7 @@ class EventCfg:
             "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
             "static_friction_range": (1.0, 1.0),
             "dynamic_friction_range": (1.0, 1.0),
-            "restitution_range": (1.0, 1.0),
+            "restitution_range": (0.05, 0.05),
             "num_buckets": 250,
         },
     )
@@ -91,7 +91,7 @@ class EventCfg:
             ]),
             "static_friction_range": (2.0, 2.0),
             "dynamic_friction_range": (1.5, 1.5),
-            "restitution_range": (1.0, 1.0),
+            "restitution_range": (0.05, 0.05),
             "num_buckets": 250,
         },
     )
@@ -105,11 +105,11 @@ class EventCfg:
             "asset_cfg": SceneEntityCfg("object", body_names=".*"),
             "static_friction_range": (1.0, 1.0),
             "dynamic_friction_range": (1.0, 1.0),
-            "restitution_range": (1.0, 1.0),
+            "restitution_range": (0.05, 0.05),
             "num_buckets": 250,
         },
     )
-    
+
     # NOTE: no beginning randomization for this one
     object_scale_mass = EventTerm(
         func=mdp.randomize_rigid_body_mass,
@@ -186,6 +186,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         physics_material=RigidBodyMaterialCfg(
             static_friction=1.0,
             dynamic_friction=1.0,
+            friction_combine_mode="max",
+            restitution_combine_mode="max",
         ),
         physx=PhysxCfg(
             bounce_threshold_velocity=0.1,   # was 0.2 — catches slower collisions before bouncing
@@ -764,7 +766,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "robot_physics_material": {
             "static_friction_range": (0.5, 1.2),
             "dynamic_friction_range": (0.3, 1.0),
-            "restitution_range": (0.8, 1.0)
+            "restitution_range": (0.0, 0.2)
         },
         "robot_joint_stiffness_and_damping": {
             "stiffness_distribution_params": (0.5, 2.),
@@ -776,12 +778,12 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "fingertip_physics_material": {
             "static_friction_range": (0.4, 2.0),
             "dynamic_friction_range": (0.3, 1.5),
-            "restitution_range": (0.8, 1.0),
+            "restitution_range": (0.0, 0.2),
         },
         "object_physics_material": {
             "static_friction_range": (0.5, 1.2),
             "dynamic_friction_range": (0.3, 1.0),
-            "restitution_range": (0.8, 1.0)
+            "restitution_range": (0.0, 0.2)
         },
         "object_scale_mass": {
             "mass_distribution_params": (0.5, 3.),
