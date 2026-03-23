@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "synapgarden-isaac-mcp": {
+      "type": "http",
+      "url": "https://synapgarden-isaac-mcp-4vvir4xvda-uc.a.run.app/mcp"
+    }
+  }
+}
