@@ -99,7 +99,7 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
         "thumb_rot": ImplicitActuatorCfg(
             joint_names_expr=["revolute_thumb_rot"],
             effort_limit_sim=10.0,
-            velocity_limit_sim=20.0,
+            velocity_limit_sim=1.7453,  # 100 deg/s — ADR curriculum reduces this to 10 deg/s
             stiffness=20.0,
             damping=2.0,
         ),
@@ -107,22 +107,22 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
             joint_names_expr=[r"revolute_.*_mcp_pitch"],
             effort_limit_sim=10.0,
             velocity_limit_sim=15.0,
-            stiffness=1.77531, #10.0,
-            damping=0.5, # 1.0, # was 0.00095 (hardware ID) — too low for sim stability
+            stiffness=10.0,  # restored from f15593c (was 1.77531 — hardware ID, too compliant)
+            damping=1.0,     # restored from f15593c (was 0.5)
         ),
         "mcp_yaw": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_yaw"],
             effort_limit_sim=10.0,
             velocity_limit_sim=15.0,
-            stiffness=0.28467, #10.0,
-            damping=0.2, # 1.0, # was 0.00038 (hardware ID) — too low for sim stability
+            stiffness=10.0,  # restored from f15593c (was 0.28467)
+            damping=1.0,     # restored from f15593c (was 0.2)
         ),
         "pip": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_pip"],
             effort_limit_sim=10.0,
             velocity_limit_sim=15.0,
-            stiffness=0.24299, # 10.0,
-            damping=0.2, # 1.0, # was 0.0001 (hardware ID) — too low for sim stability
+            stiffness=10.0,  # restored from f15593c (was 0.24299)
+            damping=1.0,     # restored from f15593c (was 0.2)
         ),
         #
         # "franka_tekken_actuators": ImplicitActuatorCfg(

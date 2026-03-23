@@ -148,7 +148,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                         "multi_objects/14",
                         "_single_object",
                         "playback",
-                        "distill_multi_objects"
+                        "distill_multi_objects",
+                        "single_object_shoe",
+                        "single_object_female_knight",
                         ]
 
     # Toggle for using cuda graph
@@ -210,7 +212,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                 "fr3_joint5": 0.9373,   # 53.7 degrees
                 "fr3_joint6": 3.3967,   # 194.6 degrees
                 "fr3_joint7": -0.8920,  # -51.1 degrees
-                "revolute_thumb_rot": 0.0, # start in middle of thumb rotation range
+                "revolute_thumb_rot": -0.3491, # -20 deg (joint min) — thumb pre-rotated away from object approach path
                 "revolute_thumb_mcp_pitch": 0.0,
                 "revolute_thumb_mcp_yaw": 0.0,
                 "revolute_thumb_pip": 0.0,
@@ -708,6 +710,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     debug_print_every_steps = 16
     # Terminate if palm flips beyond this cosine threshold relative to target (-Z).
     palm_flip_cos_thresh = -0.3  # Allows up to ~108 degrees deviation from downward
+    # Terminate if any finger joint velocity exceeds this threshold (rad/s). Catches
+    # physics explosions that are large-but-finite (before going NaN/Inf).
+    finger_unstable_vel_thresh: float = 50.0  # 7 arm joints excluded; only hand joints checked
 
     # Goal reaching parameters
     object_goal_tol = 0.1 # m
@@ -843,6 +848,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         },
         "observation_annealing": {
             "coefficient": (0., 0.)
+        },
+        "thumb_velocity_limit": {
+            "velocity_limit": (1.7453, 0.17453),  # 100 deg/s → 10 deg/s (in rad/s)
         },
     }
 

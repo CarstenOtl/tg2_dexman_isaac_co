@@ -109,6 +109,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.actuated_dof_indices = list()
         for joint_name in cfg.actuated_joint_names:
             self.actuated_dof_indices.append(self.robot.joint_names.index(joint_name))
+        self.thumb_rot_dof_idx = self.robot.joint_names.index("revolute_thumb_rot")
 
         # actions are 1:1 with actuated joints
         self.cfg.num_actions = len(self.actuated_dof_indices)
@@ -258,7 +259,8 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             "hand_close": 0,
             "palm_flip": 0,
             "arm_contact": 0,
-            "unstable": 0,
+            "unstable": 0,       # NaN/Inf in joint state
+            "vel_explosion": 0,  # finger vel > thresh (pre-NaN instability)
         }
         # Success / episode counters (accumulated between debug prints)
         self._debug_success_count = 0
@@ -394,7 +396,9 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                         + 3 + 4 + 3
                         + 1          # object_scale
                         + num_actuated)  # actions
-        self.cfg.num_teacher_observations = teacher_base + num_unique_objects
+        # Always +1 (not +num_unique_objects) so per-object teachers trained with a single
+        # object (N=1) remain compatible during multi-teacher distillation.
+        self.cfg.num_teacher_observations = teacher_base + 1
 
         # Student obs: dof_pos(act) + dof_vel(act) + hand_pos(hb*3) + hand_vel(hb*3)
         #            + obj_goal(3) + actions(act)
@@ -421,7 +425,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                        + 3 + 4 + 6 + 3
                        + 1          # object_scale
                        + num_actuated)  # actions
-        self.cfg.num_states = critic_base + num_unique_objects
+        self.cfg.num_states = critic_base + 1
 
         self.cfg.state_space = self.cfg.num_states
         self.cfg.observation_space = self.cfg.num_observations
@@ -644,6 +648,10 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         # One-hot encoding of object ID for policy/critic observation input
         self.multi_object_idx_onehot = F.one_hot(
             self.multi_object_idx, num_classes=self.num_unique_objects).float()
+
+        # Fixed size-1 placeholder used in teacher/critic obs so that per-object
+        # teachers (trained with N=1) stay compatible during multi-teacher distillation.
+        self.teacher_onehot = torch.ones((self.num_envs, 1), dtype=torch.float, device=self.device)
 
         stage = omni.usd.get_context().get_stage()
         self.object_mat_prims = list()
@@ -1267,6 +1275,13 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             ~torch.isfinite(self._robot_dof_vel_raw).all(dim=-1)
             | ~torch.isfinite(self.robot_dof_pos).all(dim=-1)
         )
+        # Pre-NaN instability: finger joints oscillating at physically implausible velocities.
+        # Hand joints are indices 7: (first 7 are FR3 arm). Arm joints excluded to avoid
+        # false positives from fast arm motions during training.
+        finger_vel_explosion = (
+            self._robot_dof_vel_raw[:, 7:].abs().max(dim=-1).values
+            > self.cfg.finger_unstable_vel_thresh
+        )
 
         out_of_reach = (
             object_outside_upper_x
@@ -1279,6 +1294,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             | self.arm_table_contact_mask
             | palm_flipped
             | robot_unstable
+            | finger_vel_explosion
         )
 #============================================================================================================================
         # Accumulate termination counts for debug output (printed with reward debug every 100 steps)
@@ -1290,6 +1306,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             self.term_counts["palm_flip"] += palm_flipped.sum().item()
             self.term_counts["arm_contact"] += self.arm_table_contact_mask.sum().item()
             self.term_counts["unstable"] += robot_unstable.sum().item()
+            self.term_counts["vel_explosion"] += finger_vel_explosion.sum().item()
             # input("debugging termination conditions")
 #===================================================================================================================================
 
@@ -1319,6 +1336,13 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         # resets articulation and rigid body attributes
         super()._reset_idx(env_ids)
         self.episode_length_gate_buf[env_ids] = 0
+
+        # Apply thumb velocity limit from ADR curriculum (persistent in PhysX — only needs
+        # setting once at init and whenever ADR increments, but safe to re-apply on reset)
+        if self.cfg.enable_adr and not hasattr(self, '_thumb_vel_initialized'):
+            self._thumb_vel_initialized = True
+            thumb_vel = self.dextrah_adr.get_custom_param_value("thumb_velocity_limit", "velocity_limit")
+            self.robot.write_joint_velocity_limit_to_sim(thumb_vel, joint_ids=[self.thumb_rot_dof_idx])
 
         num_ids = env_ids.shape[0]
 
@@ -1462,6 +1486,9 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 self.dextrah_adr.increase_ranges(increase_counter=True)
                 self.event_manager.reset(env_ids=self._all_env_ids)
                 self.event_manager.apply(env_ids=self._all_env_ids, mode="reset", global_env_step_count=0)
+                # Apply updated thumb velocity limit to all envs
+                thumb_vel = self.dextrah_adr.get_custom_param_value("thumb_velocity_limit", "velocity_limit")
+                self.robot.write_joint_velocity_limit_to_sim(thumb_vel, joint_ids=[self.thumb_rot_dof_idx])
                 self.local_adr_increment = torch.tensor(self.dextrah_adr.num_increments(), device=self.device, dtype=torch.int64)
             else:
                 #print('not increasing DR ranges')
@@ -1955,8 +1982,8 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 #self.object_vel, # NOTE: took this out because it's fairly privileged
                 # object goal
                 self.object_goal,
-                # one-hot encoding of object ID
-                self.multi_object_idx_onehot,
+                # one-hot object ID placeholder (always [1] — size-1 for per-object teacher compat)
+                self.teacher_onehot,
                 # object scales
                 self.object_scale,
                 # last action
@@ -1983,8 +2010,8 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 self.object_vel,
                 # object goal
                 self.object_goal,
-                # one-hot encoding of object ID
-                self.multi_object_idx_onehot,
+                # one-hot object ID placeholder (always [1] — size-1 for per-object teacher compat)
+                self.teacher_onehot,
                 # object scale
                 self.object_scale,
                 # last action
