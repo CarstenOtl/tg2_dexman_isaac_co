@@ -1,3 +1,16 @@
 {
-  "enabledMcpjsonServers": ["context7", "synapgarden-isaac-mcp"]
+  "enabledMcpjsonServers": ["context7", "synapgarden-isaac-mcp"],
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"systemMessage\": \"Reminder: run /revise-claude-md to update CLAUDE.md with any new session learnings.\"}'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
 }
