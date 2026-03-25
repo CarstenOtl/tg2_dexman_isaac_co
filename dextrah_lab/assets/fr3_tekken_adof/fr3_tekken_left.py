@@ -81,16 +81,16 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
     actuators={
         "franka_arm": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[1-4]"],
-            effort_limit_sim=200.0,
+            effort_limit_sim=100.0,   # 200→87→100
             velocity_limit_sim=2.175,
-            stiffness=400.0,
+            stiffness=200.0,          # 400→200: softer spring, less force on contact
             damping=40.0,
         ),
         "franka_joints_ee": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[5-7]"],
-            effort_limit_sim=200.0,
+            effort_limit_sim=50.0,    # 200→12→50
             velocity_limit_sim=2.175,
-            stiffness=400.0,
+            stiffness=200.0,          # 400→200
             damping=40.0,
         ),
         "thumb_rot": ImplicitActuatorCfg(
@@ -102,24 +102,24 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
         ),
         "mcp_pitch": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_pitch"],
-            effort_limit_sim=2.0,     # reduced from 10.0 — high effort causes explosive contact forces
+            effort_limit_sim=2.0,
             velocity_limit_sim=8.0,
             stiffness=10.0,
-            damping=3.0,
+            damping=6.0,              # 3→6: more damping, smoother contact
         ),
         "mcp_yaw": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_yaw"],
-            effort_limit_sim=2.0,     # reduced from 10.0
+            effort_limit_sim=2.0,
             velocity_limit_sim=8.0,
             stiffness=10.0,
-            damping=3.0,
+            damping=6.0,              # 3→6
         ),
         "pip": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_pip"],
-            effort_limit_sim=2.0,     # reduced from 10.0
+            effort_limit_sim=2.0,
             velocity_limit_sim=8.0,
             stiffness=10.0,
-            damping=3.0,
+            damping=6.0,              # 3→6
         ),
         #
         # "franka_tekken_actuators": ImplicitActuatorCfg(

@@ -110,6 +110,12 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         for joint_name in cfg.actuated_joint_names:
             self.actuated_dof_indices.append(self.robot.joint_names.index(joint_name))
 
+        # Joint index groups for actuator curriculum (sim2real ADR)
+        joint_names = self.robot.joint_names
+        self._arm_14_joint_ids = [joint_names.index(f"fr3_joint{i}") for i in range(1, 5)]
+        self._arm_57_joint_ids = [joint_names.index(f"fr3_joint{i}") for i in range(5, 8)]
+        self._thumb_rot_joint_id = [joint_names.index("revolute_thumb_rot")]
+
         # actions are 1:1 with actuated joints
         self.cfg.num_actions = len(self.actuated_dof_indices)
         self.num_actions = self.cfg.num_actions
@@ -117,6 +123,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.prev_actions = torch.zeros_like(self.actions)
         self.action_delta = torch.zeros_like(self.actions)
         self._early_terminated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._penalty_terminated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         # Debug joint mapping to ensure orders align with USD
         print("[DEBUG] Robot joint order (USD):", self.robot.joint_names)
@@ -811,6 +818,31 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             joint_ids=self.actuated_dof_indices
         )
 
+    def _apply_actuator_curriculum(self, env_ids: torch.Tensor):
+        """Apply sim2real actuator curriculum values from ADR custom params.
+
+        Writes effort limits and velocity limits to the physics simulation.
+        Finger stiffness/damping is handled by per-group EventTerms in EventCfg.
+        """
+        get = self.dextrah_adr.get_custom_param_value
+
+        # -- Effort limits --
+        effort = self.robot.root_physx_view.get_dof_max_forces()
+        effort_t = effort.clone().to(self.device)
+        effort_t[env_ids.unsqueeze(-1).expand(-1, len(self._arm_14_joint_ids)),
+                 torch.tensor(self._arm_14_joint_ids, device=self.device)] = get("actuator_curriculum", "arm_14_effort_limit")
+        effort_t[env_ids.unsqueeze(-1).expand(-1, len(self._arm_57_joint_ids)),
+                 torch.tensor(self._arm_57_joint_ids, device=self.device)] = get("actuator_curriculum", "arm_57_effort_limit")
+        self.robot.write_joint_effort_limit_to_sim(effort_t, env_ids=env_ids)
+
+        # -- Thumb rotation velocity limit --
+        vel_limits = self.robot.root_physx_view.get_dof_max_velocities()
+        vel_t = vel_limits.clone().to(self.device)
+        thumb_vel = get("actuator_curriculum", "thumb_rot_vel_limit")
+        vel_t[env_ids.unsqueeze(-1).expand(-1, 1),
+              torch.tensor(self._thumb_rot_joint_id, device=self.device)] = thumb_vel
+        self.robot.write_joint_velocity_limit_to_sim(vel_t, env_ids=env_ids)
+
     def _get_observations(self) -> dict:
         policy_obs = self.compute_policy_observations()
         critic_obs = self.compute_critic_observations()
@@ -1106,7 +1138,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         # will frequently cause early terminations and should not be discouraged.
         no_contact = (self.object_contact_counts == 0)
         early_term_penalty = torch.where(
-            self._early_terminated & no_contact,
+            self._penalty_terminated & no_contact,
             torch.full((self.num_envs,), early_term_penalty_weight, device=self.device, dtype=action_rate_penalty.dtype),
             torch.zeros(self.num_envs, device=self.device, dtype=action_rate_penalty.dtype),
         )
@@ -1328,6 +1360,12 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             time_out = self.episode_length_buf >= self.max_episode_length - 1
 
         self._early_terminated = out_of_reach.clone()
+        # Penalty only for intentional bad behaviour: object leaving workspace, hand out of bounds, palm flip.
+        # Excludes: hand_too_close, arm_table_contact, robot_unstable, vel_explosion — these are physics
+        # artifacts or exploration side-effects that should not be penalised.
+        object_out = (object_outside_upper_x | object_outside_lower_x |
+                      object_outside_upper_y | object_outside_lower_y | object_too_low)
+        self._penalty_terminated = object_out | hand_too_far | palm_flipped
         return out_of_reach, time_out
 
     def _reset_idx(self, env_ids: Sequence[int] | None):
@@ -1484,10 +1522,14 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 self.dextrah_adr.increase_ranges(increase_counter=True)
                 self.event_manager.reset(env_ids=self._all_env_ids)
                 self.event_manager.apply(env_ids=self._all_env_ids, mode="reset", global_env_step_count=0)
+                self._apply_actuator_curriculum(self._all_env_ids)
                 self.local_adr_increment = torch.tensor(self.dextrah_adr.num_increments(), device=self.device, dtype=torch.int64)
             else:
                 #print('not increasing DR ranges')
                 self.step_since_last_dr_change += 1
+
+        # Apply actuator curriculum on every reset (values change with ADR increments)
+        self._apply_actuator_curriculum(env_ids)
 
         # randomize camera position
         if self.use_camera:

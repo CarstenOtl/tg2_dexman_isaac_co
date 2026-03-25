@@ -48,12 +48,61 @@ class EventCfg:
         },
     )
 
-    # NOTE: no beginning randomization for these
-    robot_joint_stiffness_and_damping = EventTerm(
+    # NOTE: no beginning randomization for these — ADR widens ranges
+    # Arm joints: uniform scale across all 7
+    arm_joint_stiffness_and_damping = EventTerm(
         func=mdp.randomize_actuator_gains,
         mode="reset",
         params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "asset_cfg": SceneEntityCfg("robot", joint_names="fr3_joint.*"),
+            "stiffness_distribution_params": (1., 1.),
+            "damping_distribution_params": (1., 1.),
+            "operation": "scale",
+            "distribution": "uniform",
+        },
+    )
+    # Finger MCP pitch: default stiffness=10.0, hardware=1.78; damping=6.0, hardware=0.5
+    finger_mcp_pitch_gains = EventTerm(
+        func=mdp.randomize_actuator_gains,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names="revolute_.*_mcp_pitch"),
+            "stiffness_distribution_params": (1., 1.),
+            "damping_distribution_params": (1., 1.),
+            "operation": "scale",
+            "distribution": "uniform",
+        },
+    )
+    # Finger MCP yaw: default stiffness=10.0, hardware=0.28; damping=6.0, hardware=0.2
+    finger_mcp_yaw_gains = EventTerm(
+        func=mdp.randomize_actuator_gains,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names="revolute_.*_mcp_yaw"),
+            "stiffness_distribution_params": (1., 1.),
+            "damping_distribution_params": (1., 1.),
+            "operation": "scale",
+            "distribution": "uniform",
+        },
+    )
+    # Finger PIP: default stiffness=10.0, hardware=0.24; damping=6.0, hardware=0.2
+    finger_pip_gains = EventTerm(
+        func=mdp.randomize_actuator_gains,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names="revolute_.*_pip"),
+            "stiffness_distribution_params": (1., 1.),
+            "damping_distribution_params": (1., 1.),
+            "operation": "scale",
+            "distribution": "uniform",
+        },
+    )
+    # Thumb rotation: default stiffness=20.0, damping=2.0
+    thumb_rot_gains = EventTerm(
+        func=mdp.randomize_actuator_gains,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names="revolute_thumb_rot"),
             "stiffness_distribution_params": (1., 1.),
             "damping_distribution_params": (1., 1.),
             "operation": "scale",
@@ -131,6 +180,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                         "distill_multi_objects",
                         "single_object_shoe",
                         "single_object_female_knight",
+                        "multi_objects/visdex_selected",
                         ]
 
     # Toggle for using cuda graph
@@ -183,13 +233,13 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             pos=(0.0, 0.0, 0.25),  # Raise robot to table height (matching TG2 config)
             rot=(0.0, 0.0, 0.0, 1.0),
             joint_pos={
-                "fr3_joint1": 1.4748,   # 84.5 degrees  (real-robot pose — closer to object)
-                "fr3_joint2": 0.7941,   # 45.5 degrees
-                "fr3_joint3": -1.0996,  # -63.0 degrees
-                "fr3_joint4": -1.7436,  # -99.9 degrees
-                "fr3_joint5": 0.9373,   # 53.7 degrees
-                "fr3_joint6": 3.3967,   # 194.6 degrees
-                "fr3_joint7": -0.8920,  # -51.1 degrees
+                "fr3_joint1": -0.0873,  # -5.0 degrees
+                "fr3_joint2": -0.6109,  # -35.0 degrees
+                "fr3_joint3":  0.0000,  #  0.0 degrees
+                "fr3_joint4": -2.6180,  # -150.0 degrees
+                "fr3_joint5": -0.5236,  # -30.0 degrees
+                "fr3_joint6":  2.9671,  #  170.0 degrees
+                "fr3_joint7":  0.0000,  #  0.0 degrees
                 "revolute_thumb_rot": -0.3491,  # -20 deg (joint min)
                 "revolute_thumb_mcp_pitch": 0.05,
                 "revolute_thumb_mcp_yaw": 0.0,
@@ -629,7 +679,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
 
     # reward weights
     # phase 1: reaching
-    hand_to_object_weight = 5. #default 1, prev 5
+    hand_to_object_weight = 4. #default 1, prev 5
     hand_to_object_sharpness = 4. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
     
     palm_direction_alignment_weight = 0.7  # increased from 0.5
@@ -644,20 +694,20 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     approach_speed_penalty_weight = 0.001        # prev 0.001 -- removed to avoid "don't move" signal
     
     action_rate_penalty_weight = 0.01         # prev 0.01 -- halved to allow exploration
-    hand_action_rate_penalty_scale = 2.5       # prev 3.0
+    hand_action_rate_penalty_scale = 1.5       # reduced from 2.5 to encourage finger exploration
 
     joint_velocity_penalty_weight = 5e-4       # prev 5e-4 -- reduced to avoid freezing
     hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
 
     # phase 2: contact
-    hand_object_contact_weight = 5.0  # increased to pull policy toward contact over hovering
-    good_grasp_weight = 5.0 # default 10.0 # too obsessed in finding a good contact, actually finds one
+    hand_object_contact_weight = 8.0   # 10→8: -2
+    good_grasp_weight = 6.0            # 8→6: -2
     finger_curl_reg_weight = -0.2    # reduced to allow ADR to widen; was -0.5
     finger_curl_reg_min = -3.0 # max penalty for finger curl
-    finger_curl_reg_max = 0.0 # min penalty for finger curl 
+    finger_curl_reg_max = 0.0 # min penalty for finger curl
 
     #phase 3: lifting
-    object_to_goal_weight = 20 #default 5 
+    object_to_goal_weight = 20 #default 5
     in_success_region_at_rest_weight = 10. #default10
     lift_sharpness = 5.0 #default 8.5; reduced to flatten lift gradient — easier to discover
 
@@ -683,7 +733,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     debug_print_every_steps = 16
     # Terminate if palm flips beyond this cosine threshold relative to target (-Z).
     palm_flip_cos_thresh = -0.3  # Allows up to ~108 degrees deviation from downward
-    early_termination_penalty: float = -3.0  # applied when episode ends early without object contact
+    early_termination_penalty: float = -1.0  # applied when episode ends early without object contact
 
     # Goal reaching parameters
     object_goal_tol = 0.1 # m
@@ -744,7 +794,25 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "dynamic_friction_range": (0.3, 1.0),
             "restitution_range": (0.8, 1.0)
         },
-        "robot_joint_stiffness_and_damping": {
+        "arm_joint_stiffness_and_damping": {
+            "stiffness_distribution_params": (0.5, 2.),
+            "damping_distribution_params": (0.5, 2.),
+        },
+        # Finger gains: ADR widens scale range to include hardware-ID'd values
+        # scale = hardware_value / asset_default → lower bound of ADR max range
+        "finger_mcp_pitch_gains": {
+            "stiffness_distribution_params": (0.17, 1.0),
+            "damping_distribution_params": (0.083, 1.0),
+        },
+        "finger_mcp_yaw_gains": {
+            "stiffness_distribution_params": (0.025, 1.0),
+            "damping_distribution_params": (0.033, 1.0),
+        },
+        "finger_pip_gains": {
+            "stiffness_distribution_params": (0.02, 1.0),
+            "damping_distribution_params": (0.033, 1.0),
+        },
+        "thumb_rot_gains": {
             "stiffness_distribution_params": (0.5, 2.),
             "damping_distribution_params": (0.5, 2.),
         },
@@ -807,7 +875,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "reward_weights": {
             "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
-            "lift_weight": (10., 5.),  # Increased from (20,20) for stronger lifting incentive
+            "lift_weight": (40., 20.),  # 20→40 start; floor raised 5→20 so lift stays dominant throughout ADR
             "finger_curl_reg": (-0.1, -1),  # ADR: ramp up curl penalty to encourage better hand use
         },
         "pd_targets": {
@@ -815,6 +883,14 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         },
         "observation_annealing": {
             "coefficient": (0., 0.)
+        },
+        # Sim2real actuator curriculum — only for params NOT covered by EventTerms
+        "actuator_curriculum": {
+            # Thumb rotation velocity limit (rad/s): 20 → 0.21 (≈12 deg/s)
+            "thumb_rot_vel_limit": (20.0, 0.21),
+            # FR3 arm effort limits (Nm): current → factory spec
+            "arm_14_effort_limit": (100.0, 87.0),
+            "arm_57_effort_limit": (50.0, 12.0),
         },
     }
 
