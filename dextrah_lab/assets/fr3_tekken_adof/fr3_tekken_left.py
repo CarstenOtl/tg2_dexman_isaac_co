@@ -28,12 +28,12 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
             angular_damping=0.0,
             max_linear_velocity=500.0, # default 1000
             max_angular_velocity=500.0, # default 1000
-            max_depenetration_velocity=50.0,
+            max_depenetration_velocity=30.0,
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True,
             solver_position_iteration_count=10,
-            solver_velocity_iteration_count=4,
+            solver_velocity_iteration_count=0,  # 0 vel iters — reduces contact instability (matches kuka_allegro)
             stabilization_threshold=0.0005,
             # fixed_root_link=True,
         ),
@@ -102,24 +102,24 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
         ),
         "mcp_pitch": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_pitch"],
-            effort_limit_sim=10.0,
-            velocity_limit_sim=15.0,
+            effort_limit_sim=2.0,     # reduced from 10.0 — high effort causes explosive contact forces
+            velocity_limit_sim=8.0,
             stiffness=10.0,
-            damping=1.0,
+            damping=3.0,
         ),
         "mcp_yaw": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_yaw"],
-            effort_limit_sim=10.0,
-            velocity_limit_sim=15.0,
+            effort_limit_sim=2.0,     # reduced from 10.0
+            velocity_limit_sim=8.0,
             stiffness=10.0,
-            damping=1.0,
+            damping=3.0,
         ),
         "pip": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_pip"],
-            effort_limit_sim=10.0,
-            velocity_limit_sim=15.0,
+            effort_limit_sim=2.0,     # reduced from 10.0
+            velocity_limit_sim=8.0,
             stiffness=10.0,
-            damping=1.0,
+            damping=3.0,
         ),
         #
         # "franka_tekken_actuators": ImplicitActuatorCfg(

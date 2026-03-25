@@ -363,14 +363,53 @@ Restore finger stiffness to 10.0 in `fr3_tekken_left.py` to fully match f15593c.
 - Outcome: **Failed** — policy found a risk-mitigation strategy of hovering above the object. Contact-gated penalty was not sufficient to pull the policy toward touching: hovering near the object collects `hand_to_object` reward without risking any penalised termination. No contact, no lift.
 - `thumb_mcp_pitch` init also reduced from 0.1 → 0.05 rad during this run (thumb folding inward) — did not change outcome.
 
-### Run 1k — increased contact reward, reduced finger curl reg, flatter lift gradient (planned)
+### Run 1k — increased contact reward, reduced finger curl reg, flatter lift gradient (failed)
 - Date: 2026-03-25
 - Changes vs Run 1j:
   - `hand_object_contact_weight`: 3.0 → **5.0** — make contact actively more valuable than hovering
   - `finger_curl_reg_weight`: -0.5 → **-0.2** — loosen curl penalty so ADR can widen it; was suppressing finger motion needed for contact
   - `lift_sharpness`: 7.5 → **5.0** — flatter lift gradient makes the reward easier to discover initially
 - Rationale: policy is hovering optimally — contact reward must outweigh the value of hovering risk-free. Looser finger curl allows fingers to move more freely toward the object.
-- Start from: scratch (obs space change invalidates 1h-resume checkpoint)
+- Outcome: **Failed** — policy still hovers near object, does not attempt contact. Confirmed the hovering optimum is not a reward weight issue but a physics stability issue: every time fingers touch the object, the simulation becomes unstable → early termination → policy learns that contact = punishment.
+- Root cause identified: **finger joint physics instability at contact**. Comparison with `kuka_allegro` config revealed:
+  - `effort_limit_sim` on finger joints was 10.0 Nm (kuka_allegro uses 0.5 Nm) — PD controller generates explosive contact forces
+  - `damping` was 1.0 (critically underdamped at stiffness=10.0) — oscillations on contact
+  - `solver_velocity_iteration_count=4` — velocity iterations can amplify contact instability
+  - `max_depenetration_velocity=50.0` — too low, PhysX can't resolve interpenetration fast enough
+  - AgileHand has mimic joints (DIP follows PIP) — high PIP effort amplified through mimic chain at contact
+  - Isaac Sim docs confirm: mimic joints must have drive stiffness/damping=0 (already correctly set in USD); instability comes from actuated PIP effort being too high
+
+### Run 1l — physics stability overhaul + single object test (in progress)
+- Date: 2026-03-25
+- Objects: `test_object` (plane — simplest possible, isolates reward from object complexity)
+- Changes vs Run 1k:
+  - `effort_limit_sim` on mcp_pitch/mcp_yaw/pip: 10.0 → **2.0 Nm** (matches kuka_allegro scale)
+  - `damping` on mcp_pitch/mcp_yaw/pip: 1.0 → **3.0** (prevent oscillation at contact)
+  - `velocity_limit_sim` on mcp_pitch/mcp_yaw/pip: 15.0 → **8.0 rad/s** (clamp runaway velocities)
+  - `max_depenetration_velocity`: 50.0 → **30.0** (moderate value between tg2's 2.0 and kuka_allegro's 1000.0)
+  - `solver_velocity_iteration_count`: 4 → **0** (velocity iterations worsen contact instability)
+  - `palm_direction_alignment_weight`: 0.5 → **0.7**
+  - `thumb_mcp_pitch` init: 0.1 → **0.05 rad** (thumb was folding inward)
+- Rationale: address root cause — make contact physically stable so the policy can learn from it rather than being punished by it. Single object training to verify reward structure in isolation.
+
+**Physics comparison — working configs vs fr3_agilehand run1l:**
+
+| Parameter | kuka_allegro | tg2_inspirehand | fr3_agilehand run1l |
+|---|---|---|---|
+| `max_depenetration_velocity` | 1000.0 | 2.0 | 30.0 |
+| `solver_position_iteration_count` | 8 | 8 | 10 |
+| `solver_velocity_iteration_count` | **0** | 4 | 0 |
+| `enabled_self_collisions` | — | **False** | True |
+| finger stiffness | 3.0 | 10.0 | 10.0 |
+| finger damping | 0.1 | 1.0 | 3.0 |
+| finger effort_limit_sim | **0.5 Nm** | 3.0 Nm | 2.0 Nm |
+| finger velocity_limit_sim | not set | 15.7 rad/s | 8.0 rad/s |
+
+Key observations:
+- dep_vel varies wildly (2.0 to 1000.0) between working configs — likely not the critical stability parameter
+- tg2 disables self collisions — reduces constraint complexity when fingers cluster around an object
+- kuka_allegro uses 0 velocity solver iterations and very low effort (0.5 Nm) — aligns with our run1l changes
+- Neither working config has mimic joints (AgileHand does) — mimic chain amplifies contact forces through DIP joints
 
 **Note on dep_vel via ADR curriculum:** Technically feasible — `max_depenetration_velocity` is a `RigidBodyPropertiesCfg` field updateable dynamically via `write_body_physx_props_to_sim()`. Could be added as a custom ADR event term (~50 lines). However, dep_vel is a physics accuracy setting, not a difficulty parameter — there is no benefit to ramping it. Recommended: fix it to 100.0 immediately.
 

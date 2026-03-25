@@ -632,7 +632,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_to_object_weight = 5. #default 1, prev 5
     hand_to_object_sharpness = 4. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
     
-    palm_direction_alignment_weight = 0.5 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
+    palm_direction_alignment_weight = 0.7  # increased from 0.5
     in_grip_alignment_weight = 1. # 0.5
     
     palm_down_local_axis = (1.0, 0.0, 0.0) # x axis of agile-hand points in the direction of palm
