@@ -191,7 +191,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                 "fr3_joint6": 3.3967,   # 194.6 degrees
                 "fr3_joint7": -0.8920,  # -51.1 degrees
                 "revolute_thumb_rot": -0.3491,  # -20 deg (joint min)
-                "revolute_thumb_mcp_pitch": 0.1,
+                "revolute_thumb_mcp_pitch": 0.05,
                 "revolute_thumb_mcp_yaw": 0.0,
                 "revolute_thumb_pip": 0.0,
                 "revolute_index_mcp_pitch": 0.1,
@@ -650,16 +650,16 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
 
     # phase 2: contact
-    hand_object_contact_weight = 3.0  # Increased to make contact more valuable than hovering
+    hand_object_contact_weight = 5.0  # increased to pull policy toward contact over hovering
     good_grasp_weight = 5.0 # default 10.0 # too obsessed in finding a good contact, actually finds one
-    finger_curl_reg_weight = -0.5    # penalization factor for finger curl
+    finger_curl_reg_weight = -0.2    # reduced to allow ADR to widen; was -0.5
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl 
 
     #phase 3: lifting
     object_to_goal_weight = 20 #default 5 
     in_success_region_at_rest_weight = 10. #default10
-    lift_sharpness = 7.5 #default 8.5
+    lift_sharpness = 5.0 #default 8.5; reduced to flatten lift gradient — easier to discover
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   

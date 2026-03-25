@@ -359,7 +359,17 @@ Restore finger stiffness to 10.0 in `fr3_tekken_left.py` to fully match f15593c.
   - **Arm init pose: real-robot pose** (closer to object) — restored from commit `4c9beb5` (2026-03-23): `[84.5°, 45.5°, -63°, -99.9°, 53.7°, 194.6°, -51.1°]`. Previous f15593c pose `[20°, 35°, -50°, -50°, -20°, 150°, 0°]` started the arm further away, making approach harder. Closer init reduces the distance the policy needs to learn to cover before first contact.
   - **Contact-gated early termination penalty (-3.0)** — penalty only applied when episode ends early AND no object contact was made. If the hand was touching the object at termination, no penalty is applied. Grasping attempts will frequently trigger early terminations (fingers slipping, palm flip, etc.) and should not be discouraged. Pure avoidance / short-episode exploitation (no contact at all) is still penalised at -3.0.
 - Rationale: four issues addressed vs 1h-resume: (1) unrealistic contact physics from low dep_vel, (2) missing object-identity signal in obs, (3) arm starting too far from the object, (4) penalty too heavy suppressing contact exploration.
-- Status: **Starting now** (continuation from 1h-resume or new run)
+- Max ADR reached: 0
+- Outcome: **Failed** — policy found a risk-mitigation strategy of hovering above the object. Contact-gated penalty was not sufficient to pull the policy toward touching: hovering near the object collects `hand_to_object` reward without risking any penalised termination. No contact, no lift.
+- `thumb_mcp_pitch` init also reduced from 0.1 → 0.05 rad during this run (thumb folding inward) — did not change outcome.
+
+### Run 1k — increased contact reward, reduced finger curl reg, flatter lift gradient (planned)
+- Date: 2026-03-25
+- Changes vs Run 1j:
+  - `hand_object_contact_weight`: 3.0 → **5.0** — make contact actively more valuable than hovering
+  - `finger_curl_reg_weight`: -0.5 → **-0.2** — loosen curl penalty so ADR can widen it; was suppressing finger motion needed for contact
+  - `lift_sharpness`: 7.5 → **5.0** — flatter lift gradient makes the reward easier to discover initially
+- Rationale: policy is hovering optimally — contact reward must outweigh the value of hovering risk-free. Looser finger curl allows fingers to move more freely toward the object.
 - Start from: scratch (obs space change invalidates 1h-resume checkpoint)
 
 **Note on dep_vel via ADR curriculum:** Technically feasible — `max_depenetration_velocity` is a `RigidBodyPropertiesCfg` field updateable dynamically via `write_body_physx_props_to_sim()`. Could be added as a custom ADR event term (~50 lines). However, dep_vel is a physics accuracy setting, not a difficulty parameter — there is no benefit to ramping it. Recommended: fix it to 100.0 immediately.
