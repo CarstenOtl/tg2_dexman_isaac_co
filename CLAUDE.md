@@ -203,6 +203,21 @@ Git LFS is used for `.pth` model weight files.
 
 **rl_games version**: Must use the isaac-sim fork, NOT pip 1.6.1. Install: `pip install git+https://github.com/isaac-sim/rl_games.git@6b3534f29568158e9e29ec8bf83cc88fce5f0cae`. Pinned requirements reference: `../requirements_common_chi_pinned.txt` (one level above repo root).
 
+## Experiment Logs
+
+Training experiment logs are tracked in `dextrah_lab/docs/experiments/`:
+- `exp_02_runs.md` — Multi-object reward tuning, reward shaping, physics stability
+- `exp_03_sim2real.md` — Sim2real curriculum: hardware actuator gains, thumb velocity, effort limits
+- `exp_04_distillation.md` — SafeDagger distillation from multi-object teacher
+- `per_object_teacher_workflow.md` — Per-object teacher training and directory structure
+
+## Isaac Lab API Gotchas
+
+- **PhysX view CPU tensors**: `root_physx_view.get_dof_max_forces()` etc. return CPU tensors. Index with `env_ids.cpu()` before `.to(device)`. `write_joint_*_to_sim()` expects shape `(len(env_ids), num_dofs)`, not `(num_envs, num_dofs)`.
+- **ADR state is NOT saved in .pth checkpoints** — restored from `cfg.starting_adr_increments` (default 0). Set `env.starting_adr_increments=N` via CLI when resuming.
+- **EventTerm field names in EventCfg must exactly match keys in `adr_cfg_dict`** — the ADR system looks up terms by name via `event_manager.get_term_cfg(term_name)`.
+- **No Isaac Lab API for dynamic `max_depenetration_velocity`** — set at USD spawn time only. `write_joint_*_to_sim` exists for: stiffness, damping, effort_limit, velocity_limit, position_limit, armature, friction.
+
 ## Code Conventions
 
 - Environment configs use Isaac Lab's `@configclass` decorator pattern

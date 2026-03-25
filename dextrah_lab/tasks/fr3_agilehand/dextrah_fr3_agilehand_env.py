@@ -696,15 +696,9 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         for i in range(self.num_envs):
             object_name = self.object_names[object_indices[i]]
             object_usd_path = objects_full_path + "/" + object_name + "/" + object_name + ".usd"
-            print('Object name', object_name)
-            print('object usd path', object_usd_path)
 
             object_prim_name = "object_" + str(i) + "_" + object_name
             prim_path = "/World/envs/" + "env_" + str(i) + "/object/" + object_prim_name
-            print('Object prim name', object_prim_name)
-            print('Object prim path', prim_path)
-
-            print('Object Scale', self.object_scale[i])
 
             object_cfg = RigidObjectCfg(
                 prim_path=prim_path,
@@ -825,22 +819,19 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         Finger stiffness/damping is handled by per-group EventTerms in EventCfg.
         """
         get = self.dextrah_adr.get_custom_param_value
+        env_ids_cpu = env_ids.cpu()
 
         # -- Effort limits --
-        effort = self.robot.root_physx_view.get_dof_max_forces()
-        effort_t = effort.clone().to(self.device)
-        effort_t[env_ids.unsqueeze(-1).expand(-1, len(self._arm_14_joint_ids)),
-                 torch.tensor(self._arm_14_joint_ids, device=self.device)] = get("actuator_curriculum", "arm_14_effort_limit")
-        effort_t[env_ids.unsqueeze(-1).expand(-1, len(self._arm_57_joint_ids)),
-                 torch.tensor(self._arm_57_joint_ids, device=self.device)] = get("actuator_curriculum", "arm_57_effort_limit")
+        effort_t = self.robot.root_physx_view.get_dof_max_forces()[env_ids_cpu].clone().to(self.device)
+        for idx in self._arm_14_joint_ids:
+            effort_t[:, idx] = get("actuator_curriculum", "arm_14_effort_limit")
+        for idx in self._arm_57_joint_ids:
+            effort_t[:, idx] = get("actuator_curriculum", "arm_57_effort_limit")
         self.robot.write_joint_effort_limit_to_sim(effort_t, env_ids=env_ids)
 
         # -- Thumb rotation velocity limit --
-        vel_limits = self.robot.root_physx_view.get_dof_max_velocities()
-        vel_t = vel_limits.clone().to(self.device)
-        thumb_vel = get("actuator_curriculum", "thumb_rot_vel_limit")
-        vel_t[env_ids.unsqueeze(-1).expand(-1, 1),
-              torch.tensor(self._thumb_rot_joint_id, device=self.device)] = thumb_vel
+        vel_t = self.robot.root_physx_view.get_dof_max_velocities()[env_ids_cpu].clone().to(self.device)
+        vel_t[:, self._thumb_rot_joint_id[0]] = get("actuator_curriculum", "thumb_rot_vel_limit")
         self.robot.write_joint_velocity_limit_to_sim(vel_t, env_ids=env_ids)
 
     def _get_observations(self) -> dict:
