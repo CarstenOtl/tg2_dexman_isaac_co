@@ -183,13 +183,13 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             pos=(0.0, 0.0, 0.25),  # Raise robot to table height (matching TG2 config)
             rot=(0.0, 0.0, 0.0, 1.0),
             joint_pos={
-                "fr3_joint1": 0.3491,   # 20 degrees
-                "fr3_joint2": 0.6109,   # 35 degrees
-                "fr3_joint3": -0.8727,  # -50 degrees
-                "fr3_joint4": -0.8727,  # -50 degrees
-                "fr3_joint5": -0.3491,  # -20 degrees
-                "fr3_joint6": 2.6180,   # 150 degrees
-                "fr3_joint7": 0.0,      # 0 degrees
+                "fr3_joint1": 1.4748,   # 84.5 degrees  (real-robot pose — closer to object)
+                "fr3_joint2": 0.7941,   # 45.5 degrees
+                "fr3_joint3": -1.0996,  # -63.0 degrees
+                "fr3_joint4": -1.7436,  # -99.9 degrees
+                "fr3_joint5": 0.9373,   # 53.7 degrees
+                "fr3_joint6": 3.3967,   # 194.6 degrees
+                "fr3_joint7": -0.8920,  # -51.1 degrees
                 "revolute_thumb_rot": -0.3491,  # -20 deg (joint min)
                 "revolute_thumb_mcp_pitch": 0.1,
                 "revolute_thumb_mcp_yaw": 0.0,
@@ -683,7 +683,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     debug_print_every_steps = 16
     # Terminate if palm flips beyond this cosine threshold relative to target (-Z).
     palm_flip_cos_thresh = -0.3  # Allows up to ~108 degrees deviation from downward
-    early_termination_penalty: float = -5.0  # applied when episode ends early (not timeout)
+    early_termination_penalty: float = -3.0  # applied when episode ends early without object contact
 
     # Goal reaching parameters
     object_goal_tol = 0.1 # m

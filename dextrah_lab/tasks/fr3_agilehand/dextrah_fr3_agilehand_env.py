@@ -1101,8 +1101,12 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.extras["object_contact_count"] = self.object_contact_counts.mean()  # Track actual contact count
 
         early_term_penalty_weight = getattr(self.cfg, "early_termination_penalty", 0.0)
+        # Only penalise early terminations where no object contact was made.
+        # If the hand was touching the object, omit the penalty — grasping attempts
+        # will frequently cause early terminations and should not be discouraged.
+        no_contact = (self.object_contact_counts == 0)
         early_term_penalty = torch.where(
-            self._early_terminated,
+            self._early_terminated & no_contact,
             torch.full((self.num_envs,), early_term_penalty_weight, device=self.device, dtype=action_rate_penalty.dtype),
             torch.zeros(self.num_envs, device=self.device, dtype=action_rate_penalty.dtype),
         )

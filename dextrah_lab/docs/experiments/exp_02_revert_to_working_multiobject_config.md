@@ -356,7 +356,10 @@ Restore finger stiffness to 10.0 in `fr3_tekken_left.py` to fully match f15593c.
 - Changes vs Run 1h-resume:
   - `max_depenetration_velocity`: 5.0 → **50.0** (conservative step toward f15593c's 100.0 — reduces artifacts without jumping straight to maximum)
   - **Obs space: adapted to multi-object** — `multi_object_idx_onehot` is now a proper N-dim one-hot (one entry per object) in teacher and critic obs, matching the pattern in `kuka_allegro` and `tg2_inspirehand`. Previously a fixed size-1 constant ones tensor (`teacher_onehot`) that gave no object-identity signal.
-- Rationale: two bugs compounded in 1h-resume: (1) unrealistic contact physics from low dep_vel, and (2) missing object-identity signal in obs. Both must be fixed for a proper multi-object teacher.
+  - **Arm init pose: real-robot pose** (closer to object) — restored from commit `4c9beb5` (2026-03-23): `[84.5°, 45.5°, -63°, -99.9°, 53.7°, 194.6°, -51.1°]`. Previous f15593c pose `[20°, 35°, -50°, -50°, -20°, 150°, 0°]` started the arm further away, making approach harder. Closer init reduces the distance the policy needs to learn to cover before first contact.
+  - **Contact-gated early termination penalty (-3.0)** — penalty only applied when episode ends early AND no object contact was made. If the hand was touching the object at termination, no penalty is applied. Grasping attempts will frequently trigger early terminations (fingers slipping, palm flip, etc.) and should not be discouraged. Pure avoidance / short-episode exploitation (no contact at all) is still penalised at -3.0.
+- Rationale: four issues addressed vs 1h-resume: (1) unrealistic contact physics from low dep_vel, (2) missing object-identity signal in obs, (3) arm starting too far from the object, (4) penalty too heavy suppressing contact exploration.
+- Status: **Starting now** (continuation from 1h-resume or new run)
 - Start from: scratch (obs space change invalidates 1h-resume checkpoint)
 
 **Note on dep_vel via ADR curriculum:** Technically feasible — `max_depenetration_velocity` is a `RigidBodyPropertiesCfg` field updateable dynamically via `write_body_physx_props_to_sim()`. Could be added as a custom ADR event term (~50 lines). However, dep_vel is a physics accuracy setting, not a difficulty parameter — there is no benefit to ramping it. Recommended: fix it to 100.0 immediately.
