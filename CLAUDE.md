@@ -148,6 +148,9 @@ Reports: lift success (hold-gated), unsafe episode rate, failure reason breakdow
 ### Debugging Hydra errors
 Set `HYDRA_FULL_ERROR=1` before the command for full tracebacks.
 
+### Restoring files from a specific commit
+`git checkout <commit> -- dextrah_lab/assets/fr3_tekken_adof/FR3_tekkenadof_left.usd` — works for any file path.
+
 ## Architecture
 
 ### Task Structure (per robot configuration)
@@ -196,6 +199,10 @@ Robot URDFs/USDs are in `dextrah_lab/assets/`. Training objects in `assets/visde
 
 Git LFS is used for `.pth` model weight files.
 
+**USD physics bake-in**: `FR3_tekkenadof_left.usd` and `fr3.usd` bake in joint physics (damping, joint limits, collision meshes) that can override Python actuator config. When `vel_explosion` fires on every reset after a config change, restore the USD from the known-good commit.
+
+**rl_games version**: Must use the isaac-sim fork, NOT pip 1.6.1. Install: `pip install git+https://github.com/isaac-sim/rl_games.git@6b3534f29568158e9e29ec8bf83cc88fce5f0cae`. Pinned requirements reference: `../requirements_common_chi_pinned.txt` (one level above repo root).
+
 ## Code Conventions
 
 - Environment configs use Isaac Lab's `@configclass` decorator pattern
@@ -221,3 +228,12 @@ Git LFS is used for `.pth` model weight files.
 - Global sim material uses `friction_combine_mode="max"` and `restitution_combine_mode="max"` — rubber fingertip friction dominates contact
 - Fingertip: static=2.0, dynamic=1.5 at episode start; Object: static=1.0, dynamic=1.0 (ADR widens ranges during training)
 - `hand_action_rate_penalty_scale=2.5` — finger joints penalized 2.5× more than arm for jerky actions
+
+### Joint Init Positions (fr3_agilehand)
+
+- Joint init positions (`revolute_thumb_rot`, finger joints) are set in `env_cfg.py` `init_state.joint_pos`, NOT in `fr3_tekken_left.py` — `env_cfg.py` values are applied at episode reset and override the asset file defaults.
+- `revolute_thumb_rot` init at -0.3491 rad (-20°, joint min) pre-rotates the thumb away from the object approach path, preventing collision knock-back during approach.
+
+### Early Termination Penalty (fr3_agilehand)
+
+- `out_of_reach` (not `time_out`) is the done flag for premature episode endings. Set `early_termination_penalty: float` in `env_cfg.py`; env reads it via `getattr(self.cfg, "early_termination_penalty", 0.0)` and applies a flat penalty tensor in `_get_rewards` after `_get_dones` sets `self._early_terminated`.

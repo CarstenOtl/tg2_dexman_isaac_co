@@ -109,7 +109,6 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.actuated_dof_indices = list()
         for joint_name in cfg.actuated_joint_names:
             self.actuated_dof_indices.append(self.robot.joint_names.index(joint_name))
-        self.thumb_rot_dof_idx = self.robot.joint_names.index("revolute_thumb_rot")
 
         # actions are 1:1 with actuated joints
         self.cfg.num_actions = len(self.actuated_dof_indices)
@@ -117,6 +116,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.actions = torch.zeros(self.num_envs, self.num_actions, device=self.device)
         self.prev_actions = torch.zeros_like(self.actions)
         self.action_delta = torch.zeros_like(self.actions)
+        self._early_terminated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         # Debug joint mapping to ensure orders align with USD
         print("[DEBUG] Robot joint order (USD):", self.robot.joint_names)
@@ -259,8 +259,8 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             "hand_close": 0,
             "palm_flip": 0,
             "arm_contact": 0,
-            "unstable": 0,       # NaN/Inf in joint state
-            "vel_explosion": 0,  # finger vel > thresh (pre-NaN instability)
+            "unstable": 0,
+            "vel_explode": 0,
         }
         # Success / episode counters (accumulated between debug prints)
         self._debug_success_count = 0
@@ -375,6 +375,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         if num_unique_objects_found < 1:
             raise ValueError(f"No objects found under assets/{self.cfg.objects_dir}/USD")
 
+        # Multi-object teacher training: obs includes N-dim one-hot over object identity.
         num_unique_objects = num_unique_objects_found
 
         # Compute observation sizes dynamically from robot dimensions.
@@ -396,9 +397,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                         + 3 + 4 + 3
                         + 1          # object_scale
                         + num_actuated)  # actions
-        # Always +1 (not +num_unique_objects) so per-object teachers trained with a single
-        # object (N=1) remain compatible during multi-teacher distillation.
-        self.cfg.num_teacher_observations = teacher_base + 1
+        self.cfg.num_teacher_observations = teacher_base + num_unique_objects
 
         # Student obs: dof_pos(act) + dof_vel(act) + hand_pos(hb*3) + hand_vel(hb*3)
         #            + obj_goal(3) + actions(act)
@@ -425,7 +424,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                        + 3 + 4 + 6 + 3
                        + 1          # object_scale
                        + num_actuated)  # actions
-        self.cfg.num_states = critic_base + 1
+        self.cfg.num_states = critic_base + num_unique_objects
 
         self.cfg.state_space = self.cfg.num_states
         self.cfg.observation_space = self.cfg.num_observations
@@ -637,21 +636,17 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         if not sub_dirs:
             raise ValueError(f"No objects found under {objects_full_path}")
 
+        # Both teacher training and distillation use all available objects with
+        # round-robin distribution across envs so the policy conditions on object identity.
         self.object_names = list(sub_dirs)
         self.num_unique_objects = len(self.object_names)
+        object_indices = [i % self.num_unique_objects for i in range(self.num_envs)]
 
-        # Distribute objects across envs using modular indexing
-        # [0, 1, ..., num_unique-1, 0, 1, ..., num_unique-1, ...]
-        self.multi_object_idx =\
-            torch.remainder(torch.arange(self.num_envs), self.num_unique_objects).to(self.device)
-
-        # One-hot encoding of object ID for policy/critic observation input
+        self.multi_object_idx = torch.tensor(object_indices, dtype=torch.long, device=self.device)
+        # N-dim one-hot over object identity — used in teacher and critic obs.
         self.multi_object_idx_onehot = F.one_hot(
-            self.multi_object_idx, num_classes=self.num_unique_objects).float()
-
-        # Fixed size-1 placeholder used in teacher/critic obs so that per-object
-        # teachers (trained with N=1) stay compatible during multi-teacher distillation.
-        self.teacher_onehot = torch.ones((self.num_envs, 1), dtype=torch.float, device=self.device)
+            self.multi_object_idx, num_classes=self.num_unique_objects
+        ).float()
 
         stage = omni.usd.get_context().get_stage()
         self.object_mat_prims = list()
@@ -692,7 +687,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             self.object_scale = torch.ones_like(self.object_scale)
 
         for i in range(self.num_envs):
-            object_name = sub_dirs[self.multi_object_idx[i]]
+            object_name = self.object_names[object_indices[i]]
             object_usd_path = objects_full_path + "/" + object_name + "/" + object_name + ".usd"
             print('Object name', object_name)
             print('object usd path', object_usd_path)
@@ -978,7 +973,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 self.max_episode_length,
                 self.hand_to_object_pos_error,
                 self.object_to_object_goal_pos_error,
-                self.object_height_above_table,
+                self.object_vertical_error,
                 self.robot_dof_pos[:, 7:], # NOTE: only the finger joints
                 self.curled_q,
                 self.cfg.hand_to_object_weight,
@@ -1100,10 +1095,18 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.extras["palm_linear_velocity_penalty"] = palm_lin_vel_penalty.mean()
         self.extras["approach_speed_penalty"] = approach_speed_penalty.mean()
         self.extras["penetration_penalty"] = penetration_penalty.mean()
-        
+
         # DEBUG: Add distance and contact count for debugging
         self.extras["hand_to_object_distance"] = self.hand_to_object_pos_error.mean()
         self.extras["object_contact_count"] = self.object_contact_counts.mean()  # Track actual contact count
+
+        early_term_penalty_weight = getattr(self.cfg, "early_termination_penalty", 0.0)
+        early_term_penalty = torch.where(
+            self._early_terminated,
+            torch.full((self.num_envs,), early_term_penalty_weight, device=self.device, dtype=action_rate_penalty.dtype),
+            torch.zeros(self.num_envs, device=self.device, dtype=action_rate_penalty.dtype),
+        )
+        self.extras["early_term_penalty"] = early_term_penalty.mean()
 
         reward_terms = {
             # approach phase
@@ -1127,7 +1130,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             # others
             # "palm_lin_vel_penalty": palm_lin_vel_penalty,
             # "palm_finger_align": palm_finger_alignment_reward,
-            
+            "early_term_penalty": early_term_penalty,
         }
         total_reward = sum(reward_terms.values())
         
@@ -1275,14 +1278,12 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             ~torch.isfinite(self._robot_dof_vel_raw).all(dim=-1)
             | ~torch.isfinite(self.robot_dof_pos).all(dim=-1)
         )
-        # Pre-NaN instability: finger joints oscillating at physically implausible velocities.
-        # Hand joints are indices 7: (first 7 are FR3 arm). Arm joints excluded to avoid
-        # false positives from fast arm motions during training.
-        finger_vel_explosion = (
-            self._robot_dof_vel_raw[:, 7:].abs().max(dim=-1).values
-            > self.cfg.finger_unstable_vel_thresh
-        )
 
+        # Velocity explosion termination: catch large velocities before they become NaN.
+        # Only applied to hand joints (actuated_dof_indices[7:] = finger joints after arm).
+        hand_vel_thresh = getattr(self.cfg, "hand_vel_explosion_thresh", 50.0)
+        hand_joint_vels = self._robot_dof_vel_raw[:, 7:]  # actuated[7:] = finger joints (after 7 arm joints)
+        vel_explosion = hand_joint_vels.abs().max(dim=-1).values > hand_vel_thresh
         out_of_reach = (
             object_outside_upper_x
             | object_outside_lower_x
@@ -1294,7 +1295,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             | self.arm_table_contact_mask
             | palm_flipped
             | robot_unstable
-            | finger_vel_explosion
+            | vel_explosion
         )
 #============================================================================================================================
         # Accumulate termination counts for debug output (printed with reward debug every 100 steps)
@@ -1306,7 +1307,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             self.term_counts["palm_flip"] += palm_flipped.sum().item()
             self.term_counts["arm_contact"] += self.arm_table_contact_mask.sum().item()
             self.term_counts["unstable"] += robot_unstable.sum().item()
-            self.term_counts["vel_explosion"] += finger_vel_explosion.sum().item()
+            self.term_counts["vel_explode"] += vel_explosion.sum().item()
             # input("debugging termination conditions")
 #===================================================================================================================================
 
@@ -1322,7 +1323,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         else:
             time_out = self.episode_length_buf >= self.max_episode_length - 1
 
-        #return out_of_reach, time_out
+        self._early_terminated = out_of_reach.clone()
         return out_of_reach, time_out
 
     def _reset_idx(self, env_ids: Sequence[int] | None):
@@ -1336,13 +1337,6 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         # resets articulation and rigid body attributes
         super()._reset_idx(env_ids)
         self.episode_length_gate_buf[env_ids] = 0
-
-        # Apply thumb velocity limit from ADR curriculum (persistent in PhysX — only needs
-        # setting once at init and whenever ADR increments, but safe to re-apply on reset)
-        if self.cfg.enable_adr and not hasattr(self, '_thumb_vel_initialized'):
-            self._thumb_vel_initialized = True
-            thumb_vel = self.dextrah_adr.get_custom_param_value("thumb_velocity_limit", "velocity_limit")
-            self.robot.write_joint_velocity_limit_to_sim(thumb_vel, joint_ids=[self.thumb_rot_dof_idx])
 
         num_ids = env_ids.shape[0]
 
@@ -1486,9 +1480,6 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 self.dextrah_adr.increase_ranges(increase_counter=True)
                 self.event_manager.reset(env_ids=self._all_env_ids)
                 self.event_manager.apply(env_ids=self._all_env_ids, mode="reset", global_env_step_count=0)
-                # Apply updated thumb velocity limit to all envs
-                thumb_vel = self.dextrah_adr.get_custom_param_value("thumb_velocity_limit", "velocity_limit")
-                self.robot.write_joint_velocity_limit_to_sim(thumb_vel, joint_ids=[self.thumb_rot_dof_idx])
                 self.local_adr_increment = torch.tensor(self.dextrah_adr.num_increments(), device=self.device, dtype=torch.int64)
             else:
                 #print('not increasing DR ranges')
@@ -1982,8 +1973,8 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 #self.object_vel, # NOTE: took this out because it's fairly privileged
                 # object goal
                 self.object_goal,
-                # one-hot object ID placeholder (always [1] — size-1 for per-object teacher compat)
-                self.teacher_onehot,
+                # N-dim one-hot over object identity
+                self.multi_object_idx_onehot,
                 # object scales
                 self.object_scale,
                 # last action
@@ -2010,8 +2001,8 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 self.object_vel,
                 # object goal
                 self.object_goal,
-                # one-hot object ID placeholder (always [1] — size-1 for per-object teacher compat)
-                self.teacher_onehot,
+                # N-dim one-hot over object identity
+                self.multi_object_idx_onehot,
                 # object scale
                 self.object_scale,
                 # last action
@@ -2103,7 +2094,7 @@ def compute_rewards(
     max_episode_length: float,
     hand_to_object_pos_error: torch.Tensor,
     object_to_object_goal_pos_error: torch.Tensor,
-    object_height_above_table: torch.Tensor,
+    object_vertical_error: torch.Tensor,
     robot_dof_pos: torch.Tensor,
     curled_q: torch.Tensor,
     hand_to_object_weight: float,
@@ -2152,14 +2143,8 @@ def compute_rewards(
     finger_curl_reg =\
         finger_curl_reg_weight * finger_curl_dist ** 2
 
-    # Exponential lift reward with baseline subtraction.
-    # exp(sharpness * height) == 1.0 when height == 0 (on table), so subtracting 1
-    # gives exactly zero reward for just touching. Grows exponentially with lift height,
-    # creating strong advantage signal for trajectories that manage to lift even a few cm.
-    # Clamp height to prevent reward explosion from physics glitches.
-    clamped_height = object_height_above_table.clamp(min=0.0, max=0.5)
-    lift_reward = lift_weight * (torch.exp(lift_sharpness * clamped_height) - 1.0) * contact_mask
-    lift_reward = lift_reward.clamp(max=50.0)  # hard cap to prevent NaN propagation
+    # Reward for lifting object off table and towards object goal
+    lift_reward = lift_weight * torch.exp(-lift_sharpness * object_vertical_error) * contact_mask
 
     # Palm alignment penalty: squared angle (theta**2) from target direction.
     cos_sim = torch.sum(palm_dir * palm_dir_target, dim=-1).clamp(-1.0, 1.0)

@@ -43,7 +43,7 @@ class EventCfg:
             "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
             "static_friction_range": (1.0, 1.0),
             "dynamic_friction_range": (1.0, 1.0),
-            "restitution_range": (0.05, 0.05),
+            "restitution_range": (1.0, 1.0),
             "num_buckets": 250,
         },
     )
@@ -76,26 +76,6 @@ class EventCfg:
         },
     )
 
-    # -- fingertip friction (curriculum: start grippy, ADR decreases friction)
-    fingertip_physics_material = EventTerm(
-        func=mdp.randomize_rigid_body_material,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=[
-                "base_link",
-                "Index_Distal_Phalanx",
-                "Middle_Distal_Phalanx",
-                "Ring_Distal_Phalanx",
-                "Pinky_Distal_Phalanx",
-                "Thumb_Distal_Phalanx",
-            ]),
-            "static_friction_range": (2.0, 2.0),
-            "dynamic_friction_range": (1.5, 1.5),
-            "restitution_range": (0.05, 0.05),
-            "num_buckets": 250,
-        },
-    )
-
     # -- object
     # NOTE: no beginning randomization for these
     object_physics_material = EventTerm(
@@ -105,11 +85,11 @@ class EventCfg:
             "asset_cfg": SceneEntityCfg("object", body_names=".*"),
             "static_friction_range": (1.0, 1.0),
             "dynamic_friction_range": (1.0, 1.0),
-            "restitution_range": (0.05, 0.05),
+            "restitution_range": (1.0, 1.0),
             "num_buckets": 250,
         },
     )
-
+    
     # NOTE: no beginning randomization for this one
     object_scale_mass = EventTerm(
         func=mdp.randomize_rigid_body_mass,
@@ -188,8 +168,6 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         physics_material=RigidBodyMaterialCfg(
             static_friction=1.0,
             dynamic_friction=1.0,
-            friction_combine_mode="max",
-            restitution_combine_mode="max",
         ),
         physx=PhysxCfg(
             bounce_threshold_velocity=0.1,   # was 0.2 — catches slower collisions before bouncing
@@ -205,27 +183,27 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             pos=(0.0, 0.0, 0.25),  # Raise robot to table height (matching TG2 config)
             rot=(0.0, 0.0, 0.0, 1.0),
             joint_pos={
-                "fr3_joint1": 1.4748,   # 84.5 degrees
-                "fr3_joint2": 0.7941,   # 45.5 degrees
-                "fr3_joint3": -1.0996,  # -63.0 degrees
-                "fr3_joint4": -1.7436,  # -99.9 degrees
-                "fr3_joint5": 0.9373,   # 53.7 degrees
-                "fr3_joint6": 3.3967,   # 194.6 degrees
-                "fr3_joint7": -0.8920,  # -51.1 degrees
-                "revolute_thumb_rot": -0.3491, # -20 deg (joint min) — thumb pre-rotated away from object approach path
-                "revolute_thumb_mcp_pitch": 0.0,
+                "fr3_joint1": 0.3491,   # 20 degrees
+                "fr3_joint2": 0.6109,   # 35 degrees
+                "fr3_joint3": -0.8727,  # -50 degrees
+                "fr3_joint4": -0.8727,  # -50 degrees
+                "fr3_joint5": -0.3491,  # -20 degrees
+                "fr3_joint6": 2.6180,   # 150 degrees
+                "fr3_joint7": 0.0,      # 0 degrees
+                "revolute_thumb_rot": -0.3491,  # -20 deg (joint min)
+                "revolute_thumb_mcp_pitch": 0.1,
                 "revolute_thumb_mcp_yaw": 0.0,
                 "revolute_thumb_pip": 0.0,
-                "revolute_index_mcp_pitch": 0.0,
+                "revolute_index_mcp_pitch": 0.1,
                 "revolute_index_mcp_yaw": 0.0,
                 "revolute_index_pip": 0.0,
-                "revolute_middle_mcp_pitch": 0.0,
+                "revolute_middle_mcp_pitch": 0.1,
                 "revolute_middle_mcp_yaw": 0.0,
                 "revolute_middle_pip": 0.0,
-                "revolute_ring_mcp_pitch": 0.,
+                "revolute_ring_mcp_pitch": 0.1,
                 "revolute_ring_mcp_yaw": 0.0,
                 "revolute_ring_pip": 0.0,
-                "revolute_pinky_mcp_pitch": 0.0,
+                "revolute_pinky_mcp_pitch": 0.1,
                 "revolute_pinky_mcp_yaw": 0.0,
                 "revolute_pinky_pip": 0.0,
             },
@@ -651,10 +629,10 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
 
     # reward weights
     # phase 1: reaching
-    hand_to_object_weight = 4. #default 1, prev 5
-    hand_to_object_sharpness = 5. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
+    hand_to_object_weight = 5. #default 1, prev 5
+    hand_to_object_sharpness = 4. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
     
-    palm_direction_alignment_weight = 1.0 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
+    palm_direction_alignment_weight = 0.5 # 2.0  # Increased from 0.1 - strongly encourage palm facing down
     in_grip_alignment_weight = 1. # 0.5
     
     palm_down_local_axis = (1.0, 0.0, 0.0) # x axis of agile-hand points in the direction of palm
@@ -665,28 +643,23 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     palm_linear_velocity_penalty_weight = 0.005 # prev 0.005 -- removed to avoid "don't move" signal
     approach_speed_penalty_weight = 0.001        # prev 0.001 -- removed to avoid "don't move" signal
     
-    action_rate_penalty_weight = 0.008         # prev 0.01 -- halved to allow exploration
+    action_rate_penalty_weight = 0.01         # prev 0.01 -- halved to allow exploration
     hand_action_rate_penalty_scale = 2.5       # prev 3.0
 
     joint_velocity_penalty_weight = 5e-4       # prev 5e-4 -- reduced to avoid freezing
     hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
 
-    # # Penalty when any hand link is closer than (object_scale * factor) to object center —
-    # # discourages "phasing through" grasps. Set weight > 0 to enable (e.g. 2.0).
-    # penetration_penalty_weight = 0.0
-    # penetration_radius_factor = 0.03  # treat as penetration when min hand–object dist < scale * this
-
     # phase 2: contact
-    hand_object_contact_weight = 2.0  # Reduced so contact doesn't drown out lift signal
-    good_grasp_weight = 1.5 # Reduced - approach/grasp already learned, lift needs to dominate
-    finger_curl_reg_weight = -0.2    # penalization factor for finger curl
+    hand_object_contact_weight = 3.0  # Increased to make contact more valuable than hovering
+    good_grasp_weight = 5.0 # default 10.0 # too obsessed in finding a good contact, actually finds one
+    finger_curl_reg_weight = -0.5    # penalization factor for finger curl
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl 
 
     #phase 3: lifting
-    object_to_goal_weight = 10 #default 5 
+    object_to_goal_weight = 20 #default 5 
     in_success_region_at_rest_weight = 10. #default10
-    lift_sharpness = 3.0 #default 8.5
+    lift_sharpness = 7.5 #default 8.5
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
@@ -710,9 +683,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     debug_print_every_steps = 16
     # Terminate if palm flips beyond this cosine threshold relative to target (-Z).
     palm_flip_cos_thresh = -0.3  # Allows up to ~108 degrees deviation from downward
-    # Terminate if any finger joint velocity exceeds this threshold (rad/s). Catches
-    # physics explosions that are large-but-finite (before going NaN/Inf).
-    finger_unstable_vel_thresh: float = 50.0  # 7 arm joints excluded; only hand joints checked
+    early_termination_penalty: float = -5.0  # applied when episode ends early (not timeout)
 
     # Goal reaching parameters
     object_goal_tol = 0.1 # m
@@ -771,7 +742,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "robot_physics_material": {
             "static_friction_range": (0.5, 1.2),
             "dynamic_friction_range": (0.3, 1.0),
-            "restitution_range": (0.0, 0.2)
+            "restitution_range": (0.8, 1.0)
         },
         "robot_joint_stiffness_and_damping": {
             "stiffness_distribution_params": (0.5, 2.),
@@ -780,15 +751,10 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "robot_joint_friction": {
             "friction_distribution_params": (0., 5.),
         },
-        "fingertip_physics_material": {
-            "static_friction_range": (0.4, 2.0),
-            "dynamic_friction_range": (0.3, 1.5),
-            "restitution_range": (0.0, 0.2),
-        },
         "object_physics_material": {
             "static_friction_range": (0.5, 1.2),
             "dynamic_friction_range": (0.3, 1.0),
-            "restitution_range": (0.0, 0.2)
+            "restitution_range": (0.8, 1.0)
         },
         "object_scale_mass": {
             "mass_distribution_params": (0.5, 3.),
@@ -806,7 +772,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     object_scale_min = 0.5
     deactivate_object_scaling = True
 
-    aux_coeff = 1.  # this does: total_reward = total_reward + aux_coeff * aux_reward (where aux_reward is the reward from the aux task)
+    # TODO: what is this?
+    aux_coeff = 1.
 
     # Dictionary of custom parameters for ADR
     # NOTE: first number in range is the starting value, second number is terminal value
@@ -838,19 +805,16 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "robot_joint_vel_bias": (0.0, 0.08), # rad
         },
         "reward_weights": {
-            "object_to_goal_sharpness": (-3., -10.),
+            "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
-            "lift_weight": (30., 10.),  # Increased to dominate contact reward and incentivize lifting
-            "finger_curl_reg": (-0.05, -1),  # ADR: ramp up curl penalty to encourage better hand use
+            "lift_weight": (10., 5.),  # Increased from (20,20) for stronger lifting incentive
+            "finger_curl_reg": (-0.1, -1),  # ADR: ramp up curl penalty to encourage better hand use
         },
         "pd_targets": {
             "velocity_target_factor": (1., 0.)
         },
         "observation_annealing": {
             "coefficient": (0., 0.)
-        },
-        "thumb_velocity_limit": {
-            "velocity_limit": (1.7453, 0.17453),  # 100 deg/s → 10 deg/s (in rad/s)
         },
     }
 

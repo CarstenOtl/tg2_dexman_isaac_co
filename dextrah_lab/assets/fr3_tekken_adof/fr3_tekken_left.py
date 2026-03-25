@@ -28,15 +28,12 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
             angular_damping=0.0,
             max_linear_velocity=500.0, # default 1000
             max_angular_velocity=500.0, # default 1000
-            # Higher value so fingers cannot "phase through" objects: PhysX resolves
-            # penetration faster, making invalid grasps (curl-through) impossible.
-            max_depenetration_velocity=100.0,
+            max_depenetration_velocity=50.0,
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True,
-            # More iterations improve contact resolution for thin finger–object contacts.
-            solver_position_iteration_count=16,
-            solver_velocity_iteration_count=6,
+            solver_position_iteration_count=10,
+            solver_velocity_iteration_count=4,
             stabilization_threshold=0.0005,
             # fixed_root_link=True,
         ),
@@ -59,9 +56,9 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
             # MCP Yaw: [-0.26 , 0.26] ==> [-15 deg , 15 deg]
             # PIP: [0 , 1.57] ==> [0 , 90 deg]
             "revolute_thumb_rot": 0.0,
-            "revolute_thumb_mcp_pitch": 0.0,
+            "revolute_thumb_mcp_pitch": 0.1,
             "revolute_thumb_mcp_yaw": 0.0,
-            "revolute_thumb_pip": 0.0,
+            "revolute_thumb_pip": 0.1,
             # # "revolute_thumb_dip": 0.0,
             "revolute_index_mcp_pitch": 0.1,
             "revolute_index_mcp_yaw": 0.0,
@@ -84,22 +81,22 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
     actuators={
         "franka_arm": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[1-4]"],
-            effort_limit_sim= 87., # 200.0,
-            # velocity_limit_sim=2.175,
-            stiffness=100.0, # 400.0,
-            damping=7.0, # 40.0,
+            effort_limit_sim=200.0,
+            velocity_limit_sim=2.175,
+            stiffness=400.0,
+            damping=40.0,
         ),
         "franka_joints_ee": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[5-7]"],
-            effort_limit_sim=12.0, # 200.0,
-            # velocity_limit_sim=2.175,
-            stiffness=50.0, # 400.0,
-            damping=2.0, # 40.0,
+            effort_limit_sim=200.0,
+            velocity_limit_sim=2.175,
+            stiffness=400.0,
+            damping=40.0,
         ),
         "thumb_rot": ImplicitActuatorCfg(
             joint_names_expr=["revolute_thumb_rot"],
             effort_limit_sim=10.0,
-            velocity_limit_sim=1.7453,  # 100 deg/s — ADR curriculum reduces this to 10 deg/s
+            velocity_limit_sim=20.0,
             stiffness=20.0,
             damping=2.0,
         ),
@@ -107,22 +104,22 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
             joint_names_expr=[r"revolute_.*_mcp_pitch"],
             effort_limit_sim=10.0,
             velocity_limit_sim=15.0,
-            stiffness=10.0,  # restored from f15593c (was 1.77531 — hardware ID, too compliant)
-            damping=1.0,     # restored from f15593c (was 0.5)
+            stiffness=10.0,
+            damping=1.0,
         ),
         "mcp_yaw": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_yaw"],
             effort_limit_sim=10.0,
             velocity_limit_sim=15.0,
-            stiffness=10.0,  # restored from f15593c (was 0.28467)
-            damping=1.0,     # restored from f15593c (was 0.2)
+            stiffness=10.0,
+            damping=1.0,
         ),
         "pip": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_pip"],
             effort_limit_sim=10.0,
             velocity_limit_sim=15.0,
-            stiffness=10.0,  # restored from f15593c (was 0.24299)
-            damping=1.0,     # restored from f15593c (was 0.2)
+            stiffness=10.0,
+            damping=1.0,
         ),
         #
         # "franka_tekken_actuators": ImplicitActuatorCfg(
@@ -170,34 +167,20 @@ FR3_TEK_LEFT_STABLE = FR3_TEK_LEFT_CONFIG.replace(
     actuators={
         # Arm joints (Franka 7-DoF) – moderate PD gains
         "arm_pd": ImplicitActuatorCfg(
-            joint_names_expr=[r"fr3_joint[1-4]"],  # joint_names_expr=[r"fr3_joint[1-7]"],adapt if your naming differs
-            effort_limit_sim=87, #effort_limit_sim=120.0,
-            # velocity_limit_sim=150.0,
-            stiffness=100.0, #default 60000.0 
-            damping=7.0, #default 600.0
+            joint_names_expr=[r"fr3_joint[1-7]"],  # adapt if your naming differs
+            effort_limit_sim=120.0,
+            velocity_limit_sim=5.0,
+            stiffness=60000.0,
+            damping=600.0,
         ),
-        "arm_stable_pd": ImplicitActuatorCfg(
-            joint_names_expr=[r"fr3_joint[5-7]"],  # adapt if your naming differs
-            effort_limit_sim=12.0,
-            # velocity_limit_sim=5.0,
-            stiffness=50.0,
-            damping=2.0,
-        ),
-        # Hand thumb joint should have different stiffness and damping than the other joints
-        "hand_thumb_pd": ImplicitActuatorCfg(
-            joint_names_expr=["revolute_thumb_rot"],
-            # effort_limit_sim=30.0,
-            # velocity_limit_sim=300.0,
-            stiffness=100.0,
-            damping=5.0,
-        ),
-        # Hand joints – low stiffness, decent damping so they don't go crazy
+        # Hand / Tekken joints – low stiffness, decent damping so they don't go crazy
         "hand_pd": ImplicitActuatorCfg(
             joint_names_expr=[
+                r"revolute_thumb_rot",
                 r"revolute_.*_mcp_pitch",
                 r"revolute_.*_mcp_yaw",
                 r"revolute_.*_pip",
-
+                r"revolute_.*_dip",
             ],
             effort_limit_sim=30.0,
             velocity_limit_sim=300.0,
