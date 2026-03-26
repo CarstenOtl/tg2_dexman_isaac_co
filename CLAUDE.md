@@ -130,10 +130,17 @@ For multi-teacher mode, pass a **directory** to `--teacher` (one subfolder per o
 
 > **Note**: Vanilla DAgger requires `torch.distributed.run` — see `notes.txt` for the full command.
 
+### Per-Object Teacher Training (automated)
+```bash
+cd dextrah_lab/rl_games
+bash train_multi_objects_fr3_agilehand.sh
+```
+Loops over all objects in `multi_objects/14/USD/`, trains one teacher per object sequentially. Override defaults via env vars: `MULTI_OBJECTS_ROOT`, `MAX_EPOCHS`, `NUM_ENVS`, etc. Logs failed/succeeded objects in summary. Checkpoints land in `logs/rl_games/dextrah_tekken_lstm/{timestamp}_{obj_name}/nn/`.
+
 ### Student Evaluation (rich metrics)
 ```bash
 cd dextrah_lab/distillation_new
-python eval_student.py --task=dextrah_fr3_agilehand --num_envs 4 --enable_cameras \
+python eval_student.py --task=dextrah_fr3_agilehand --num_envs 4 --enable_cameras --headless \
   --checkpoint <path> --num_episodes 10 \
   env.distillation=True env.simulate_stereo=True
 ```
@@ -202,6 +209,23 @@ Git LFS is used for `.pth` model weight files.
 **USD physics bake-in**: `FR3_tekkenadof_left.usd` and `fr3.usd` bake in joint physics (damping, joint limits, collision meshes) that can override Python actuator config. When `vel_explosion` fires on every reset after a config change, restore the USD from the known-good commit.
 
 **rl_games version**: Must use the isaac-sim fork, NOT pip 1.6.1. Install: `pip install git+https://github.com/isaac-sim/rl_games.git@6b3534f29568158e9e29ec8bf83cc88fce5f0cae`. Pinned requirements reference: `../requirements_common_chi_pinned.txt` (one level above repo root).
+
+### Test Repo (`code/test/tg2_dexman_isaac_co`)
+
+- Separate clone with editable install in `dextrah_test` conda env. Use `conda activate dextrah_test`.
+- **Asset dirs must be COPIED, not symlinked** — Isaac Sim USD resolver doesn't follow symlinks. Use `cp -r`, not `ln -s`.
+- Missing assets that may need copying from main repo: `test_object/`, `multi_objects/visdex_selected/`, `dome_light_textures/`, `background_imgs/`, `object_textures/`, `curated_table_textures/`.
+- **`pip install -e . --no-deps`** to switch editable install without touching Isaac Sim dependencies.
+
+### Distillation Gotchas (fr3_agilehand)
+
+- **`--enable_cameras` is always required** for distillation and student eval — cameras are in the scene config, omitting it causes `RuntimeError` or silent hang.
+- **`--headless` recommended** for eval scripts on remote machines — prevents GLFW display issues.
+- **`pretrained_ckpts/` directory**: distillation scripts resolve relative `--teacher` paths via `os.path.join(parent_path, "pretrained_ckpts", teacher_arg)`. The dir must exist at repo root.
+- **`eval_student.py` requires gym import for each task** — if eval hangs silently after scene creation, check that `import dextrah_lab.tasks.<task>.gym_setup` is present.
+- **`eval.py` (legacy) hardcodes `dextrah_kuka_allegro/agents`** path for student config — works because YAMLs are identical across tasks, but prefer `eval_student.py`.
+- **First camera run is slow** (10-20 min shader compilation) — subsequent runs use cached shaders.
+- **SafeDagger beta** is NOT a fixed schedule — it's the fraction of envs where per-env L2 loss exceeds `unsafe_l2_threshold` (default 0.5). Teacher takes over only in those envs.
 
 ## Experiment Logs
 

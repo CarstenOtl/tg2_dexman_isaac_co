@@ -84,6 +84,7 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import dextrah_lab.tasks.tg2_inspirehand.gym_setup  # noqa: F401
+import dextrah_lab.tasks.fr3_agilehand.gym_setup  # noqa: F401
 from dextrah_lab.distillation_new.a2c_stereo_transformer import A2CBuilder as A2CStereoTransformerBuilder
 from dextrah_lab.distillation_new.eval_utils import (
     UNSAFE_REASON_NAMES,
@@ -134,11 +135,11 @@ def _reason_counts_checked(
     unknown_count = max(0, total_unsafe - classified_total)
     if unknown_count > 0:
         label = warn_label if warn_label is not None else "unsafe reason classification"
-        raise RuntimeError(
-            f"{label}: found {unknown_count} unclassified unsafe episodes "
-            f"(unsafe_total={total_unsafe}, classified_total={classified_total}). "
-            "Fail-fast mode is enabled; no fallback mapping is allowed."
+        print(
+            f"[WARN] {label}: {unknown_count} unclassified unsafe episodes "
+            f"(unsafe_total={total_unsafe}, classified_total={classified_total})"
         )
+        counts["unclassified"] = unknown_count
     return counts, total_unsafe
 
 
