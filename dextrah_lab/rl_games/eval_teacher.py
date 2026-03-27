@@ -119,6 +119,7 @@ from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
 import dextrah_lab.tasks.dextrah_kuka_allegro.gym_setup
 import dextrah_lab.tasks.dextrah_kuka_inspirehand.gym_setup
 import dextrah_lab.tasks.tg2_inspirehand.gym_setup
+import dextrah_lab.tasks.fr3_agilehand.gym_setup
 from dextrah_lab.distillation_new.eval_utils import (
     UNSAFE_REASON_NAMES,
     classify_out_of_reach_reasons,

@@ -245,6 +245,12 @@ Training experiment logs are tracked in `dextrah_lab/docs/experiments/`:
 
 ## Code Conventions
 
+### Entry-point script registration
+Every script that accepts `--task` must import the task's `gym_setup` module (e.g. `import dextrah_lab.tasks.fr3_agilehand.gym_setup`). When adding a new task, check ALL entry points: `train.py`, `play_test.py`, `eval_teacher.py`, and every `run_distillation*.py` / `eval_student.py`.
+
+### Video recording
+`--video` flag (via `gym.wrappers.RecordVideo`) exists in: `train.py`, `eval_student.py`, all `run_distillation*.py`, legacy `eval.py`. NOT in: `eval_teacher.py`, `play_test.py` — use `--livestream 2` + external screen capture for those.
+
 - Environment configs use Isaac Lab's `@configclass` decorator pattern
 - GPU tensors throughout — all observation/action processing is batched on device
 - ADR parameters are specified as `[min, max]` range lists in config
