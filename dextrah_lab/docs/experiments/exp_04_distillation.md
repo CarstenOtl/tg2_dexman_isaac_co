@@ -79,6 +79,31 @@ python run_distillation_safedagger_fr3_agilehand.py \
 
 **Notes:** Significant improvement from stronger teacher. Student is learning but 100k iterations may not be enough — imitation loss still high. Next steps: try more iterations (200-500k), or evaluate per-object breakdown.
 
+## Open question: ADR during distillation for sim2real
+
+All runs so far use `env.enable_adr=False`. This means both teacher and student operate in idealized physics (no friction/stiffness/effort randomization).
+
+**Why this is a problem for sim2real:**
+- The student learns `image + proprio → action` in exactly one physics regime
+- On real hardware, joint dynamics differ (friction, stiffness, backlash) — the student has never seen how environment *responses* change under different physics
+- The teacher's actions are inherently robust (trained with ADR 19), but the student only learns the mapping in a fixed context — it can't correct for physics differences it hasn't experienced
+- Proprio observations (joint velocities, positions under load) also differ with physics — student has no experience with these variations
+
+**Why ADR is currently disabled:**
+- Higher ADR degrades teacher performance → noisier demonstrations → harder to learn from
+- tg2_inspirehand pipeline also uses `enable_adr=False` — this is the established pattern
+- Visual augmentation (`data_aug`, `rgb_augs.py`) is handled separately from ADR and does help with visual sim2real
+
+**Proposed approach: fixed low ADR during distillation**
+- Set `env.enable_adr=True env.starting_adr_increments=5` — no curriculum, just fixed moderate randomization
+- Teacher (ADR 19) still performs well at ADR 5 physics
+- Student sees physics diversity without the teacher becoming a bad supervisor
+- Compare sim2real transfer vs ADR 0 distillation
+
+**Next runs to try:**
+- run2a: vanilla DAgger (ADR 0) — compare distillation methods
+- run2b: SafeDagger with fixed ADR 5 — test physics diversity during distillation
+
 ## Fixes applied during experimentation
 
 - `eval_student.py`: added `import dextrah_lab.tasks.fr3_agilehand.gym_setup` (was missing, caused eval to hang)
