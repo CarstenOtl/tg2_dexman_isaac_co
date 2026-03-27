@@ -63,6 +63,7 @@ dextrah_lab/
 │   ├── dextrah_kuka_inspirehand/
 │   └── dextrah_kuka_inspirehand_v2/
 ├── deployment_tg2_inspirehand/ — Real-robot deployment scripts (TG2)
+├── deployment_fr3_agilehand/  — Real-robot deployment scripts (FR3 + AgileHand)
 └── docs/
 ```
 
@@ -276,3 +277,23 @@ Training experiment logs are tracked in `dextrah_lab/docs/experiments/`:
 ### Early Termination Penalty (fr3_agilehand)
 
 - `out_of_reach` (not `time_out`) is the done flag for premature episode endings. Set `early_termination_penalty: float` in `env_cfg.py`; env reads it via `getattr(self.cfg, "early_termination_penalty", 0.0)` and applies a flat penalty tensor in `_get_rewards` after `_get_dones` sets `self._early_terminated`.
+
+### Camera Config (fr3_agilehand distillation)
+
+- Stereo cameras defined in `env_cfg.py` lines 352-424 as `TiledCameraCfg`
+- Training resolution: 320×240 (`img_width=320`, `img_height=240`)
+- FOV: ~48° horizontal (focal_length=23.59mm, horizontal_aperture=21.02mm)
+- Stereo baseline: 55mm
+- Camera pose from real-world 4×4 tf matrix (left); right is offset from left
+- Camera randomization: ±3° rotation, ±0.03m position (for sim2real robustness)
+- Cameras only activate when `env.distillation=True`
+- At deployment: capture at native resolution (e.g., 1080p), resize to 320×240 before inference
+
+### Deployment (FR3 + AgileHand)
+
+- Deployment scripts in `dextrah_lab/deployment_fr3_agilehand/`
+- ROS1 Noetic Docker container, stereo camera capture, policy inference node
+- Inference pipeline: stereo images → resize to 320×240 → normalize → student policy → joint commands
+- FR3 controlled via `franka_ros` / FCI (not bodyctrl_msgs like TG2)
+- `policy_inference_stereo.py`: template inference node — proprio integration is TODO
+- Camera intrinsics must match training config; calibrate real cameras and update `focal_length_val` and `horizontal_aperture` in env_cfg
