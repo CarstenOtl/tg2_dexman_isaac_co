@@ -258,6 +258,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         # Track success statistics
         self.in_success_region = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self.time_in_success_region = torch.zeros(self.num_envs, device=self.device)
+        self.episode_succeeded = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         
         # Termination statistics (for debug output)
         self.term_counts = {
@@ -1441,12 +1442,13 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.compute_intermediate_reward_values()
 
         # Track success before clearing (for debug table)
-        self._debug_success_count += int(self.in_success_region[env_ids].sum().item())
+        self._debug_success_count += int(self.episode_succeeded[env_ids].sum().item())
         self._debug_episode_count += len(env_ids)
 
         # Reset success signals
         self.in_success_region[env_ids] = False
         self.time_in_success_region[env_ids] = 0.
+        self.episode_succeeded[env_ids] = False
 
         # Get object mass - this is used in F/T disturbance, etc.
         # NOTE: object mass on the CPU, so we only query infrequently
@@ -1933,6 +1935,8 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             self.time_in_success_region + self.cfg.sim.dt*self.cfg.decimation,
             0.
         )
+        # Mark episode as succeeded once object held in goal for success_timeout
+        self.episode_succeeded = self.episode_succeeded | (self.time_in_success_region >= self.cfg.success_timeout)
 
         # Object to hand points distance (mean over selected bodies for smooth approach gradient)
         self.hand_to_object_pos_error = (

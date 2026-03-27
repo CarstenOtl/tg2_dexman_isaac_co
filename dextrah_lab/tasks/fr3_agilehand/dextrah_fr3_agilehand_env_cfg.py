@@ -801,16 +801,16 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         # Finger gains: ADR widens scale range to include hardware-ID'd values
         # scale = hardware_value / asset_default → lower bound of ADR max range
         "finger_mcp_pitch_gains": {
-            "stiffness_distribution_params": (0.17, 1.0),
-            "damping_distribution_params": (0.083, 1.0),
+            "stiffness_distribution_params": (0.1, 1.0),
+            "damping_distribution_params": (0.1, 1.0),
         },
         "finger_mcp_yaw_gains": {
-            "stiffness_distribution_params": (0.025, 1.0),
-            "damping_distribution_params": (0.033, 1.0),
+            "stiffness_distribution_params": (0.1, 1.0),
+            "damping_distribution_params": (0.1, 1.0),
         },
         "finger_pip_gains": {
-            "stiffness_distribution_params": (0.02, 1.0),
-            "damping_distribution_params": (0.033, 1.0),
+            "stiffness_distribution_params": (0.1, 1.0),
+            "damping_distribution_params": (0.1, 1.0),
         },
         "thumb_rot_gains": {
             "stiffness_distribution_params": (0.5, 2.),
