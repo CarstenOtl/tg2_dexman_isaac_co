@@ -93,6 +93,12 @@ parser.add_argument(
 )
 parser.add_argument("--video", action="store_true", default=False, help="Record video (MP4) of the evaluation.")
 parser.add_argument("--video_length", type=int, default=0, help="Max video length in steps (0 = entire eval).")
+parser.add_argument(
+    "--viewer_preset",
+    type=str,
+    default=None,
+    help="Viewer preset name (e.g. 32env, 8env, 1env). See env_cfg.viewer_presets.",
+)
 # AppLauncher args
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -524,6 +530,14 @@ def _run_eval_for_checkpoint(
 
     stage_t = time.time()
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
+    if args_cli.viewer_preset is not None:
+        presets = getattr(env_cfg, "viewer_presets", {})
+        if args_cli.viewer_preset not in presets:
+            raise ValueError(f"Unknown viewer preset '{args_cli.viewer_preset}'. Available: {list(presets.keys())}")
+        p = presets[args_cli.viewer_preset]
+        env_cfg.viewer.eye = tuple(p["eye"])
+        env_cfg.viewer.lookat = tuple(p["lookat"])
+        print(f"[INFO] Viewer preset '{args_cli.viewer_preset}': eye={env_cfg.viewer.eye}, lookat={env_cfg.viewer.lookat}")
     print(f"[INFO] Parsed env cfg in {time.time() - stage_t:.1f}s", flush=True)
     if objects_dir_override is not None:
         env_cfg.objects_dir = objects_dir_override
@@ -740,6 +754,14 @@ def _run_eval_for_teacher_pool(
 
     stage_t = time.time()
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
+    if args_cli.viewer_preset is not None:
+        presets = getattr(env_cfg, "viewer_presets", {})
+        if args_cli.viewer_preset not in presets:
+            raise ValueError(f"Unknown viewer preset '{args_cli.viewer_preset}'. Available: {list(presets.keys())}")
+        p = presets[args_cli.viewer_preset]
+        env_cfg.viewer.eye = tuple(p["eye"])
+        env_cfg.viewer.lookat = tuple(p["lookat"])
+        print(f"[INFO] Viewer preset '{args_cli.viewer_preset}': eye={env_cfg.viewer.eye}, lookat={env_cfg.viewer.lookat}")
     env_cfg.objects_dir = objects_dir_override
     if env_cfg.objects_dir not in env_cfg.valid_objects_dir:
         env_cfg.valid_objects_dir.append(env_cfg.objects_dir)
