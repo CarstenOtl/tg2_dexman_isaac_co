@@ -38,6 +38,10 @@ dextrah_lab/assets/*
 !dextrah_lab/assets/FrankaFR3/**
 !dextrah_lab/assets/tekken_adof/
 !dextrah_lab/assets/tekken_adof/**
+!dextrah_lab/assets/multi_objects/
+dextrah_lab/assets/multi_objects/*
+!dextrah_lab/assets/multi_objects/visdex_selected/
+!dextrah_lab/assets/multi_objects/visdex_selected/**
 
 # Re-ignore Python cache in assets folders (must come after negation patterns)
 dextrah_lab/assets/**/__pycache__/
