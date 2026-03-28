@@ -113,7 +113,7 @@ def adjust_state_dict_keys(checkpoint_state_dict, model_state_dict):
 
 
 class SafeDagger:
-    def __init__(self, env, config, summaries_dir, nn_dir):
+    def __init__(self, env, config, summaries_dir, nn_dir, max_iterations=None):
         self.world_size = 1
         self.rank = 0
         self.local_rank = 0
@@ -177,7 +177,7 @@ class SafeDagger:
         if self.rank == 0:
             print(f"Using imitation loss: {self.imitation_loss_type}")
         self.optimizer = torch.optim.Adam(self.student_model.parameters(), lr=2e-4, eps=1e-8) # default lr = 1e-4
-        self.num_iters = 100_000
+        self.num_iters = max_iterations if max_iterations is not None else 350_000
 
         # load weights for student and teacher
         if self.config["student"]["ckpt"] is not None:
@@ -204,6 +204,7 @@ class SafeDagger:
         self.play_policy = self.config["play_policy"]
         if self.play_policy is True:
             self.step_student_actions = True
+        self.disable_unsafe_override = self.config.get("disable_unsafe_override", False)
 
         # logging
         self.games_to_track = 100
@@ -545,7 +546,7 @@ class SafeDagger:
             # print(f"Time taken for backward and step: {end_time - start_time} seconds")
 
             stepping_actions = actions_student["actions"] if self.step_student_actions else actions_teacher["actions"]
-            if self.unsafe.any():
+            if self.unsafe.any() and not self.disable_unsafe_override:
                 stepping_actions = stepping_actions.clone()
                 stepping_actions[self.unsafe] = actions_teacher["actions"][self.unsafe].to(
                     dtype=stepping_actions.dtype

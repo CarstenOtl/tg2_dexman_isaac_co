@@ -85,6 +85,18 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 self.distill_max_episode_length = int(self.cfg.distillation_episode_length_s / step_dt)
         # Track whether any arm link is in contact with the table (per-env mask).
         self.arm_table_contact_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # Per-reason termination masks for eval_utils.py classification
+        self.last_object_outside_upper_x = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.last_object_outside_lower_x = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.last_object_outside_upper_y = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.last_object_outside_lower_y = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.last_object_too_low = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.last_hand_too_far = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.last_hand_too_close = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.last_arm_table_contact_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.last_palm_flipped = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.last_robot_unstable = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.last_vel_explosion = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         # Track hand-object contact counts per env.
         self.object_contact_counts = torch.zeros(self.num_envs, device=self.device)
         # Track per-env good-grasp mask (thumb + at least one other finger).
@@ -1154,6 +1166,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             # lifting phase
             "object_to_goal": object_to_goal_reward,
             "lift": lift_reward,
+            "success_bonus": self.cfg.success_bonus_weight * self.in_success_region.float(),
 
             # others
             # "palm_lin_vel_penalty": palm_lin_vel_penalty,
@@ -1358,6 +1371,20 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         object_out = (object_outside_upper_x | object_outside_lower_x |
                       object_outside_upper_y | object_outside_lower_y | object_too_low)
         self._penalty_terminated = object_out | hand_too_far | palm_flipped
+
+        # Expose per-reason masks for eval_utils.py classification
+        self.last_object_outside_upper_x.copy_(object_outside_upper_x)
+        self.last_object_outside_lower_x.copy_(object_outside_lower_x)
+        self.last_object_outside_upper_y.copy_(object_outside_upper_y)
+        self.last_object_outside_lower_y.copy_(object_outside_lower_y)
+        self.last_object_too_low.copy_(object_too_low)
+        self.last_hand_too_far.copy_(hand_too_far)
+        self.last_hand_too_close.copy_(hand_too_close)
+        self.last_arm_table_contact_mask.copy_(self.arm_table_contact_mask)
+        self.last_palm_flipped.copy_(palm_flipped)
+        self.last_robot_unstable.copy_(robot_unstable)
+        self.last_vel_explosion.copy_(vel_explosion)
+
         return out_of_reach, time_out
 
     def _reset_idx(self, env_ids: Sequence[int] | None):

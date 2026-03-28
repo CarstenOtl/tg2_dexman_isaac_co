@@ -32,6 +32,7 @@ UNSAFE_REASON_NAMES: tuple[str, ...] = (
     "hand_too_far",
     "harmful_collision",
     "palm_flipped",
+    "physics_instability",
 )
 
 
@@ -86,6 +87,14 @@ def _get_raw_out_of_reach_reason_masks(ov_env, num_envs: int, device: torch.devi
         ov_env, "last_hand_too_close"
     ) or hasattr(ov_env, "last_arm_table_contact_mask"):
         raw_masks["harmful_collision"] = hand_too_close | arm_table_contact
+
+    # Sim-only physics artifacts (NaN joints, velocity explosion) — won't happen on real hardware
+    physics_unstable = as_bool_mask(getattr(ov_env, "last_robot_unstable", False), num_envs, device)
+    vel_explosion = as_bool_mask(getattr(ov_env, "last_vel_explosion", False), num_envs, device)
+    if bool(physics_unstable.any().item()) or bool(vel_explosion.any().item()) or hasattr(
+        ov_env, "last_robot_unstable"
+    ) or hasattr(ov_env, "last_vel_explosion"):
+        raw_masks["physics_instability"] = physics_unstable | vel_explosion
 
     return raw_masks
 
@@ -172,6 +181,19 @@ def compute_out_of_reach_reason_masks(ov_env, num_envs: int, device: torch.devic
         masks["harmful_collision"] = hand_too_close | arm_table_contact
     if "palm_flipped" not in raw_masks:
         masks["palm_flipped"] = palm_flipped
+    if "physics_instability" not in raw_masks:
+        # Fallback: check for NaN/Inf in joint state as proxy for physics instability
+        try:
+            robot_unstable = (
+                ~torch.isfinite(ov_env._robot_dof_vel_raw).all(dim=-1)
+                | ~torch.isfinite(ov_env.robot_dof_pos).all(dim=-1)
+            )
+            hand_vel_thresh = getattr(ov_env.cfg, "hand_vel_explosion_thresh", 50.0)
+            hand_joint_vels = ov_env._robot_dof_vel_raw[:, 7:]
+            vel_explosion = hand_joint_vels.abs().max(dim=-1).values > hand_vel_thresh
+            masks["physics_instability"] = robot_unstable | vel_explosion
+        except Exception:
+            pass
     return masks
 
 

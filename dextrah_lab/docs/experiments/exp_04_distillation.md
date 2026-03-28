@@ -104,7 +104,110 @@ All runs so far use `env.enable_adr=False`. This means both teacher and student 
 - run2a: vanilla DAgger (ADR 0) — compare distillation methods
 - run2b: SafeDagger with fixed ADR 5 — test physics diversity during distillation
 
+## run1c — 2026-03-27 ~17:30
+
+**Teacher:** ADR 19 multi-object teacher (10) — same as run1b
+**Student:** Fresh start (no resume from run1b — see note below)
+
+**Command:**
+```bash
+cd dextrah_lab/distillation_new
+python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 16 --enable_cameras \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/10_multi_object_adr19_1024envs_03-26_00-21-45/nn/best_dextrah_tekken_lstm.pth \
+  -- \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**CLI gotcha:** `--` separator is required. All `--flags` (task, num_envs, teacher, etc.) must go BEFORE `--`. All `env.*` Hydra overrides must go AFTER `--`. If `--teacher` comes after `--`, argparse doesn't see it and falls back to the default `pretrained_ckpts/` path. If `env.*` overrides come before `--`, Hydra doesn't receive them and `objects_dir` stays at `"replace_me"`.
+
+**Changes from run1b:**
+- **16 envs** (up from 8) — more object diversity per batch. 32 envs caused hang/stuck on this GPU.
+- **350k iterations** (up from 100k) — `distillation_safedagger.py` default bumped to match `distillation_transformer.py`
+- Fresh start instead of resume — `--network` path resolution was broken (resolved relative to repo root, not `distillation_new/`)
+
+**Why fresh start instead of resume from run1b:**
+- Attempted to resume with `--network` flag but path resolution joined relative paths with repo root instead of `distillation_new/`
+- At 100k iters with beta=0.875, the student had barely started acting independently — not much value in the checkpoint
+- Fresh start with 32 envs and 350k iters is a cleaner experiment
+
+**What to watch:**
+- Beta schedule — needs to drop well below 0.5 for student to be viable standalone
+- Standalone eval (via `eval_student.py`) — run1b showed 0% lift when student acted solo despite 87.5% lifted during distillation (teacher was doing the work)
+
+**Results (350k iterations):**
+
+| Metric | run1b (100k, 8 envs) | run1c (350k, 16 envs) |
+|---|---|---|
+| Imitation Loss | 1.48 | 1.40 |
+| Beta | 0.875 | 0.75 |
+| Lifted | 62.5% | 62.5% |
+| In goal | 37.5% | 37.5% |
+| Total reward | 62.0 | 50.98 |
+| Lift reward | 28.2 | 18.9 |
+| Contact reward | 16.0 | 18.0 |
+| Avg ep step | — | 173 |
+
+**Checkpoint:** `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_27-19-13-17/nn/dextrah_student_350000_iters.pth`
+
+**Standalone eval (2026-03-28):**
+```bash
+python eval_student.py --headless --task=dextrah_fr3_agilehand --num_envs 8 --enable_cameras --checkpoint dextrah_student_safedagger_stereo_transformer.pth --num_episodes 5 env.distillation=True env.simulate_stereo=True env.objects_dir=multi_objects/visdex_selected
+```
+
+| Metric | Value |
+|---|---|
+| Lift success | 45% |
+| Unsafe episode rate | 67.5% |
+| Harmful collision | 33.3% of failures |
+| Object out of bound | 29.6% of failures |
+| Hand too far | 0% |
+| Palm flipped | 0% |
+| Total episodes | 40 (8 envs × 5 rollouts) |
+
+**Standalone eval — 16 envs, 80 episodes (2026-03-28):**
+
+| Metric | 8 envs (40 eps) | 16 envs (80 eps) |
+|---|---|---|
+| Lift success | 45.0% | 36.25% |
+| Unsafe rate | 67.5% | 67.5% |
+| Harmful collision | 33.3% | 40.7% |
+| Object out of bound | 29.6% | 33.3% |
+| Palm flipped | 0% | 1.9% |
+| Hand too far | 0% | 0% |
+
+**Assessment:** 350k iters with 16 envs produces a student with ~36-45% solo lift — significant improvement over run1b (0% at 100k). Unsafe rate consistent at 67.5%. Main failure modes are harmful collisions (hand hitting table, 41%) and object knockoff (33%). Arm control is solid (no hand-too-far, minimal palm flip). More iterations or faster beta decay could help, but collision avoidance may need targeted work.
+
+## run2a — Vanilla DAgger with KL loss (2026-03-28)
+
+**Motivation:** DextrAH-RGB paper uses vanilla DAgger with KL loss, not SafeDagger with L2. Key differences:
+- **KL divergence loss** — paper found KL always outperforms L2 across all seeds
+- **No unsafe override** — student always steps its own actions (no teacher takeover for "unsafe" envs)
+- SafeDagger's per-env safety gating creates chicken-and-egg: student only practices solo where already good
+
+**Teacher:** ADR 19 multi-object teacher (10) — same as run1b/1c
+
+**Command:**
+```bash
+cd dextrah_lab/distillation_new
+python run_distillation_safedagger_fr3_agilehand.py --task=dextrah_fr3_agilehand --num_envs 16 --enable_cameras --vanilla_dagger --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/10_multi_object_adr19_1024envs_03-26_00-21-45/nn/best_dextrah_tekken_lstm.pth -- env.distillation=True env.simulate_stereo=True env.objects_dir=multi_objects/visdex_selected env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Changes from run1c:**
+- `--vanilla_dagger` flag: sets KL loss + disables unsafe env override
+- Everything else identical (16 envs, 350k iters, ADR disabled)
+
+**Results:** (to be filled)
+
 ## Fixes applied during experimentation
 
 - `eval_student.py`: added `import dextrah_lab.tasks.fr3_agilehand.gym_setup` (was missing, caused eval to hang)
+- `eval_student.py`: added `gym.wrappers.RecordVideo` wrapping for `--video` flag (was missing, no MP4 produced)
+- `eval_student.py`: changed `env.env` → `env.unwrapped` (4 places) to support `RecordVideo` wrapper chain
 - `eval_student.py`: relaxed `_reason_counts_checked` from hard crash to warning for unclassified unsafe episodes (fr3_agilehand env doesn't expose `last_*` termination reason attributes)
+- `dextrah_fr3_agilehand_env.py`: added `self.last_*` termination reason masks (matching upstream `tg2_inspirehand` pattern) so `eval_utils.py` can classify unsafe episodes
+- `distillation_safedagger.py`: bumped default `num_iters` 100k → 350k, added `max_iterations` param
+- `run_distillation_safedagger_fr3_agilehand.py`: wired `--max_iterations` CLI flag through to `SafeDagger`
+- `eval_teacher.py`: added `import dextrah_lab.tasks.fr3_agilehand.gym_setup`

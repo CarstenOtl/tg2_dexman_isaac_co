@@ -24,9 +24,8 @@ from isaaclab.app import AppLauncher
 
 # CLI
 parser = argparse.ArgumentParser(description="Evaluate a student policy checkpoint.")
-parser.add_argument("--video", action="store_true", default=False, help="Record videos during evaluation.")
-parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
-parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
+parser.add_argument("--video", action="store_true", default=False, help="Record video (MP4) of the entire evaluation.")
+parser.add_argument("--video_length", type=int, default=0, help="Max video length in steps (0 = entire eval).")
 parser.add_argument("--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations.")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, required=True, help="Task name.")
@@ -64,6 +63,12 @@ parser.add_argument(
     type=str,
     default=None,
     help="Optional output JSON filename prefix override.",
+)
+parser.add_argument(
+    "--viewer_preset",
+    type=str,
+    default=None,
+    help="Viewer preset name (e.g. 32env, 8env, 1env). See env_cfg.viewer_presets.",
 )
 
 AppLauncher.add_app_launcher_args(parser)
@@ -204,7 +209,7 @@ class StudentEvaluator:
     def __init__(self, env, config, checkpoint_path, eval_max_steps=None, eval_lift_hold_s=0.5):
         self.env = env
         self.eval_env = None
-        self.ov_env = env.env
+        self.ov_env = env.unwrapped
         self.num_envs = self.ov_env.num_envs
         self.num_actions = self.ov_env.num_actions
         self.num_actions_student = self.num_actions
@@ -311,7 +316,7 @@ class StudentEvaluator:
         eval_start_t = time.time()
 
         eval_env = self.eval_env if self.eval_env is not None else self.env
-        eval_ov_env = eval_env.env
+        eval_ov_env = eval_env.unwrapped
         if eval_ov_env.num_envs != self.num_envs:
             print(
                 "Skipping eval: eval_env num_envs must match training num_envs "
@@ -585,6 +590,15 @@ def main(env_cfg, agent_cfg: dict):
     env = None
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
 
+    if args_cli.viewer_preset is not None:
+        presets = getattr(env_cfg, "viewer_presets", {})
+        if args_cli.viewer_preset not in presets:
+            raise ValueError(f"Unknown viewer preset '{args_cli.viewer_preset}'. Available: {list(presets.keys())}")
+        p = presets[args_cli.viewer_preset]
+        env_cfg.viewer.eye = tuple(p["eye"])
+        env_cfg.viewer.lookat = tuple(p["lookat"])
+        print(f"[INFO] Viewer preset '{args_cli.viewer_preset}': eye={env_cfg.viewer.eye}, lookat={env_cfg.viewer.lookat}")
+
     if args_cli.objects_dir:
         env_cfg.objects_dir = args_cli.objects_dir
         if (
@@ -602,14 +616,24 @@ def main(env_cfg, agent_cfg: dict):
         )
         stage_t = time.time()
         env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+        if args_cli.video:
+            video_dir = os.path.join(os.path.dirname(os.path.abspath(args_cli.checkpoint)), "videos", "eval_student")
+            video_kwargs = {
+                "video_folder": video_dir,
+                "step_trigger": lambda step: step == 0,
+                "video_length": args_cli.video_length if args_cli.video_length > 0 else 10**9,
+                "disable_logger": True,
+            }
+            print(f"[INFO] Recording video to: {video_dir}")
+            env = gym.wrappers.RecordVideo(env, **video_kwargs)
         print(
-            f"[INFO] Environment ready in {time.time() - stage_t:.1f}s (num_envs={env.env.num_envs}).",
+            f"[INFO] Environment ready in {time.time() - stage_t:.1f}s (num_envs={env.unwrapped.num_envs}).",
             flush=True,
         )
 
         parent_path = str(pathlib.Path(__file__).parent.parent.parent.resolve())
         agent_cfg_folder = "dextrah_lab/tasks/tg2_inspirehand/agents"
-        if not env.env.simulate_stereo:
+        if not env.unwrapped.simulate_stereo:
             raise ValueError("eval_student only supports stereo transformer policies for distillation_new.")
         student_cfg = os.path.join(parent_path, agent_cfg_folder, "rl_games_ppo_stereo_transformer.yaml")
         with open(student_cfg, "r", encoding="utf-8") as f:

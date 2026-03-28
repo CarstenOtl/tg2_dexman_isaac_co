@@ -33,6 +33,18 @@ parser.add_argument(
     default=45.0,
     help="Max palm pose angle (degrees); must be positive.",
 )
+parser.add_argument(
+    "--starting_adr_increments",
+    type=int,
+    default=None,
+    help="Set ADR starting increments (enables ADR automatically).",
+)
+parser.add_argument(
+    "--viewer_preset",
+    type=str,
+    default=None,
+    help="Viewer preset name (e.g. 32env, 8env, 1env). See env_cfg.viewer_presets.",
+)
 # AppLauncher args
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -119,6 +131,18 @@ def main():
     else:
         env_cfg.objects_dir = args_cli.objects_dir
     env_cfg.max_pose_angle = args_cli.max_pose_angle
+    if args_cli.viewer_preset is not None:
+        presets = getattr(env_cfg, "viewer_presets", {})
+        if args_cli.viewer_preset not in presets:
+            raise ValueError(f"Unknown viewer preset '{args_cli.viewer_preset}'. Available: {list(presets.keys())}")
+        p = presets[args_cli.viewer_preset]
+        env_cfg.viewer.eye = tuple(p["eye"])
+        env_cfg.viewer.lookat = tuple(p["lookat"])
+        print(f"[INFO] Viewer preset '{args_cli.viewer_preset}': eye={env_cfg.viewer.eye}, lookat={env_cfg.viewer.lookat}")
+    if args_cli.starting_adr_increments is not None:
+        env_cfg.enable_adr = True
+        env_cfg.starting_adr_increments = args_cli.starting_adr_increments
+        print(f"[INFO] ADR enabled with starting_adr_increments={args_cli.starting_adr_increments}")
     agent_cfg = load_cfg_from_registry(args_cli.task, "rl_games_cfg_entry_point")
 
     rl_device = agent_cfg["params"]["config"]["device"]

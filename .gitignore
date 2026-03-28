@@ -24,6 +24,7 @@ object_textures/
 table_textures/
 curated_table_textures/
 eval_results/
+videos/
 dextrah_lab/assets/*
 !dextrah_lab/assets/kuka_inspirehand/
 !dextrah_lab/assets/kuka_inspirehand/**

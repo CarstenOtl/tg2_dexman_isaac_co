@@ -26,6 +26,7 @@ parser.add_argument("--play_policy", type=bool, default=False, help="Play a dist
 parser.add_argument("--data_aug", action="store_true", default=False, help="Whether to use data augmentation for student")
 parser.add_argument("--mono", action="store_true", default=False, help="Use monocular instead of stereo (default: stereo)")
 parser.add_argument("--no_transformer", action="store_true", default=False, help="Disable transformer student (default: transformer)")
+parser.add_argument("--vanilla_dagger", action="store_true", default=False, help="Use vanilla DAgger (KL loss, no unsafe override) instead of SafeDAgger")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -145,8 +146,9 @@ def main(env_cfg, agent_cfg: dict):
             "ckpt": teacher_ckpt,
             "obs_type": "expert_policy",
         },
-        "imitation_loss_type": "l2",
+        "imitation_loss_type": "kl" if args_cli.vanilla_dagger else "l2",
         "play_policy": args_cli.play_policy,
+        "disable_unsafe_override": args_cli.vanilla_dagger,
     }
 
     model_builder.register_network("a2c_aux_depth_enc", A2CWithAuxDepthBuilder)
@@ -158,7 +160,7 @@ def main(env_cfg, agent_cfg: dict):
     model_builder.register_network("a2c_mono_resnet", A2CMonoResnetBuilder)
     model_builder.register_network("a2c_mono_transformer", A2CMonoTransformerBuilder)
 
-    dagger = SafeDagger(env, dagger_config, summaries_dir=summaries_dir, nn_dir=nn_dir)
+    dagger = SafeDagger(env, dagger_config, summaries_dir=summaries_dir, nn_dir=nn_dir, max_iterations=args_cli.max_iterations)
     dagger.distill()
     dagger.save(f"dextrah_student_safedagger_{vision_tag}_{arch_tag}")
 

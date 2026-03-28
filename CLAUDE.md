@@ -188,6 +188,12 @@ Each robot/hand combo lives in `dextrah_lab/tasks/<task_name>/` with this patter
 - RNN hidden states are maintained per teacher model independently
 - Reads `env.object_names` and `env.multi_object_idx` from the environment
 
+### SafeDagger Distillation Details
+- Default iterations: 350k (`distillation_safedagger.py`), overridable via `--max_iterations` on launch script
+- Resume student from checkpoint: `--network <path_to_student.pth>` on the `run_distillation_safedagger*.py` script
+- Distillation metrics (lifted %, in_goal %) include teacher actions — student standalone performance is lower. Eval with `eval_student.py` to see true solo performance.
+- `env.env` breaks when `RecordVideo` wrapper is active — always use `env.unwrapped` to access the Isaac env
+
 ### Config Override Pattern
 
 Configs are overridden via CLI using dot-notation (Hydra-style):
@@ -251,6 +257,14 @@ Every script that accepts `--task` must import the task's `gym_setup` module (e.
 ### Video recording
 `--video` flag (via `gym.wrappers.RecordVideo`) exists in: `train.py`, `eval_student.py`, all `run_distillation*.py`, legacy `eval.py`. NOT in: `eval_teacher.py`, `play_test.py` — use `--livestream 2` + external screen capture for those.
 
+### Running headless
+`eval_student.py` and other scripts with `--enable_cameras` will hang on machines without a display unless `--headless` is passed. GLFW initialization warnings are the symptom. Always use `--headless` when running remotely/SSH.
+
+### CLI arg ordering for Hydra overrides
+`env.*` overrides (e.g. `env.distillation=True`) go as bare positional args — `parse_known_args()` routes them to Hydra automatically. All `--flags` must come before `env.*` args. Do NOT use `--` separator with `eval_student.py` — bash interprets remaining args as separate shell commands.
+- `eval_teacher.py` uses `parse_args()` (NOT `parse_known_args()`), so `env.*` Hydra overrides don't work. Use `--objects_dir` flag instead.
+- `--teacher` flag in distillation scripts resolves relative paths as `<repo_root>/pretrained_ckpts/<value>`. Use absolute paths to skip this. The `--teacher` flag must come BEFORE the `--` separator, otherwise argparse doesn't see it.
+
 - Environment configs use Isaac Lab's `@configclass` decorator pattern
 - GPU tensors throughout — all observation/action processing is batched on device
 - ADR parameters are specified as `[min, max]` range lists in config
@@ -283,6 +297,11 @@ Every script that accepts `--task` must import the task's `gym_setup` module (e.
 ### Early Termination Penalty (fr3_agilehand)
 
 - `out_of_reach` (not `time_out`) is the done flag for premature episode endings. Set `early_termination_penalty: float` in `env_cfg.py`; env reads it via `getattr(self.cfg, "early_termination_penalty", 0.0)` and applies a flat penalty tensor in `_get_rewards` after `_get_dones` sets `self._early_terminated`.
+
+### Termination Reason Masks (fr3_agilehand)
+- `_get_dones()` must expose `self.last_*` boolean masks (e.g. `last_hand_too_far`, `last_palm_flipped`, `last_object_outside_upper_x`, etc.) for `eval_utils.py` to classify unsafe episode reasons. Pre-allocate in `__init__`, use `.copy_()` in `_get_dones()` — matches upstream `tg2_inspirehand` pattern.
+- Without these, `eval_student.py` crashes with `RuntimeError: unclassified unsafe episodes` because the fallback recomputation in `eval_utils.py` references `tg2_inspirehand`-specific attributes.
+- Eval categories: `object_out_of_bound`, `hand_too_far`, `harmful_collision`, `palm_flipped`, `physics_instability` (sim-only: `robot_unstable` + `vel_explosion`). Defined in `eval_utils.py:UNSAFE_REASON_NAMES`.
 
 ### Camera Config (fr3_agilehand distillation)
 

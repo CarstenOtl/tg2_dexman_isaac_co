@@ -85,6 +85,14 @@ parser.add_argument(
         "or ./logs/eval_tb_<timestamp> in single-checkpoint mode."
     ),
 )
+parser.add_argument(
+    "--objects_dir",
+    type=str,
+    default=None,
+    help="Override objects directory (e.g. multi_objects/visdex_selected).",
+)
+parser.add_argument("--video", action="store_true", default=False, help="Record video (MP4) of the evaluation.")
+parser.add_argument("--video_length", type=int, default=0, help="Max video length in steps (0 = entire eval).")
 # AppLauncher args
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -536,7 +544,17 @@ def _run_eval_for_checkpoint(
 
     stage_t = time.time()
     print("[INFO] Creating evaluation environment...", flush=True)
-    env = gym.make(args_cli.task, cfg=env_cfg)
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    if args_cli.video:
+        video_dir = str(_default_logs_root() / "eval_videos")
+        video_kwargs = {
+            "video_folder": video_dir,
+            "step_trigger": lambda step: step == 0,
+            "video_length": args_cli.video_length if args_cli.video_length > 0 else 10**9,
+            "disable_logger": True,
+        }
+        print(f"[INFO] Recording video to: {video_dir}")
+        env = gym.wrappers.RecordVideo(env, **video_kwargs)
     env = RlGamesVecEnvWrapper(env, rl_device, clip_obs, clip_actions)
     print(
         f"[INFO] Environment ready in {time.time() - stage_t:.1f}s "
@@ -747,7 +765,17 @@ def _run_eval_for_teacher_pool(
 
     stage_t = time.time()
     print("[INFO] Creating evaluation environment...", flush=True)
-    env = gym.make(args_cli.task, cfg=env_cfg)
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    if args_cli.video:
+        video_dir = str(_default_logs_root() / "eval_videos")
+        video_kwargs = {
+            "video_folder": video_dir,
+            "step_trigger": lambda step: step == 0,
+            "video_length": args_cli.video_length if args_cli.video_length > 0 else 10**9,
+            "disable_logger": True,
+        }
+        print(f"[INFO] Recording video to: {video_dir}")
+        env = gym.wrappers.RecordVideo(env, **video_kwargs)
     env = RlGamesVecEnvWrapper(env, rl_device, clip_obs, clip_actions)
     print(
         f"[INFO] Environment ready in {time.time() - stage_t:.1f}s "
@@ -1167,7 +1195,8 @@ def main():
 
         tb_writer, _ = _create_tb_writer(teacher_mode=False)
         avg_success, unsafe_episode_rate, total_done, num_envs, reason_percentages, unsafe_eps = _run_eval_for_checkpoint(
-            checkpoint_path=args_cli.checkpoint
+            checkpoint_path=args_cli.checkpoint,
+            objects_dir_override=args_cli.objects_dir,
         )
         reason_percentages_full = _reason_percentages_with_defaults(reason_percentages)
         print(

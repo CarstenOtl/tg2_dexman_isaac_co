@@ -17,7 +17,7 @@ from dextrah_lab.assets.fr3_tekken_adof.fr3_tekken_left import FR3_TEK_LEFT_CONF
 import isaaclab.envs.mdp as mdp
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, RigidObjectCfg
-from isaaclab.envs import DirectRLEnvCfg
+from isaaclab.envs import DirectRLEnvCfg, ViewerCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.markers import VisualizationMarkersCfg
@@ -454,7 +454,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot/tekken_left_adof/Index_Distal_Phalanx",
         update_period=0.0,
         history_length=6,
-        debug_vis=True,  # Enable to see sensor location
+        debug_vis=False,
         track_pose=True,  # Track sensor pose
         # Filter to only include object contacts (excludes robot self-collisions and table)
         filter_prim_paths_expr=[
@@ -477,7 +477,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot/tekken_left_adof/Middle_Distal_Phalanx",
         update_period=0.0,
         history_length=6,
-        debug_vis=True,
+        debug_vis=False,
         track_pose=True,
         # Filter to only include object contacts (excludes robot self-collisions and table)
         filter_prim_paths_expr=[
@@ -500,7 +500,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot/tekken_left_adof/Ring_Distal_Phalanx",
         update_period=0.0,
         history_length=6,
-        debug_vis=True,
+        debug_vis=False,
         track_pose=True,
         # Filter to only include object contacts (excludes robot self-collisions and table)
         filter_prim_paths_expr=[
@@ -523,7 +523,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot/tekken_left_adof/Pinky_Distal_Phalanx",
         update_period=0.0,
         history_length=6,
-        debug_vis=True,
+        debug_vis=False,
         track_pose=True,
         # Filter to only include object contacts (excludes robot self-collisions and table)
         filter_prim_paths_expr=[
@@ -568,7 +568,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot/tekken_left_adof/Thumb_Distal_Phalanx",
         update_period=0.0,
         history_length=6,
-        debug_vis=True,
+        debug_vis=False,
         track_pose=True,
         # Filter to only include object contacts (excludes robot self-collisions and table)
         filter_prim_paths_expr=[
@@ -674,6 +674,21 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         },
     )
 
+    # viewer — front-facing camera for video recording (default: 32 envs)
+    viewer: ViewerCfg = ViewerCfg(
+        eye=(-12.0, 0.0, 3.0),
+        lookat=(2.0, 0.0, 0.0),
+        resolution=(1920, 1080),
+        origin_type="world",
+    )
+
+    # Named viewer presets — selected via --viewer_preset in eval/play scripts
+    viewer_presets: dict = {
+        "32env": {"eye": (-12.0, 0.0, 3.0), "lookat": (2.0, 0.0, 0.0)},
+        "8env": {"eye": (-5.0, 0.0, 2.0), "lookat": (1.0, 0.0, 0.3)},
+        "1env": {"eye": (-1.5, 0.0, 1.0), "lookat": (0.5, 0.0, 0.4)},
+    }
+
     # scene
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=2., replicate_physics=False)
 
@@ -707,8 +722,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     finger_curl_reg_max = 0.0 # min penalty for finger curl
 
     #phase 3: lifting
-    object_to_goal_weight = 20 #default 5
+    object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
+    success_bonus_weight = 10.0  # flat bonus per step when object is in goal region
     lift_sharpness = 5.0 #default 8.5; reduced to flatten lift gradient — easier to discover
 
     # extras
@@ -725,6 +741,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "episode_length",
         "object_to_goal",
         "lift",
+        "success_bonus",
     ]
 
     # Optional: print per-step reward breakdown for the first N steps (debugging aid).

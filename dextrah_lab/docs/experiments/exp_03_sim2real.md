@@ -103,3 +103,20 @@ The LSTM needs to rebuild temporal representations from scratch. At ADR 0-17 it 
 **Sim2real curriculum:** thumb_rot_vel (20→0.21), arm_14_effort (100→87), arm_57_effort (50→12)
 
 **Why:** Checkpoint resume fails due to LSTM cold-start. Train from scratch with all sim2real terms from the beginning so the LSTM builds temporal context continuously through the full ADR range.
+
+**Result:** Reached ADR 12/50 after 45k epochs, then plateaued. `in_success_region` hovered at 0.25–0.35, barely crossing the 0.4 threshold. Policy lifts well (~54%) but doesn't bring objects to goal consistently. Root cause: reward imbalance — `contact` (24) and `lift` (16) dominate, while `obj_to_goal` (4.7) is too weak. Policy optimizes for holding objects rather than moving them to the goal.
+
+**Lesson:** `object_to_goal_weight=20` is too low relative to contact/lift rewards. Need stronger goal-reaching incentive.
+
+### run1e — 2026-03-28
+**Checkpoint:** none — fresh start from random init
+**Config:** 2048 envs across 2 GPUs (`--distributed`, `nproc_per_node=2`), starting_adr=0, min_steps_for_dr_change=3k, max_epochs=100000
+**Finger gain ADR:** all groups (0.1, 1.0) for both stiffness and damping
+**Sim2real curriculum:** thumb_rot_vel (20→0.21), arm_14_effort (100→87), arm_57_effort (50→12)
+
+**Reward changes:**
+- `object_to_goal_weight`: 20 → 40 (double the goal-reaching gradient)
+- Added `success_bonus_weight=10.0` — flat per-step bonus when object is within `object_goal_tol` (0.1m) of goal
+- Both changes aim to make goal-reaching competitive with contact/lift rewards
+
+**Why:** Fresh start with rebalanced rewards and multi-GPU for faster training.
