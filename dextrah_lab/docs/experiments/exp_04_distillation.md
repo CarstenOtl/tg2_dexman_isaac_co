@@ -199,6 +199,50 @@ python run_distillation_safedagger_fr3_agilehand.py --task=dextrah_fr3_agilehand
 - `--vanilla_dagger` flag: sets KL loss + disables unsafe env override
 - Everything else identical (16 envs, 350k iters, ADR disabled)
 
+**Results (350k iterations, 2026-03-29):**
+
+| Metric | run1c (SafeDagger + L2) | run2a (vanilla DAgger + KL) | Teacher |
+|---|---|---|---|
+| **Lift success** | 36.25% | **50.0%** | 96.25% |
+| Unsafe rate | 67.5% | 75.0% | 53.75% |
+| Harmful collision | 40.7% | 45.0% | 11.6% |
+| Physics instability | n/a | 43.3% | 55.8% |
+| Object out of bound | 33.3% | 11.7% | 32.6% |
+
+**Checkpoint:** `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_28-15-55-43/nn/dextrah_student_350000_iters.pth`
+
+**Assessment:** Vanilla DAgger + KL outperforms SafeDagger + L2: lift success 36→50%, object knockoff 33→12%. Student is now at 52% of teacher ceiling (50/96). Physics instability accounts for 43% of failures (sim-only, won't happen on hardware). Main real-world failure remains harmful collision (45% vs teacher's 12%).
+
+**Stored checkpoint:** `stored_policies/fr3_agilehand/distillation/vanilla_dagger_kl_run2a_350k/`
+
+## run2b — Vanilla DAgger + KL + data_aug, 700k iters (2026-03-29)
+
+**Motivation:** run2a showed KL + vanilla DAgger improves lift 36→50%. KL loss and sigma loss were still decreasing at 350k — more iterations should help. Adding `--data_aug` for visual diversity (random backgrounds, color jitter) to improve generalization and sim2real readiness.
+
+**Teacher:** ADR 19 multi-object teacher (10) — same as all prior runs
+
+**Command:**
+```bash
+cd dextrah_lab/distillation_new
+python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand \
+  --num_envs 16 \
+  --enable_cameras \
+  --vanilla_dagger \
+  --data_aug \
+  --max_iterations 700000 \
+  --teacher best_dextrah_tekken_lstm.pth \
+  env.distillation=True \
+  env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.enable_adr=False \
+  env.disable_arm_randomization=True
+```
+
+**Changes from run2a:**
+- **700k iterations** (up from 350k) — KL loss still decreasing at 350k
+- **`--data_aug`** enabled — visual augmentation for generalization
+
 **Results:** (to be filled)
 
 ## Fixes applied during experimentation
