@@ -88,6 +88,8 @@ python train.py --task=dextrah_fr3_agilehand --seed 42 --livestream 2 \
   env.use_cuda_graph=False
 ```
 
+**Multi-object training needs ≥64 envs** (ideally 1024) — with 16 envs across 13 objects, each object gets ~1 env per batch, causing oscillating gradients and unstable learning. Use `num_envs ≥ 64 * num_objects` for stable training.
+
 ### Teacher Training — full speed (headless, large batch)
 ```bash
 cd dextrah_lab/rl_games
@@ -314,6 +316,8 @@ Every script that accepts `--task` must import the task's `gym_setup` module (e.
 ### Early Termination Penalty (fr3_agilehand)
 
 - `out_of_reach` (not `time_out`) is the done flag for premature episode endings. Set `early_termination_penalty: float` in `env_cfg.py`; env reads it via `getattr(self.cfg, "early_termination_penalty", 0.0)` and applies a flat penalty tensor in `_get_rewards` after `_get_dones` sets `self._early_terminated`.
+- `_penalty_terminated` is a subset of `_early_terminated` — only includes intentional bad behavior (object OOB, hand OOB, palm flip). Excludes physics artifacts (vel_explosion, robot_unstable, hand_too_close, arm_table_contact) which should not be penalized.
+- `_apply_actuator_curriculum()` writes effort limits and velocity limits to sim on every reset + after ADR steps. Uses `root_physx_view` (CPU tensors — index with `env_ids.cpu()`). Covers params NOT handled by EventTerms: `thumb_rot_vel_limit`, `arm_14_effort_limit`, `arm_57_effort_limit`.
 
 ### Termination Reason Masks (fr3_agilehand)
 - `_get_dones()` must expose `self.last_*` boolean masks (e.g. `last_hand_too_far`, `last_palm_flipped`, `last_object_outside_upper_x`, etc.) for `eval_utils.py` to classify unsafe episode reasons. Pre-allocate in `__init__`, use `.copy_()` in `_get_dones()` — matches upstream `tg2_inspirehand` pattern.
