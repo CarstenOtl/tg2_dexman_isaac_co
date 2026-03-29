@@ -88,24 +88,35 @@ python train.py --task=dextrah_fr3_agilehand --seed 42 --livestream 2 \
   env.use_cuda_graph=False
 ```
 
-### Teacher Training — full speed (headless, large batch, resume from checkpoint)
+### Teacher Training — full speed (headless, large batch)
 ```bash
 cd dextrah_lab/rl_games
 python train.py --headless --task=dextrah_fr3_agilehand --seed 42 \
-  --num_envs 512 \
+  --num_envs 1024 \
   agent.params.config.horizon_length=16 \
-  agent.params.config.minibatch_size=2048 \
-  agent.params.config.central_value_config.minibatch_size=2048 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
   agent.params.config.mini_epochs=4 \
   agent.params.config.learning_rate=0.0001 \
   agent.params.config.multi_gpu=False \
-  agent.params.config.max_epochs=20000 \
+  agent.params.config.max_epochs=100000 \
   agent.wandb_activate=False \
   env.success_for_adr=0.4 \
-  env.objects_dir=test_object \
-  env.use_cuda_graph=False \
-  --checkpoint logs/rl_games/dextrah_tekken_lstm/<run>/nn/dextrah_tekken_lstm.pth
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
 ```
+
+### Teacher Training — multi-GPU (only if single GPU lacks VRAM)
+```bash
+export CUDA_VISIBLE_DEVICES=0,3  # select GPUs
+python -m torch.distributed.run --nproc_per_node=2 \
+  train.py --headless --distributed --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 2048 \
+  agent.params.config.minibatch_size=8192 \
+  agent.params.config.central_value_config.minibatch_size=8192 \
+  ...
+```
+**Note:** Multi-GPU is ~2x slower per epoch than single GPU due to gradient sync overhead. Prefer single GPU with 1024 envs.
 
 ### Evaluate Teacher Policy
 ```bash
@@ -193,6 +204,9 @@ Each robot/hand combo lives in `dextrah_lab/tasks/<task_name>/` with this patter
 - Resume student from checkpoint: `--network <path_to_student.pth>` on the `run_distillation_safedagger*.py` script
 - Distillation metrics (lifted %, in_goal %) include teacher actions — student standalone performance is lower. Eval with `eval_student.py` to see true solo performance.
 - `env.env` breaks when `RecordVideo` wrapper is active — always use `env.unwrapped` to access the Isaac env
+- **Loss functions**: KL divergence (`"kl"`) outperforms L2 for distillation (DextrAH-RGB paper finding). Set via `imitation_loss_type` in dagger_config or `--vanilla_dagger` flag (which sets KL + disables unsafe override).
+- **Vanilla DAgger vs SafeDagger**: `--vanilla_dagger` = KL loss + student always steps (no teacher override). SafeDagger (default) = L2 loss + teacher overrides unsafe envs. Vanilla DAgger produces better standalone students (50% vs 36% lift at 350k iters).
+- **Noisy losses with vanilla DAgger + data_aug are expected** — no teacher safety net + visual augmentation variance. Check trends with TensorBoard smoothing (0.9+), not per-step values.
 
 ### Config Override Pattern
 
@@ -248,6 +262,9 @@ Training experiment logs are tracked in `dextrah_lab/docs/experiments/`:
 - **ADR state is NOT saved in .pth checkpoints** — restored from `cfg.starting_adr_increments` (default 0). Set `env.starting_adr_increments=N` via CLI when resuming.
 - **EventTerm field names in EventCfg must exactly match keys in `adr_cfg_dict`** — the ADR system looks up terms by name via `event_manager.get_term_cfg(term_name)`.
 - **No Isaac Lab API for dynamic `max_depenetration_velocity`** — set at USD spawn time only. `write_joint_*_to_sim` exists for: stiffness, damping, effort_limit, velocity_limit, position_limit, armature, friction.
+- **LSTM hidden states are NOT saved in checkpoints** — reset to zero on load. Resuming LSTM policies from checkpoints at high ADR levels causes degradation because the LSTM can't rebuild temporal context fast enough. Prefer training from scratch over checkpoint resume for LSTM policies.
+- **`min_steps_for_dr_change` counts reset-batch calls, not epochs** — with 1024 envs, `_reset_idx` is called multiple times per epoch. `5 * episode_steps = 3000` ≈ 300-600 epochs per ADR step. Scale accordingly.
+- **Finger gain ADR ranges** — proven sim2real range is `(0.5, 2.0)` (matching kuka_allegro/tg2_inspirehand). More aggressive ranges like `(0.1, 1.0)` cause vel_explode and training instability without sim2real benefit, since the real hardware PID handles position tracking independently.
 
 ## Code Conventions
 
@@ -287,7 +304,7 @@ Every script that accepts `--task` must import the task's `gym_setup` module (e.
 - `RigidBodyMaterialCfg` supports `friction_combine_mode` and `restitution_combine_mode`: `"average" | "min" | "multiply" | "max"` (verified in Isaac Lab source)
 - Global sim material uses `friction_combine_mode="max"` and `restitution_combine_mode="max"` — rubber fingertip friction dominates contact
 - Fingertip: static=2.0, dynamic=1.5 at episode start; Object: static=1.0, dynamic=1.0 (ADR widens ranges during training)
-- `hand_action_rate_penalty_scale=2.5` — finger joints penalized 2.5× more than arm for jerky actions
+- `hand_action_rate_penalty_scale=1.5` — finger joints penalized 1.5× more than arm for jerky actions
 
 ### Joint Init Positions (fr3_agilehand)
 

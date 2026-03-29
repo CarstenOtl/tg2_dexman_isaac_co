@@ -104,22 +104,22 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
             joint_names_expr=[r"revolute_.*_mcp_pitch"],
             effort_limit_sim=2.0,
             velocity_limit_sim=8.0,
-            stiffness=10.0,
-            damping=6.0,              # 3→6: more damping, smoother contact
+            stiffness=20.0,
+            damping=2.0,
         ),
         "mcp_yaw": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_yaw"],
             effort_limit_sim=2.0,
             velocity_limit_sim=8.0,
-            stiffness=10.0,
-            damping=6.0,              # 3→6
+            stiffness=20.0,
+            damping=2.0,
         ),
         "pip": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_pip"],
             effort_limit_sim=2.0,
             velocity_limit_sim=8.0,
-            stiffness=10.0,
-            damping=6.0,              # 3→6
+            stiffness=30.0,
+            damping=2.0,
         ),
         #
         # "franka_tekken_actuators": ImplicitActuatorCfg(

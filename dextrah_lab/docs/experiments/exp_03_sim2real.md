@@ -120,3 +120,25 @@ The LSTM needs to rebuild temporal representations from scratch. At ADR 0-17 it 
 - Both changes aim to make goal-reaching competitive with contact/lift rewards
 
 **Why:** Fresh start with rebalanced rewards and multi-GPU for faster training.
+
+**Result:** Reached ADR 19/50 after 21k epochs (~27 hours). `in_goal_now: 35%`, `successes: 34%`, `lifted_now: 41%`. `vel_explode=65` per cycle still high. Multi-GPU was 2x slower per epoch than single GPU (790 vs 1667 epochs/hr) — gradient sync overhead via PCIe (GPUs 0 and 3, no NVLink). 1024 envs on single GPU is sufficient and faster.
+
+**Lesson:** `torch.distributed` not worth it for this workload — single GPU reaches same ADR in half the wall-clock time. Multi-GPU only useful when single GPU can't fit enough envs in VRAM.
+
+### run1f — 2026-03-30
+**Checkpoint:** none — fresh start from random init
+**Config:** 1024 envs, single GPU, starting_adr=0, min_steps_for_dr_change=3k, max_epochs=100000
+
+**Physics changes (from Isaac gain tuner testing):**
+- mcp_pitch: stiffness 10→20, damping 6→2
+- mcp_yaw: stiffness 10→20, damping 6→2
+- pip: stiffness 10→30, damping 6→2
+- Better joint tracking performance verified in gain tuner
+
+**ADR changes:**
+- All finger gain ranges: (0.1, 1.0) → (0.5, 2.0) — matched to proven kuka_allegro/tg2_inspirehand sim2real
+- Thumb rot velocity: start 10.0 rad/s → end 0.1396 rad/s (8 deg/s)
+
+**Reward:** object_to_goal_weight=40, success_bonus_weight=10.0 (from run1e)
+
+**Why:** Better finger tracking + proven ADR ranges should reduce vel_explode and allow ADR to progress past 19.

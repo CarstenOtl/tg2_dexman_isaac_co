@@ -815,19 +815,18 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "stiffness_distribution_params": (0.5, 2.),
             "damping_distribution_params": (0.5, 2.),
         },
-        # Finger gains: ADR widens scale range to include hardware-ID'd values
-        # scale = hardware_value / asset_default → lower bound of ADR max range
+        # Finger gains: matched to kuka_allegro/tg2_inspirehand proven sim2real ranges
         "finger_mcp_pitch_gains": {
-            "stiffness_distribution_params": (0.1, 1.0),
-            "damping_distribution_params": (0.1, 1.0),
+            "stiffness_distribution_params": (0.5, 2.),
+            "damping_distribution_params": (0.5, 2.),
         },
         "finger_mcp_yaw_gains": {
-            "stiffness_distribution_params": (0.1, 1.0),
-            "damping_distribution_params": (0.1, 1.0),
+            "stiffness_distribution_params": (0.5, 2.),
+            "damping_distribution_params": (0.5, 2.),
         },
         "finger_pip_gains": {
-            "stiffness_distribution_params": (0.1, 1.0),
-            "damping_distribution_params": (0.1, 1.0),
+            "stiffness_distribution_params": (0.5, 2.),
+            "damping_distribution_params": (0.5, 2.),
         },
         "thumb_rot_gains": {
             "stiffness_distribution_params": (0.5, 2.),
@@ -903,8 +902,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         },
         # Sim2real actuator curriculum — only for params NOT covered by EventTerms
         "actuator_curriculum": {
-            # Thumb rotation velocity limit (rad/s): 20 → 0.21 (≈12 deg/s)
-            "thumb_rot_vel_limit": (20.0, 0.21),
+            # Thumb rotation velocity limit (rad/s): 10.0 → 0.1396 (8 deg/s)
+            "thumb_rot_vel_limit": (10.0, 0.1396),
             # FR3 arm effort limits (Nm): current → factory spec
             "arm_14_effort_limit": (100.0, 87.0),
             "arm_57_effort_limit": (50.0, 12.0),
