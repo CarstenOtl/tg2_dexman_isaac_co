@@ -79,6 +79,45 @@ python run_distillation_safedagger_fr3_agilehand.py \
 
 **Notes:** Significant improvement from stronger teacher. Student is learning but 100k iterations may not be enough — imitation loss still high. Next steps: try more iterations (200-500k), or evaluate per-object breakdown.
 
+## Distillation loss functions explained
+
+### Action imitation losses (`imitation_loss_type`)
+
+**KL divergence (`"kl"`)** — recommended, used by DextrAH-RGB paper
+- `KL(N_teacher || N_student)` over Gaussian action distributions
+- Decomposes into **mu_loss** (action means, weighted by student variance) + **sigma_loss** (variance matching)
+- Captures both "right action" and "right confidence" — student learns which DOFs need precision (finger joints during grasp) vs which are flexible (arm during approach)
+- Paper found KL always outperforms L2 across all seeds
+
+**L2 (`"l2"`)** — legacy, used in run1a-1c
+- `weighted_l2(mu_student, mu_teacher, weights=1/sigma_teacher) + l2(sigma_student, sigma_teacher)`
+- Only matches action means (weighted by teacher confidence) + variance. Simpler but misses distribution structure
+
+**NLL (`"nll"`)** — samples teacher action, scores under student distribution
+- `-log p_student(a_teacher)` — noisier due to single-sample dependence
+
+**MSE (`"mse"`)** — both sample, compare directly
+- Noisiest — two sources of sampling variance
+
+### Auxiliary loss
+- 3D object position prediction: `||x_obj_predicted - x_obj_actual||`
+- Forces vision encoder to learn spatial awareness from stereo images
+- Very small (~0.02) when well-learned — provides supervised signal for the backbone beyond action imitation
+
+### Total loss
+`total_loss = imitation_loss + aux_coeff * aux_loss`
+
+### DAgger vs SafeDagger stepping
+
+**SafeDagger** (default): per-env safety check `unsafe[i] = (l2_loss_per_env[i] > unsafe_l2_threshold)`. Unsafe envs get teacher actions for stepping, safe envs get student actions. Both train on teacher labels. Creates chicken-and-egg: student only practices where already good.
+
+**Vanilla DAgger** (`--vanilla_dagger`): student always steps its own actions in all envs. Trains on teacher labels. Forces student to learn from its own mistakes — the core DAgger insight (distribution shift correction). Beta is logged but ignored.
+
+### Key finding: KL + vanilla DAgger > L2 + SafeDagger
+- run1c (SafeDagger + L2, 350k): 36% lift standalone
+- run2a (vanilla DAgger + KL, 350k): 50% lift standalone
+- KL captures uncertainty structure; vanilla DAgger forces the student to handle its own distribution
+
 ## Open question: ADR during distillation for sim2real
 
 All runs so far use `env.enable_adr=False`. This means both teacher and student operate in idealized physics (no friction/stiffness/effort randomization).
