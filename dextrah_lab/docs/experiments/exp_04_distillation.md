@@ -8,6 +8,47 @@ type: project
 
 **Goal:** Distill the multi-object teacher from exp_02 run1p into a vision-based student policy using SafeDagger.
 
+## Summary — All standalone student evaluations
+
+| Run | Method | Loss | Iters | Standalone Lift | Unsafe Rate | Key Failure | Stored |
+|---|---|---|---|---|---|---|---|
+| run1b | SafeDagger | L2 | 100k | 0% | — | beta=0.875, student barely acted | — |
+| run1c | SafeDagger | L2 | 350k | 36% | 67.5% | harmful_collision (41%) | — |
+| **run2a** | **Vanilla DAgger** | **KL** | **350k** | **50%** | **75%** | harmful_collision (45%) | `stored_policies/.../vanilla_dagger_kl_run2a_350k/` |
+| run2b | Vanilla DAgger | KL | 700k | 0% | 100% | Collapsed — hand_close (69%) | — |
+
+**Teacher ceiling:** 96.25% lift, 53.75% unsafe (mostly physics_instability)
+**Best student: run2a — 50% lift** (52% of teacher ceiling)
+
+## run3a — SafeDagger + L2, run11 teacher, 24 envs (2026-03-31)
+
+**Motivation:** New teacher (run11: ADR 14, sim2real curriculum, 33k epochs). Test with SafeDagger first, then vanilla DAgger for comparison.
+
+**Teacher:** `11_multi_object_adr14_sim2real_03-30_17-41-43` — multi-object, ADR 14, trained with sim2real effort/velocity limits
+
+**Command:**
+```bash
+cd dextrah_lab/distillation_new
+python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand \
+  --num_envs 24 \
+  --enable_cameras \
+  --headless \
+  --teacher best_dextrah_tekken_lstm_run11.pth \
+  env.distillation=True \
+  env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.enable_adr=False \
+  env.disable_arm_randomization=True
+```
+
+**Changes from run2a:**
+- **New teacher** (run11 ADR 14 sim2real vs run10 ADR 19)
+- **24 envs** (up from 16) — ~1.8 envs per object. 32 hangs, 24 works (~11GB of 24GB VRAM)
+- SafeDagger (L2 loss) — baseline before vanilla DAgger comparison
+
+**Results:** (to be filled)
+
 ## Teacher checkpoints used
 
 | Run | Teacher | Description |
@@ -282,7 +323,44 @@ python run_distillation_safedagger_fr3_agilehand.py \
 - **700k iterations** (up from 350k) — KL loss still decreasing at 350k
 - **`--data_aug`** enabled — visual augmentation for generalization
 
-**Results:** (to be filled)
+**Results (700k iterations, 2026-03-30):**
+
+| Metric | run2a (350k) | run2b (700k) | Teacher |
+|---|---|---|---|
+| **Lift success** | 50.0% | **0.0%** | 96.25% |
+| Unsafe rate | 75.0% | 100% | 53.75% |
+| Harmful collision | 45.0% | 68.8% | 11.6% |
+| Physics instability | 43.3% | 28.8% | 55.8% |
+| Object out of bound | 11.7% | 2.5% | 32.6% |
+
+**Checkpoint:** `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_29-08-52-01/nn/dextrah_student_700000_iters.pth`
+
+**Critical finding: `--data_aug` is a NO-OP in the SafeDagger pipeline.**
+`distillation_safedagger.py` never reads `config["student"]["data_aug"]`. Only the legacy `distillation.py` (vanilla DAgger) implements RGB augmentation. The env already does dome light randomization (30%) and has table/object texture randomization built-in — these are always active regardless of `--data_aug`.
+
+**Therefore run2b was effectively: vanilla DAgger + KL + 700k iters (no extra augmentation).** The student collapsed between 350k-700k iterations — from 50% lift to 0%. All episodes terminate from hand_close (69%) or physics instability (29%). Avg episode step was 19-40 during eval (immediate crash).
+
+**Possible causes for collapse:**
+- Overfitting to training distribution — student memorizes trajectories instead of generalizing
+- Learning rate too high (2e-4) for extended training — policy oscillates and destabilizes
+- No learning rate schedule — constant LR over 700k iters without decay
+- Catastrophic forgetting — later training on some objects destroys previously learned behavior on others
+
+### What is data augmentation and why it matters for sim2real
+
+**Data augmentation** modifies training images on-the-fly to increase visual diversity:
+- **Color jitter**: random brightness, contrast, saturation shifts
+- **Random backgrounds**: replace sim background with random photos
+- **Motion blur**: simulate camera motion artifacts
+- **Texture randomization**: vary object/table surface appearance
+- **Dome light HDRI**: change scene lighting (already active in env at 30%)
+
+**Why it helps sim2real:** The student needs to work with real camera images that differ from sim renders — different lighting, textures, reflections. Without augmentation, the student overfits to sim's specific visual appearance and fails on real images.
+
+**Current state in this codebase:**
+- `distillation.py` (legacy vanilla DAgger): implements `rgb_augs.py` augmentation pipeline
+- `distillation_safedagger.py`: does NOT implement augmentation — `--data_aug` flag is ignored
+- Env-level visual randomization (dome light, textures) is always active but is sim-render-only (not the same as post-render image augmentation)
 
 ## Fixes applied during experimentation
 

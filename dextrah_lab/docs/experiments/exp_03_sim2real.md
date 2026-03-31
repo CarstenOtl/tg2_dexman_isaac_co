@@ -142,3 +142,198 @@ The LSTM needs to rebuild temporal representations from scratch. At ADR 0-17 it 
 **Reward:** object_to_goal_weight=40, success_bonus_weight=10.0 (from run1e)
 
 **Why:** Better finger tracking + proven ADR ranges should reduce vel_explode and allow ADR to progress past 19.
+
+**Result:** Policy did not reach ADR. vel_explode at 1-2% of envs. Main issue: thumb consistently curls inward between the object and other fingers, blocking any successful grasp. The new finger gains (stiffness 20/30, damping 2) make the thumb much more responsive — it now actually reaches where the policy commands, but the policy drives it into the wrong position.
+
+### run1g — 2026-03-30
+**Config:** 32 envs, livestream mode, short diagnostic run
+**Purpose:** Visual confirmation of thumb behavior with new finger gains
+
+**Command:**
+```bash
+python train.py --task=dextrah_fr3_agilehand --seed 42 --livestream 2 \
+  --num_envs 32 \
+  agent.params.config.minibatch_size=256 \
+  agent.params.config.central_value_config.minibatch_size=256 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.multi_gpu=False \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Result:** Confirmed thumb curls inward during episode due to stiffer gains (mcp_pitch stiffness 20, damping 2). Thumb tracks commands accurately but policy drives it between object and fingers. Need stronger finger_curl penalty to discourage this.
+
+### run1h — 2026-03-30
+**Checkpoint:** none — fresh start from random init
+**Config:** 64 envs, livestream mode, starting_adr=0, min_steps_for_dr_change=3k
+Same physics/ADR as run1f.
+
+**Command:**
+```bash
+python train.py --task=dextrah_fr3_agilehand --seed 42 --livestream 2 \
+  --num_envs 64 \
+  agent.params.config.minibatch_size=256 \
+  agent.params.config.central_value_config.minibatch_size=256 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.multi_gpu=False \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Changes vs run1f:**
+- `finger_curl_reg` ADR start: -0.1 → -0.3 (stronger initial curl penalty to prevent thumb curling inward)
+
+**Why:** Stiffer finger gains cause thumb to curl more aggressively. Stronger initial finger_curl penalty should discourage the policy from driving the thumb between object and fingers.
+
+**Result:** Thumb still curling inward, same trend as run1f/1g. Curl penalty alone not enough.
+
+### run1i — 2026-03-30
+**Checkpoint:** none — fresh start from random init
+**Config:** 64 envs, livestream mode, starting_adr=0, min_steps_for_dr_change=3k
+
+**Command:**
+```bash
+python train.py --task=dextrah_fr3_agilehand --seed 42 --livestream 2 \
+  --num_envs 64 \
+  agent.params.config.minibatch_size=256 \
+  agent.params.config.central_value_config.minibatch_size=256 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.multi_gpu=False \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Changes vs run1h:**
+- Added `thumb_rot_init` EventTerm: randomizes thumb rotation between -20° and 0° on reset via `mdp.reset_joints_by_offset`
+
+**Why:** Thumb always starts at -20° (joint min), which biases the policy toward curling inward. Randomizing the init forces the policy to learn grasping with thumb in various positions.
+
+**Result:** Significant improvement! Thumb init randomization allowed the policy to discover that keeping thumb_mcp_pitch near 0 (open) gives much better grasping. Policy no longer drives thumb between object and fingers.
+
+### run1j — 2026-03-30
+**Checkpoint:** none — fresh start from random init
+**Config:** 1024 envs, single GPU, headless, starting_adr=0, min_steps_for_dr_change=3k, max_epochs=100000
+
+**Command:**
+```bash
+python train.py --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Same config as run1i** but scaled to 1024 envs for full training. Testing if thumb init randomization + updated gains can push through ADR.
+
+**Result:** Thumb still finds local optimum between fingers and object. Contact reward dominates — policy maximizes finger contact by wedging thumb in. Curl penalty too weak to prevent it.
+
+### run1k — 2026-03-30
+**Checkpoint:** none — fresh start from random init
+**Config:** 1024 envs, single GPU, headless, starting_adr=0, min_steps_for_dr_change=3k, max_epochs=100000
+
+**Command:**
+```bash
+python train.py --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Changes vs run1j:**
+- `finger_curl_reg` ADR: (-0.3, -1.0) → (-0.5, -1.2) — stronger curl penalty to prevent thumb wedging
+
+**Why:** Thumb still curling inward despite init randomization. Need stronger curl penalty to make the contact-via-wedging strategy unprofitable.
+
+**Result:** Thumb behavior improved but policy not lifting. Contact reward (28.5) dominates lift (3.6) — policy maximizes finger contact without lifting.
+
+### run1l — 2026-03-30
+**Checkpoint:** none — fresh start from random init
+**Config:** 1024 envs, single GPU, headless, starting_adr=0, min_steps_for_dr_change=3k, max_epochs=100000
+
+**Command:**
+```bash
+python train.py --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Changes vs run1k:**
+- `hand_object_contact_weight`: 8.0 → 4.0 (halved)
+- `good_grasp_weight`: 6.0 → 3.0 (halved)
+- `lift_weight`: unchanged (40, 20)
+
+**Why:** Contact reward dominated at 28.5 vs lift at 3.6. Halving contact/grasp should make lift competitive once discovered.
+
+**Result:** Contact down to 12.9, still 4x lift (3.4). Policy not lifting — hand approaches sideways, curls fingers around object, maximizes contact but can't lift from that configuration.
+
+### run1m — 2026-03-30
+**Checkpoint:** none — fresh start from random init
+**Config:** 1024 envs, single GPU, headless, starting_adr=0, min_steps_for_dr_change=3k, max_epochs=100000
+
+**Command:**
+```bash
+python train.py --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Changes vs run1l:**
+- `hand_object_contact_weight`: 4.0 → 3.0
+- `thumb_mcp_pitch` init: 0.05 → 0.0 (fully open)
+- `lift_sharpness`: 5.0 → 2.0 (much flatter gradient — lift reward ~18 at table height vs ~5.4 before)
+
+**Why:** Policy not attempting to lift at all. Flatter lift gradient gives signal even with object on table, should incentivize upward arm motion.
+
+**Result:** Success! Policy lifts and reaches ADR 14/50. Rewards well balanced: lift (15.4) > obj_to_goal (10.8) > contact (4.8). 33% in_goal, 29% success, 39% lifted. Plateaued at ADR 14 after ~33k epochs (~3 hrs stuck). vel_explode=20/cycle. Thumb velocity at 7.2 rad/s at ADR 14 — approaching real hardware limits.
+
+**Stored policy:** `stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/`
+**Pretrained ckpt:** `pretrained_ckpts/best_dextrah_tekken_lstm_adr14.pth`

@@ -110,6 +110,17 @@ class EventCfg:
         },
     )
 
+    # Thumb rotation init randomization: -20° to 0° (default is -0.3491, offset 0 to +0.3491)
+    thumb_rot_init = EventTerm(
+        func=mdp.reset_joints_by_offset,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["revolute_thumb_rot"]),
+            "position_range": (0.0, 0.3491),
+            "velocity_range": (0.0, 0.0),
+        },
+    )
+
     # NOTE: no beginning randomization for this one
     robot_joint_friction = EventTerm(
         func=mdp.randomize_joint_parameters,
@@ -240,8 +251,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                 "fr3_joint5": -0.5236,  # -30.0 degrees
                 "fr3_joint6":  2.9671,  #  170.0 degrees
                 "fr3_joint7":  0.0000,  #  0.0 degrees
-                "revolute_thumb_rot": -0.3491,  # -20 deg (joint min)
-                "revolute_thumb_mcp_pitch": 0.05,
+                "revolute_thumb_rot": -0.3491,  # -20 deg (joint min is -30 deg)
+                "revolute_thumb_mcp_pitch": 0.0,
                 "revolute_thumb_mcp_yaw": 0.0,
                 "revolute_thumb_pip": 0.0,
                 "revolute_index_mcp_pitch": 0.1,
@@ -715,8 +726,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
 
     # phase 2: contact
-    hand_object_contact_weight = 8.0   # 10→8: -2
-    good_grasp_weight = 6.0            # 8→6: -2
+    hand_object_contact_weight = 3.0   # 8→4→3: contact still dominating lift
+    good_grasp_weight = 3.0            # 6→3: halved
     finger_curl_reg_weight = -0.2    # reduced to allow ADR to widen; was -0.5
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl
@@ -725,7 +736,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
     success_bonus_weight = 10.0  # flat bonus per step when object is in goal region
-    lift_sharpness = 5.0 #default 8.5; reduced to flatten lift gradient — easier to discover
+    lift_sharpness = 2.0 #default 8.5; 5→2: much flatter gradient so policy discovers lifting from table height
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
@@ -892,7 +903,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
             "lift_weight": (40., 20.),  # 20→40 start; floor raised 5→20 so lift stays dominant throughout ADR
-            "finger_curl_reg": (-0.1, -1),  # ADR: ramp up curl penalty to encourage better hand use
+            "finger_curl_reg": (-0.5, -1.2),  # ADR: stronger curl penalty to prevent thumb curling inward
         },
         "pd_targets": {
             "velocity_target_factor": (1., 0.)

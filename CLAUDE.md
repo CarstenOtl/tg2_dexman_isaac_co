@@ -209,6 +209,9 @@ Each robot/hand combo lives in `dextrah_lab/tasks/<task_name>/` with this patter
 - **Loss functions**: KL divergence (`"kl"`) outperforms L2 for distillation (DextrAH-RGB paper finding). Set via `imitation_loss_type` in dagger_config or `--vanilla_dagger` flag (which sets KL + disables unsafe override).
 - **Vanilla DAgger vs SafeDagger**: `--vanilla_dagger` = KL loss + student always steps (no teacher override). SafeDagger (default) = L2 loss + teacher overrides unsafe envs. Vanilla DAgger produces better standalone students (50% vs 36% lift at 350k iters).
 - **Noisy losses with vanilla DAgger + data_aug are expected** — no teacher safety net + visual augmentation variance. Check trends with TensorBoard smoothing (0.9+), not per-step values.
+- **`--data_aug` is a NO-OP in `distillation_safedagger.py`** — the flag is passed in config but never read. Only legacy `distillation.py` implements RGB augmentation. Env-level visual randomization (dome light 30%, textures) is always active regardless.
+- **Student collapses beyond ~350k iters** with vanilla DAgger + KL at lr=2e-4 (50% lift at 350k → 0% at 700k). Needs LR decay or early stopping. Save checkpoints frequently to find the peak.
+- **Student collapses beyond ~350k iters** with vanilla DAgger + KL at lr=2e-4 (50% lift at 350k → 0% at 700k). Needs LR decay or early stopping. Save checkpoints frequently to find the peak.
 
 ### Config Override Pattern
 
@@ -249,6 +252,13 @@ Git LFS is used for `.pth` model weight files.
 - **`eval.py` (legacy) hardcodes `dextrah_kuka_allegro/agents`** path for student config — works because YAMLs are identical across tasks, but prefer `eval_student.py`.
 - **First camera run is slow** (10-20 min shader compilation) — subsequent runs use cached shaders.
 - **SafeDagger beta** is NOT a fixed schedule — it's the fraction of envs where per-env L2 loss exceeds `unsafe_l2_threshold` (default 0.5). Teacher takes over only in those envs.
+
+### Sim2Real Insights (fr3_agilehand)
+
+- **Joint stiffness/damping don't directly map to real hardware** — the policy outputs target positions, and real hardware has its own PID controller. What matters for sim2real is effort limits (achievable force) and velocity limits (achievable speed per step), not sim PD gains.
+- **Verify joint tracking in Isaac gain tuner** before training — default gains at ADR 0 must show clean tracking. Poor tracking (oscillation, amplitude mismatch) causes vel_explode at higher ADR.
+- **Thumb rot velocity is the key sim2real constraint** — real hardware limit is 8-12 deg/s. ADR curriculum ramps from 10 rad/s → 0.14 rad/s (8 deg/s).
+- **Contact reward easily dominates lift** — with 5+ fingertips, contact compounds. Keep `hand_object_contact_weight` ≤ 3.0 and use `lift_sharpness` ≤ 2.0 so lift gradient is discoverable from table height.
 
 ## Experiment Logs
 
@@ -312,6 +322,8 @@ Every script that accepts `--task` must import the task's `gym_setup` module (e.
 
 - Joint init positions (`revolute_thumb_rot`, finger joints) are set in `env_cfg.py` `init_state.joint_pos`, NOT in `fr3_tekken_left.py` — `env_cfg.py` values are applied at episode reset and override the asset file defaults.
 - `revolute_thumb_rot` init at -0.3491 rad (-20°, joint min) pre-rotates the thumb away from the object approach path, preventing collision knock-back during approach.
+- `thumb_rot_init` EventTerm randomizes thumb rotation between -20° and 0° at reset via `mdp.reset_joints_by_offset` — critical for preventing the policy from learning to wedge the thumb between object and fingers.
+- Changing finger stiffness/damping changes what the **same action** produces physically. Higher stiffness = fingers reach targets faster = actions that worked with sluggish fingers cause overshoot/curling with responsive ones. Requires retraining from scratch.
 
 ### Early Termination Penalty (fr3_agilehand)
 
