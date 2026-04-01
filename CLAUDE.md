@@ -246,7 +246,8 @@ Git LFS is used for `.pth` model weight files.
 ### Distillation Gotchas (fr3_agilehand)
 
 - **`--enable_cameras` is always required** for distillation and student eval — cameras are in the scene config, omitting it causes `RuntimeError` or silent hang.
-- **`--headless` recommended** for eval scripts on remote machines — prevents GLFW display issues.
+- **`--headless` is always required** for distillation and eval on remote machines — prevents GLFW display hang.
+- **Max camera envs on RTX 4090:** 24 works (~11GB), 32 hangs (deadlocks in tiled renderer). 16 is safe (~9.5GB).
 - **`pretrained_ckpts/` directory**: distillation scripts resolve relative `--teacher` paths via `os.path.join(parent_path, "pretrained_ckpts", teacher_arg)`. The dir must exist at repo root.
 - **`eval_student.py` requires gym import for each task** — if eval hangs silently after scene creation, check that `import dextrah_lab.tasks.<task>.gym_setup` is present.
 - **`eval.py` (legacy) hardcodes `dextrah_kuka_allegro/agents`** path for student config — works because YAMLs are identical across tasks, but prefer `eval_student.py`.

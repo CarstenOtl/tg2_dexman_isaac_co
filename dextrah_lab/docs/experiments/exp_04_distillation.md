@@ -16,13 +16,17 @@ type: project
 | run1c | SafeDagger | L2 | 350k | 36% | 67.5% | harmful_collision (41%) | — |
 | **run2a** | **Vanilla DAgger** | **KL** | **350k** | **50%** | **75%** | harmful_collision (45%) | `stored_policies/.../vanilla_dagger_kl_run2a_350k/` |
 | run2b | Vanilla DAgger | KL | 700k | 0% | 100% | Collapsed — hand_close (69%) | — |
+| **run3a** | **SafeDagger** | **L2** | **350k** | **59%** | **72.7%** | physics_instability (63%), harmful_collision (19.5%) | — |
 
-**Teacher ceiling:** 96.25% lift, 53.75% unsafe (mostly physics_instability)
-**Best student: run2a — 50% lift** (52% of teacher ceiling)
+**Teacher 10 ceiling:** 96.25% lift, 53.75% unsafe (mostly physics_instability)
+**Teacher 11 ceiling:** 85.83% lift, 23.13% unsafe — safer but lower lift (sim2real effort/velocity limits)
+**Best student: run3a — 59% lift** (SafeDagger + L2, run11 teacher, 24 envs, 480 episode eval)
+
+| run3b | Vanilla DAgger | KL | 100k | 57.7% | 70.6% | physics_instability (65%), harmful_collision (18%) | — |
 
 ## run3a — SafeDagger + L2, run11 teacher, 24 envs (2026-03-31)
 
-**Motivation:** New teacher (run11: ADR 14, sim2real curriculum, 33k epochs). Test with SafeDagger first, then vanilla DAgger for comparison.
+**Motivation:** New teacher (run11: ADR 14, sim2real curriculum, 33k epochs). Test with SafeDagger first, then vanilla DAgger for comparison. Also testing 24 envs (up from 16) for better per-object coverage.
 
 **Teacher:** `11_multi_object_adr14_sim2real_03-30_17-41-43` — multi-object, ADR 14, trained with sim2real effort/velocity limits
 
@@ -47,7 +51,83 @@ python run_distillation_safedagger_fr3_agilehand.py \
 - **24 envs** (up from 16) — ~1.8 envs per object. 32 hangs, 24 works (~11GB of 24GB VRAM)
 - SafeDagger (L2 loss) — baseline before vanilla DAgger comparison
 
-**Results:** (to be filled)
+**Training metrics at convergence (~125k iters):**
+
+| Metric | run1c (teacher 10, 16 envs) | run3a (teacher 11, 24 envs) |
+|---|---|---|
+| Imitation Loss | 1.40 | **0.91** |
+| Beta | 0.75 | **0.63** |
+| In goal | 37.5% | **41.7%** |
+| Sigma Loss | ~0.01 | **0.0001** |
+| Avg ep step | 173 | **268** |
+| obj_to_goal reward | 7.6 | **14.6** |
+| Successes | 0/0 | **1/1** |
+
+**Key observations:**
+- Loss converged much lower (0.91 vs 1.40) — run11 teacher produces cleaner demonstrations
+- Beta dropped to 0.63-0.68 (student acting in ~35% of envs) — faster handoff than run1c
+- First ever recorded success (object held in goal for full timeout)
+- Sigma loss near zero — student fully learned teacher's confidence structure
+- Episodes lasting 268 steps (near 300 max) — far fewer crashes
+
+**Standalone eval (480 episodes: 20 rollouts × 24 envs, 2026-03-31):**
+
+| Metric | run2a (prev best, teacher 10) | run3a (teacher 11) | Teacher 10 |
+|---|---|---|---|
+| **Lift success** | 50.0% (80 eps) | **58.96%** (480 eps) | 96.25% |
+| Unsafe rate | 75.0% | **72.7%** | 53.75% |
+| Harmful collision | 45.0% | **19.5%** | 11.6% |
+| Physics instability | 43.3% | 62.5% | 55.8% |
+| Object out of bound | 11.7% | 17.8% | 32.6% |
+| Palm flipped | 0% | 0.3% | 0% |
+
+**Assessment:** New best student at 59% lift. The run11 teacher (sim2real effort/velocity limits) produces dramatically safer behavior — harmful collision dropped from 45% to 19.5% (approaching teacher's 11.6%). Physics instability dominates failures (62.5%) but is sim-only. Excluding physics instability, real-world-relevant unsafe rate is ~27%.
+
+**Key insight:** Teacher quality matters more than distillation method. SafeDagger + L2 with a better teacher (run3a: 59%) outperforms vanilla DAgger + KL with a weaker teacher (run2a: 50%).
+
+**Env count findings:**
+- 32 envs with cameras hangs on RTX 4090 (loads 13.5GB but deadlocks — likely tiled renderer scheduling limit)
+- 24 envs works reliably (~11GB of 24GB VRAM)
+- 16 envs uses ~9.5GB
+
+## run3b — Vanilla DAgger + KL, run11 teacher, 24 envs (2026-03-31)
+
+**Motivation:** Compare vanilla DAgger + KL vs SafeDagger + L2 (run3a) using the same teacher 11.
+
+**Teacher:** `11_multi_object_adr14_sim2real_03-30_17-41-43` — same as run3a
+
+**Command:**
+```bash
+cd dextrah_lab/distillation_new
+python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand \
+  --num_envs 24 \
+  --enable_cameras \
+  --headless \
+  --vanilla_dagger \
+  --teacher best_dextrah_tekken_lstm_run11.pth \
+  env.distillation=True \
+  env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.enable_adr=False \
+  env.disable_arm_randomization=True
+```
+
+**Standalone eval (480 episodes, 2026-03-31):**
+
+| Metric | run3a SafeDagger+L2 (350k) | run3b Vanilla DAgger+KL (100k) | Teacher 11 |
+|---|---|---|---|
+| **Lift success** | 58.96% | 57.71% | 85.83% |
+| Unsafe rate | 72.7% | 70.6% | 23.1% |
+| Harmful collision | 19.5% | 18.0% | 7.2% |
+| Physics instability | 62.5% | 65.2% | 47.7% |
+| Object out of bound | 17.8% | 16.8% | 40.5% |
+| Palm flipped | 0.3% | 0% | 2.7% |
+
+**Key finding: Vanilla DAgger converges 3.5× faster.**
+Both methods reach ~58% lift with teacher 11, but vanilla DAgger gets there in 100k iters vs SafeDagger's 350k. With teacher 11, the distillation method matters less than the teacher quality — both SafeDagger+L2 and vanilla DAgger+KL produce similar standalone performance.
+
+**Updated conclusion:** Teacher quality is the dominant factor. run3a/3b (teacher 11, 59/58% lift) both outperform run2a (teacher 10, 50% lift) regardless of distillation method. Vanilla DAgger is preferred for speed.
 
 ## Teacher checkpoints used
 
