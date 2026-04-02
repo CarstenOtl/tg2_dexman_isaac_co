@@ -23,6 +23,65 @@ type: project
 **Best student: run3a — 59% lift** (SafeDagger + L2, run11 teacher, 24 envs, 480 episode eval)
 
 | run3b | Vanilla DAgger | KL | 100k | 57.7% | 70.6% | physics_instability (65%), harmful_collision (18%) | — |
+| run4a | SafeDagger | L2 | 100k | — | — | Per-object + termination logging | *running* |
+| run4b | Vanilla DAgger | KL | 100k | — | — | Per-object + termination logging | *running* |
+
+## run4a/4b — SafeDagger vs DAgger head-to-head with per-object logging (2026-04-02)
+
+**Motivation:** Direct comparison of SafeDagger vs vanilla DAgger under identical conditions, with new per-object metrics. Prior runs used different iteration counts (run3a: 350k SafeDagger vs run3b: 100k DAgger) and lacked per-object breakdown during training. These runs add:
+- `per_object_lift/<name>` and `per_object_unsafe/<name>` per training step
+- `termination/real_unsafe` vs `termination/physics_instability` — separates sim artifacts from genuine failures
+- Same object set as teacher training (`multi_objects/visdex_selected` — 13 objects)
+
+**Teacher:** `11_multi_object_adr14_sim2real_03-30_17-41-43` — sim2real curriculum, ADR 14
+
+**Run 4a — SafeDagger (L2 loss + teacher override):**
+```bash
+cd dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 24 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run 4b — Vanilla DAgger (KL loss, no teacher override):**
+```bash
+cd dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 24 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 \
+  --vanilla_dagger \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run in parallel:** GPU 0 for SafeDagger (4a), GPU 1 for vanilla DAgger (4b). Two separate terminals.
+
+**Status (2026-04-02):** Both running. Vanilla DAgger (4b) started first on GPU 1, SafeDagger (4a) started second on GPU 0. Both 24 envs.
+
+**Run directories:**
+- run4a (SafeDagger): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_02-14-30-48/`
+- run4b (Vanilla DAgger): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_02-14-28-35/`
+
+**Changes from run3a/3b:**
+- **Per-object logging** added to `distillation_safedagger.py` — TensorBoard groups `per_object_lift/`, `per_object_unsafe/`
+- **Termination breakdown** — `termination/real_unsafe` vs `termination/physics_instability`
+- **Same object set** (`multi_objects/visdex_selected` = 13 objects) — consistent with teacher training
+- **Both 100k iters** — matched iteration count for fair comparison
+- **Both 24 envs, teacher 11** — identical conditions except distillation method
+
+**What to watch:**
+- Per-object lift curves — do some objects benefit more from SafeDagger's safety net?
+- `termination/real_unsafe` vs `termination/physics_instability` — what fraction of failures are sim artifacts?
+- `beta` decay in SafeDagger (run4a) — how fast does the student take over?
+- Overall lift/unsafe at 100k — does run3b's finding hold (DAgger converges 3.5× faster)?
+
+**Results:** *pending*
 
 ## run3a — SafeDagger + L2, run11 teacher, 24 envs (2026-03-31)
 

@@ -90,6 +90,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import dextrah_lab.tasks.tg2_inspirehand.gym_setup  # noqa: F401
 import dextrah_lab.tasks.fr3_agilehand.gym_setup  # noqa: F401
+import dextrah_lab.tasks.dextrah_kuka_allegro.gym_setup  # noqa: F401
 from dextrah_lab.distillation_new.a2c_stereo_transformer import A2CBuilder as A2CStereoTransformerBuilder
 from dextrah_lab.distillation_new.eval_utils import (
     UNSAFE_REASON_NAMES,
@@ -441,7 +442,8 @@ class StudentEvaluator:
                     steps += 1
 
                     table_center_z = eval_ov_env.cfg.table_cfg.init_state.pos[2]
-                    table_top_z = table_center_z + 0.5 * eval_ov_env.cfg.table_size_z
+                    table_size_z = getattr(eval_ov_env.cfg, "table_size_z", 0.03)
+                    table_top_z = table_center_z + 0.5 * table_size_z
                     lift_height_thresh = table_top_z + getattr(eval_ov_env.cfg, "object_height_thresh", 0.0)
                     lift_success = eval_ov_env.object_pos[:, 2] > lift_height_thresh
                     if hasattr(eval_ov_env, "good_grasp_mask") and eval_ov_env.good_grasp_mask is not None:

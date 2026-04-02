@@ -500,7 +500,11 @@ class SafeDagger:
                 total_loss_step = imitation_loss + self.aux_coeff * aux_sum_tensor
                 total_loss += total_loss_step
                 self.unsafe = self.check_unsafe(l2_loss_per_env=l2_loss_per_env, obs=obs)
-                beta = float(self.unsafe.float().mean().item())
+                # beta = actual teacher intervention rate (0 for vanilla DAgger)
+                if self.disable_unsafe_override:
+                    beta = 0.0
+                else:
+                    beta = float(self.unsafe.float().mean().item())
             # pos = torch.tensor([
             #     [self.ov_env.cfg.x_center+self.ov_env.cfg.x_width/2, self.ov_env.cfg.y_center+self.ov_env.cfg.y_width/2, 0.5],
             #     [self.ov_env.cfg.x_center-self.ov_env.cfg.x_width/2, self.ov_env.cfg.y_center-self.ov_env.cfg.y_width/2, 0.5],
@@ -697,6 +701,40 @@ class SafeDagger:
                 self.writer.add_scalar(
                     "in_success_region", perf, self.frame
                 )
+                # --- Per-object metrics ---
+                if hasattr(self.ov_env, "multi_object_idx") and hasattr(self.ov_env, "object_names"):
+                    obj_indices = self.ov_env.multi_object_idx
+                    for obj_idx, obj_name in enumerate(self.ov_env.object_names):
+                        env_mask = obj_indices == obj_idx
+                        if not torch.any(env_mask):
+                            continue
+                        # Per-object unsafe rate (L2-based)
+                        if self.unsafe is not None:
+                            obj_unsafe = self.unsafe[env_mask].float().mean().item()
+                            self.writer.add_scalar(
+                                f"per_object_unsafe/{obj_name}", obj_unsafe, self.frame
+                            )
+                        # Per-object lift success
+                        obj_lift = self.ov_env.in_success_region[env_mask].float().mean().item()
+                        self.writer.add_scalar(
+                            f"per_object_lift/{obj_name}", obj_lift, self.frame
+                        )
+                # --- Termination breakdown (physics artifacts vs real failures) ---
+                if hasattr(self.ov_env, "_early_terminated"):
+                    term = self.ov_env._early_terminated.float().mean().item()
+                    self.writer.add_scalar("termination/all", term, self.frame)
+                if hasattr(self.ov_env, "_penalty_terminated"):
+                    real = self.ov_env._penalty_terminated.float().mean().item()
+                    self.writer.add_scalar("termination/real_unsafe", real, self.frame)
+                physics_instab = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+                if hasattr(self.ov_env, "last_robot_unstable"):
+                    physics_instab |= self.ov_env.last_robot_unstable
+                if hasattr(self.ov_env, "last_vel_explosion"):
+                    physics_instab |= self.ov_env.last_vel_explosion
+                if physics_instab.any():
+                    self.writer.add_scalar(
+                        "termination/physics_instability", physics_instab.float().mean().item(), self.frame
+                    )
                 if self.use_wandb:
                     wandb.log({
                         "in_success_region": perf,

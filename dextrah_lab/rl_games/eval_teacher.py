@@ -91,6 +91,12 @@ parser.add_argument(
     default=None,
     help="Override objects directory (e.g. multi_objects/visdex_selected).",
 )
+parser.add_argument(
+    "--max_pose_angle",
+    type=float,
+    default=None,
+    help="Override max_pose_angle (e.g. 45.0). Required for Kuka-Allegro.",
+)
 parser.add_argument("--video", action="store_true", default=False, help="Record video (MP4) of the evaluation.")
 parser.add_argument("--video_length", type=int, default=0, help="Max video length in steps (0 = entire eval).")
 parser.add_argument(
@@ -152,7 +158,8 @@ def _default_logs_root() -> pathlib.Path:
 
 def _compute_lift_success(eval_env):
     table_center_z = eval_env.cfg.table_cfg.init_state.pos[2]
-    table_top_z = table_center_z + 0.5 * eval_env.cfg.table_size_z
+    table_size_z = getattr(eval_env.cfg, "table_size_z", 0.03)
+    table_top_z = table_center_z + 0.5 * table_size_z
     lift_height_thresh = table_top_z + getattr(eval_env.cfg, "object_height_thresh", 0.0)
     lift_success = eval_env.object_pos[:, 2] > lift_height_thresh
     if hasattr(eval_env, "good_grasp_mask") and eval_env.good_grasp_mask is not None:
@@ -389,10 +396,11 @@ def _reason_counts_from_episode(
     classified_total = int(sum(counts.values()))
     unknown_count = max(0, total_unsafe - classified_total)
     if unknown_count > 0:
-        raise RuntimeError(
-            f"{scope_label}: found {unknown_count} unclassified unsafe episodes "
+        counts["unclassified"] = unknown_count
+        print(
+            f"[WARN] {scope_label}: {unknown_count} unclassified unsafe episodes "
             f"(unsafe_total={total_unsafe}, classified_total={classified_total}). "
-            "Fail-fast mode is enabled; no fallback mapping is allowed."
+            "Env may not expose last_* termination masks."
         )
     return counts
 
@@ -543,6 +551,8 @@ def _run_eval_for_checkpoint(
         env_cfg.objects_dir = objects_dir_override
         if env_cfg.objects_dir not in env_cfg.valid_objects_dir:
             env_cfg.valid_objects_dir.append(env_cfg.objects_dir)
+    if args_cli.max_pose_angle is not None:
+        env_cfg.max_pose_angle = args_cli.max_pose_angle
 
     stage_t = time.time()
     agent_cfg = load_cfg_from_registry(args_cli.task, "rl_games_cfg_entry_point")
@@ -765,6 +775,8 @@ def _run_eval_for_teacher_pool(
     env_cfg.objects_dir = objects_dir_override
     if env_cfg.objects_dir not in env_cfg.valid_objects_dir:
         env_cfg.valid_objects_dir.append(env_cfg.objects_dir)
+    if args_cli.max_pose_angle is not None:
+        env_cfg.max_pose_angle = args_cli.max_pose_angle
     # Teacher standalone eval needs per-env multi-object spawning while keeping
     # teacher observations (distillation=False).
     env_cfg.multi_object_eval = True

@@ -115,7 +115,7 @@ class EventCfg:
 class DextrahKukaAllegroEnvCfg(DirectRLEnvCfg):
     # Placeholder for objects_dir which targets the directory of objects for training
     objects_dir = "replace_me"
-    valid_objects_dir = ["visdex_objects"]
+    valid_objects_dir = ["visdex_objects", "multi_objects/visdex_selected"]
 
     # Toggle for using cuda graph
     use_cuda_graph = False

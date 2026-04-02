@@ -48,6 +48,7 @@ dextrah_lab/assets/**/__pycache__/
 dextrah_lab/assets/**/*.py[cod]
 dextrah_lab/assets/**/*$py.class
 
+dextrah_lab/docs/exports/
 reference/
 # dextrah_lab/stored_policies/
 build/

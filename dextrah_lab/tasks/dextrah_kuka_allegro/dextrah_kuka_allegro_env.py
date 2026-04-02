@@ -147,8 +147,12 @@ class DextrahKukaAllegroEnv(DirectRLEnv):
         self.dextrah_adr =\
             DextrahADR(self.event_manager, self.cfg.adr_cfg_dict, self.cfg.adr_custom_cfg_dict)
         self.step_since_last_dr_change = 0
-        if self.cfg.distillation:
-            self.cfg.starting_adr_increments = self.cfg.num_adr_increments
+        if self.cfg.distillation and self.cfg.starting_adr_increments == 0:
+            # Default: no ADR during distillation (matching fr3_agilehand).
+            # Previously hardcoded to max ADR (num_adr_increments=50), causing
+            # teacher to operate beyond its training distribution.
+            # Override via CLI: env.starting_adr_increments=N
+            pass
         self.dextrah_adr.set_num_increments(self.cfg.starting_adr_increments)
         self.local_adr_increment = torch.tensor(
             self.cfg.starting_adr_increments,
@@ -478,6 +482,7 @@ class DextrahKukaAllegroEnv(DirectRLEnv):
             os.path.join(objects_full_path, object_name))]
 
         self.num_unique_objects = len(sub_dirs)
+        self.object_names = sub_dirs
 
         # This creates a 1D tensor array of length self.num_envs with values:
         # [0, 1, ...., num_unique_objects-1, 0, 1, ..., num_unique_objects-1]

@@ -21,6 +21,8 @@ DextrAH (Dexterous Hand Manipulation) on Isaac Lab — a reinforcement learning 
 
 Install: `python -m pip install -e .` from repo root (within Isaac Lab conda env).
 
+**Conda env**: `dextrah_clean` at `/home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python` — used for training, distillation, eval, and plotting.
+
 ## Project Directory Structure
 
 ```
@@ -65,6 +67,11 @@ dextrah_lab/
 ├── deployment_tg2_inspirehand/ — Real-robot deployment scripts (TG2)
 ├── deployment_fr3_agilehand/  — Real-robot deployment scripts (FR3 + AgileHand)
 └── docs/
+    ├── experiments/         — Experiment log markdown files
+    ├── export_runs.py       — Export TensorBoard runs + eval JSONs to CSV
+    └── scripts/
+        ├── plot_style.py    — Thesis plotting style (colors, fonts, save_fig)
+        └── plot_results.py  — Generate all thesis figures from experiment data
 ```
 
 ## Common Commands
@@ -211,7 +218,10 @@ Each robot/hand combo lives in `dextrah_lab/tasks/<task_name>/` with this patter
 - **Noisy losses with vanilla DAgger + data_aug are expected** — no teacher safety net + visual augmentation variance. Check trends with TensorBoard smoothing (0.9+), not per-step values.
 - **`--data_aug` is a NO-OP in `distillation_safedagger.py`** — the flag is passed in config but never read. Only legacy `distillation.py` implements RGB augmentation. Env-level visual randomization (dome light 30%, textures) is always active regardless.
 - **Student collapses beyond ~350k iters** with vanilla DAgger + KL at lr=2e-4 (50% lift at 350k → 0% at 700k). Needs LR decay or early stopping. Save checkpoints frequently to find the peak.
-- **Student collapses beyond ~350k iters** with vanilla DAgger + KL at lr=2e-4 (50% lift at 350k → 0% at 700k). Needs LR decay or early stopping. Save checkpoints frequently to find the peak.
+- **Per-object metrics** are logged to TensorBoard during distillation: `per_object_lift/<name>`, `per_object_unsafe/<name>`. Requires `multi_object_idx` and `object_names` on the env (all multi-object tasks have these).
+- **Termination breakdown** is logged separately: `termination/real_unsafe` (object OOB, hand too far, palm flipped) vs `termination/physics_instability` (vel_explosion + robot_unstable). Use `real_unsafe` for sim2real-relevant comparisons — physics instabilities are simulation artifacts.
+- **`beta` metric** = fraction of envs where student L2 loss exceeds `unsafe_l2_threshold` (0.5). For SafeDagger, teacher overrides in those envs. For vanilla DAgger, beta stays ~1.0 (no override, but check still runs). Effectively the training-time unsafe rate.
+- **Run directories are timestamp-unique** — experiment name includes `datetime.now().strftime("_%d-%H-%M-%S")`, so parallel runs won't overwrite each other unless started in the same second.
 
 ### Config Override Pattern
 
@@ -253,6 +263,9 @@ Git LFS is used for `.pth` model weight files.
 - **`eval.py` (legacy) hardcodes `dextrah_kuka_allegro/agents`** path for student config — works because YAMLs are identical across tasks, but prefer `eval_student.py`.
 - **First camera run is slow** (10-20 min shader compilation) — subsequent runs use cached shaders.
 - **SafeDagger beta** is NOT a fixed schedule — it's the fraction of envs where per-env L2 loss exceeds `unsafe_l2_threshold` (default 0.5). Teacher takes over only in those envs.
+- **Multi-GPU distillation is NOT supported** — `distillation_safedagger.py` doesn't implement `torch.distributed.run`. `CUDA_VISIBLE_DEVICES=0,1` alone does NOT split workload. Instead, run two separate distillation runs on different GPUs in parallel (e.g., SafeDagger on GPU 0, DAgger on GPU 1).
+- **Always use `multi_objects/visdex_selected`** for distillation — matches the teacher's training set.
+- **`--teacher` with absolute path bypasses `pretrained_ckpts/` resolution** — the code checks `os.path.isabs()` first.
 
 ### Sim2Real Insights (fr3_agilehand)
 
@@ -263,11 +276,35 @@ Git LFS is used for `.pth` model weight files.
 
 ## Experiment Logs
 
-Training experiment logs are tracked in `dextrah_lab/docs/experiments/`:
+Training experiment logs are tracked in `dextrah_lab/docs/experiments/`. **Convention:** Log new distillation runs in `exp_04_distillation.md` with: full bash command, GPU assignment, env count, objects_dir, run directory, and what metrics are being tracked. Mark as `*running*` in summary table until results are in.
 - `exp_02_runs.md` — Multi-object reward tuning, reward shaping, physics stability
 - `exp_03_sim2real.md` — Sim2real curriculum: hardware actuator gains, thumb velocity, effort limits
 - `exp_04_distillation.md` — SafeDagger distillation from multi-object teacher
 - `per_object_teacher_workflow.md` — Per-object teacher training and directory structure
+
+### Thesis Plotting & Data Export
+
+**Export TensorBoard data to CSV** (prerequisite for plotting from real run data):
+```bash
+cd dextrah_lab/docs
+python export_runs.py [--output_dir exports/]
+```
+Exports teacher training curves (from `stored_policies/fr3_agilehand/`) and distillation curves (from `distillation_new/runs/`) to long-form CSV (`step, metric, value`). Also copies eval JSON files and produces `eval_summary.csv`. Requires `tbparse` and `pandas`.
+
+**Generate thesis figures**:
+```bash
+cd dextrah_lab/docs/scripts
+python plot_results.py [--show]
+```
+Generates all thesis plots to `dextrah_lab/docs/Report/figures/plots/` (PDF + PNG). Available plots:
+- Hardcoded data: `all_runs_gsr`, `failure_breakdown`, `teacher_comparison`, `teacher_training_curve`, `adr_ranges`, `beta_decay`, `physics_challenges_timeline`
+- CSV-based (from `export_runs.py` output): `distillation_lift_success_100k`, `distillation_unsafe_rate_100k` — these read exported CSVs from `docs/exports/distillation/` and plot smoothed curves (500-step rolling mean) for all distillation runs 0–100k iterations
+
+**Plot style** (`plot_style.py`): thesis-consistent style — Charter/serif font, golden-ratio aspect, 300 DPI export, academic color palette. Import `apply_style()` before creating figures, `save_fig(fig, name)` to save.
+
+**Environment:** Always run plotting scripts with `dextrah_clean` conda env (`/home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python`). System python has numpy 2.x / matplotlib 1.x incompatibility.
+
+**CSV step-to-iteration conversion:** Exported CSV `step` = `iteration × num_envs`. For 16-env runs divide by 16, for 24-env runs divide by 24. `_load_distillation_metric()` in `plot_results.py` handles this automatically.
 
 ## Isaac Lab API Gotchas
 
