@@ -735,6 +735,23 @@ class SafeDagger:
                     self.writer.add_scalar(
                         "termination/physics_instability", physics_instab.float().mean().item(), self.frame
                     )
+                # --- Per-object termination breakdown ---
+                if hasattr(self.ov_env, "multi_object_idx") and hasattr(self.ov_env, "object_names"):
+                    has_penalty = hasattr(self.ov_env, "_penalty_terminated")
+                    for obj_idx, obj_name in enumerate(self.ov_env.object_names):
+                        env_mask = obj_indices == obj_idx
+                        if not torch.any(env_mask):
+                            continue
+                        if has_penalty:
+                            obj_real = self.ov_env._penalty_terminated[env_mask].float().mean().item()
+                            self.writer.add_scalar(
+                                f"per_object_term_real/{obj_name}", obj_real, self.frame
+                            )
+                        obj_phys = physics_instab[env_mask].float().mean().item()
+                        if obj_phys > 0:
+                            self.writer.add_scalar(
+                                f"per_object_term_physics/{obj_name}", obj_phys, self.frame
+                            )
                 if self.use_wandb:
                     wandb.log({
                         "in_success_region": perf,

@@ -16,15 +16,38 @@ type: project
 | run1c | SafeDagger | L2 | 350k | 36% | 67.5% | harmful_collision (41%) | — |
 | **run2a** | **Vanilla DAgger** | **KL** | **350k** | **50%** | **75%** | harmful_collision (45%) | `stored_policies/.../vanilla_dagger_kl_run2a_350k/` |
 | run2b | Vanilla DAgger | KL | 700k | 0% | 100% | Collapsed — hand_close (69%) | — |
-| **run3a** | **SafeDagger** | **L2** | **350k** | **59%** | **72.7%** | physics_instability (63%), harmful_collision (19.5%) | — |
+| **run3a** | **SafeDagger** | **L2** | **~120k** | **59%** | **72.7%** | physics_instability (63%), harmful_collision (19.5%) | — |
 
 **Teacher 10 ceiling:** 96.25% lift, 53.75% unsafe (mostly physics_instability)
 **Teacher 11 ceiling:** 85.83% lift, 23.13% unsafe — safer but lower lift (sim2real effort/velocity limits)
-**Best student: run3a — 59% lift** (SafeDagger + L2, run11 teacher, 24 envs, 480 episode eval)
+**Best student: run3a — 59% lift** (SafeDagger + L2, run11 teacher, 24 envs, ~120k iters, 480 episode eval)
 
-| run3b | Vanilla DAgger | KL | 100k | 57.7% | 70.6% | physics_instability (65%), harmful_collision (18%) | — |
-| run4a | SafeDagger | L2 | 100k | — | — | Per-object + termination logging | *running* |
-| run4b | Vanilla DAgger | KL | 100k | — | — | Per-object + termination logging | *running* |
+| run3b | Vanilla DAgger | KL | ~105k | 57.7% | 70.6% | physics_instability (65%), harmful_collision (18%) | — |
+| run4a | SafeDagger | L2 | 100k | 36.9% | 79.6% | physics_instability (62%), harmful_collision (20%) | — |
+| **run4b** | **Vanilla DAgger** | **KL** | **100k** | **52.1%** | **44.8%** | physics_instability (53%), object_oob (24%) | — |
+| run5a | SafeDagger | L2 | 100k | — | — | per-object real termination logging | *running* |
+| run5b | Vanilla DAgger | KL | 100k | — | — | per-object real termination logging | *running* |
+
+## run5a/5b — SafeDagger vs DAgger with per-object real termination logging (2026-04-02)
+
+**Motivation:** run4a/4b logged `per_object_unsafe/<name>` which is L2-based divergence, not actual unsafe terminations. run5a/5b adds `per_object_term_real/<name>` (object OOB, hand too far, palm flipped) and `per_object_term_physics/<name>` (vel_explosion, robot_unstable) per object. Also includes fixed beta=0 for DAgger.
+
+**Teacher:** `11_multi_object_adr14_sim2real_03-30_17-41-43`
+
+**Run directories:**
+- run5a (SafeDagger): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_02-23-45-55/`
+- run5b (Vanilla DAgger): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_02-23-41-36/`
+
+**Status (2026-04-02):** Both running. DAgger (5b) started 23:41 on GPU 1, SafeDagger (5a) started 23:45 on GPU 0. Both 24 envs, 100k iters.
+
+**New metrics logged:**
+- `per_object_term_real/<name>` — real unsafe terminations per object (confirmed logging)
+- `per_object_term_physics/<name>` — physics instabilities per object
+- `beta` = 0 for DAgger (fixed), actual intervention rate for SafeDagger
+
+**Commands:** Same as run4a/4b.
+
+**Results:** *pending*
 
 ## run4a/4b — SafeDagger vs DAgger head-to-head with per-object logging (2026-04-02)
 
@@ -81,7 +104,28 @@ CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pytho
 - `beta` decay in SafeDagger (run4a) — how fast does the student take over?
 - Overall lift/unsafe at 100k — does run3b's finding hold (DAgger converges 3.5× faster)?
 
-**Results:** *pending*
+**Training completed (100k iters).** Raw metrics are noisy — check TensorBoard with smoothing (0.9+) for valid training curves. New per-object and termination breakdown metrics are logged.
+
+**Standalone eval (480 episodes: 20 rollouts × 24 envs, 2026-04-02):**
+
+| Metric | run4a SafeDagger+L2 | run4b Vanilla DAgger+KL | Teacher 11 |
+|---|---|---|---|
+| **Lift success** | 36.9% | **52.1%** | 85.8% |
+| **Unsafe rate** | 79.6% | **44.8%** | 23.1% |
+| Physics instability | 62.0% | 52.6% | 47.7% |
+| Harmful collision | 19.6% | 16.3% | 7.2% |
+| Object out of bound | 13.4% | 23.7% | 40.5% |
+| Palm flipped | 5.0% | 7.4% | 2.7% |
+
+**Eval JSONs:**
+- run4a: `eval_results/eval_metrics_20260402_181427.json`
+- run4b: `eval_results/eval_metrics_20260402_181413.json`
+
+**Key findings:**
+- Vanilla DAgger outperforms SafeDagger at 100k iters: 52.1% vs 36.9% lift, consistent with run3a/3b
+- Vanilla DAgger achieves **44.8% unsafe rate** — best student unsafe rate so far (prev best: run3b 70.6%)
+- SafeDagger's teacher intervention (beta=0.67) doesn't translate to standalone safety — 79.6% unsafe is worst of all run3/4 students
+- Physics instability remains dominant failure mode for both (~52-62%), confirming it's a sim artifact not policy behavior
 
 ## run3a — SafeDagger + L2, run11 teacher, 24 envs (2026-03-31)
 
@@ -174,7 +218,7 @@ python run_distillation_safedagger_fr3_agilehand.py \
 
 **Standalone eval (480 episodes, 2026-03-31):**
 
-| Metric | run3a SafeDagger+L2 (350k) | run3b Vanilla DAgger+KL (100k) | Teacher 11 |
+| Metric | run3a SafeDagger+L2 (~120k) | run3b Vanilla DAgger+KL (~105k) | Teacher 11 |
 |---|---|---|---|
 | **Lift success** | 58.96% | 57.71% | 85.83% |
 | Unsafe rate | 72.7% | 70.6% | 23.1% |
@@ -183,10 +227,10 @@ python run_distillation_safedagger_fr3_agilehand.py \
 | Object out of bound | 17.8% | 16.8% | 40.5% |
 | Palm flipped | 0.3% | 0% | 2.7% |
 
-**Key finding: Vanilla DAgger converges 3.5× faster.**
-Both methods reach ~58% lift with teacher 11, but vanilla DAgger gets there in 100k iters vs SafeDagger's 350k. With teacher 11, the distillation method matters less than the teacher quality — both SafeDagger+L2 and vanilla DAgger+KL produce similar standalone performance.
+**Key finding: Both methods converge at similar speed and performance.**
+Both methods reach ~58% lift with teacher 11 in ~100k iters. With teacher 11, the distillation method matters less than the teacher quality — both SafeDagger+L2 and vanilla DAgger+KL produce similar standalone performance.
 
-**Updated conclusion:** Teacher quality is the dominant factor. run3a/3b (teacher 11, 59/58% lift) both outperform run2a (teacher 10, 50% lift) regardless of distillation method. Vanilla DAgger is preferred for speed.
+**Updated conclusion:** Teacher quality is the dominant factor. run3a/3b (teacher 11, 59/58% lift) both outperform run2a (teacher 10, 50% lift) regardless of distillation method.
 
 ## Teacher checkpoints used
 

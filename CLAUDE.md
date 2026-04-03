@@ -222,6 +222,8 @@ Each robot/hand combo lives in `dextrah_lab/tasks/<task_name>/` with this patter
 - **Termination breakdown** is logged separately: `termination/real_unsafe` (object OOB, hand too far, palm flipped) vs `termination/physics_instability` (vel_explosion + robot_unstable). Use `real_unsafe` for sim2real-relevant comparisons — physics instabilities are simulation artifacts.
 - **`beta` metric** = fraction of envs where student L2 loss exceeds `unsafe_l2_threshold` (0.5). For SafeDagger, teacher overrides in those envs. For vanilla DAgger, beta stays ~1.0 (no override, but check still runs). Effectively the training-time unsafe rate.
 - **Run directories are timestamp-unique** — experiment name includes `datetime.now().strftime("_%d-%H-%M-%S")`, so parallel runs won't overwrite each other unless started in the same second.
+- **Noisy per-object metrics** — with 24 envs and 13 objects, each object gets ~2 envs. Per-step data is binary (0/1). Use EMA smoothing α=0.999 (matching TensorBoard 0.999) for readable per-object plots, not rolling mean.
+- **`per_object_unsafe/<name>` is L2-based**, not actual terminations. For real unsafe episodes (object OOB, hand too far, palm flipped), use `per_object_term_real/<name>` (added 2026-04-02, requires re-run to populate).
 
 ### Config Override Pattern
 
@@ -267,6 +269,11 @@ Git LFS is used for `.pth` model weight files.
 - **Always use `multi_objects/visdex_selected`** for distillation — matches the teacher's training set.
 - **`--teacher` with absolute path bypasses `pretrained_ckpts/` resolution** — the code checks `os.path.isabs()` first.
 
+### Distillation Gotchas (kuka_allegro)
+
+- **ADR during distillation was hardcoded to max** — `dextrah_kuka_allegro_env.py` previously forced `starting_adr_increments = num_adr_increments` (50) when `distillation=True`. Patched 2026-04-02 to default to 0 (matching fr3_agilehand). CLI override `env.starting_adr_increments=N` now works.
+- **Kuka+Allegro distillation uses legacy `distillation.py`** (vanilla DAgger, `torch.distributed.run`) — NOT `distillation_safedagger.py`. A new `run_distillation_safedagger_kuka_allegro.py` was added for SafeDagger pipeline support.
+
 ### Sim2Real Insights (fr3_agilehand)
 
 - **Joint stiffness/damping don't directly map to real hardware** — the policy outputs target positions, and real hardware has its own PID controller. What matters for sim2real is effort limits (achievable force) and velocity limits (achievable speed per step), not sim PD gains.
@@ -281,6 +288,7 @@ Training experiment logs are tracked in `dextrah_lab/docs/experiments/`. **Conve
 - `exp_03_sim2real.md` — Sim2real curriculum: hardware actuator gains, thumb velocity, effort limits
 - `exp_04_distillation.md` — SafeDagger distillation from multi-object teacher
 - `per_object_teacher_workflow.md` — Per-object teacher training and directory structure
+- `exp_07_baseline_comparisons.md` — Kuka+Allegro and TG2+InspireHand teacher/distillation baselines
 
 ### Thesis Plotting & Data Export
 
@@ -298,7 +306,7 @@ python plot_results.py [--show]
 ```
 Generates all thesis plots to `dextrah_lab/docs/Report/figures/plots/` (PDF + PNG). Available plots:
 - Hardcoded data: `all_runs_gsr`, `failure_breakdown`, `teacher_comparison`, `teacher_training_curve`, `adr_ranges`, `beta_decay`, `physics_challenges_timeline`
-- CSV-based (from `export_runs.py` output): `distillation_lift_success_100k`, `distillation_unsafe_rate_100k` — these read exported CSVs from `docs/exports/distillation/` and plot smoothed curves (500-step rolling mean) for all distillation runs 0–100k iterations
+- CSV-based (from `export_runs.py` output): `distillation_lift_success_100k`, `distillation_unsafe_rate_100k`, `distillation_comparison_3panel`, `per_object_lift_comparison`, `per_object_lift_head_to_head`, `per_object_unsafe_real_comparison` — read exported CSVs and eval JSONs from `docs/exports/`
 
 **Plot style** (`plot_style.py`): thesis-consistent style — Charter/serif font, golden-ratio aspect, 300 DPI export, academic color palette. Import `apply_style()` before creating figures, `save_fig(fig, name)` to save.
 
