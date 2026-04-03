@@ -121,6 +121,18 @@ class EventCfg:
         },
     )
 
+    # Arm joint init randomization: ±0.2 rad (~11.5°) from default pose at every reset.
+    # Forces the policy to learn approach from varied arm configurations from the start.
+    arm_joint_init = EventTerm(
+        func=mdp.reset_joints_by_offset,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["fr3_joint.*"]),
+            "position_range": (-0.2, 0.2),
+            "velocity_range": (0.0, 0.0),
+        },
+    )
+
     # NOTE: no beginning randomization for this one
     robot_joint_friction = EventTerm(
         func=mdp.randomize_joint_parameters,
@@ -192,6 +204,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                         "single_object_shoe",
                         "single_object_female_knight",
                         "multi_objects/visdex_selected",
+                        "multi_objects/visdex_top8",
                         ]
 
     # Toggle for using cuda graph
@@ -212,6 +225,10 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     num_teacher_observations = 0
     num_observations = 0
     num_states = 0
+    # Override one-hot size to match teacher checkpoint when distilling with fewer objects.
+    # 0 = use actual num_unique_objects. Set to teacher's object count (e.g. 13) if distilling
+    # with a subset of objects.
+    teacher_onehot_size: int = 0
 
     state_space = 0
     observation_space = 0
@@ -913,11 +930,11 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         },
         # Sim2real actuator curriculum — only for params NOT covered by EventTerms
         "actuator_curriculum": {
-            # Thumb rotation velocity limit (rad/s): 10.0 → 0.1396 (8 deg/s)
-            "thumb_rot_vel_limit": (10.0, 0.1396),
-            # FR3 arm effort limits (Nm): current → factory spec
-            "arm_14_effort_limit": (100.0, 87.0),
-            "arm_57_effort_limit": (50.0, 12.0),
+            # Thumb rotation velocity limit (rad/s): 0.2618 (15 deg/s) → 0.1396 (8 deg/s)
+            "thumb_rot_vel_limit": (0.2618, 0.1396),
+            # FR3 arm effort limits (Nm): hardware starting → factory spec
+            "arm_14_effort_limit": (90.0, 87.0),
+            "arm_57_effort_limit": (20.0, 12.0),
         },
     }
 

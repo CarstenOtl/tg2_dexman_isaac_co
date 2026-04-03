@@ -417,7 +417,11 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                         + 3 + 4 + 3
                         + 1          # object_scale
                         + num_actuated)  # actions
-        self.cfg.num_teacher_observations = teacher_base + num_unique_objects
+        # One-hot size can be overridden to match teacher checkpoint trained with
+        # more objects (e.g. teacher trained on 13 objects, distilling with 8).
+        cfg_onehot = getattr(self.cfg, "teacher_onehot_size", 0)
+        self._onehot_size = cfg_onehot if cfg_onehot > 0 else num_unique_objects
+        self.cfg.num_teacher_observations = teacher_base + self._onehot_size
 
         # Student obs: dof_pos(act) + dof_vel(act) + hand_pos(hb*3) + hand_vel(hb*3)
         #            + obj_goal(3) + actions(act)
@@ -444,7 +448,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                        + 3 + 4 + 6 + 3
                        + 1          # object_scale
                        + num_actuated)  # actions
-        self.cfg.num_states = critic_base + num_unique_objects
+        self.cfg.num_states = critic_base + self._onehot_size
 
         self.cfg.state_space = self.cfg.num_states
         self.cfg.observation_space = self.cfg.num_observations
@@ -664,8 +668,9 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
 
         self.multi_object_idx = torch.tensor(object_indices, dtype=torch.long, device=self.device)
         # N-dim one-hot over object identity — used in teacher and critic obs.
+        # Padded to _onehot_size to match teacher checkpoint when distilling with fewer objects.
         self.multi_object_idx_onehot = F.one_hot(
-            self.multi_object_idx, num_classes=self.num_unique_objects
+            self.multi_object_idx, num_classes=self._onehot_size
         ).float()
 
         stage = omni.usd.get_context().get_stage()
@@ -1433,13 +1438,17 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
 
         self.object.write_root_state_to_sim(object_default_state, env_ids)
 
-        # Spawning robot
+        # Spawning robot — apply ADR spawn noise to arm joints only (not fingers)
         joint_pos_noise = self.dextrah_adr.get_custom_param_value("robot_spawn" ,"joint_pos_noise")
         joint_vel_noise = self.dextrah_adr.get_custom_param_value("robot_spawn" ,"joint_vel_noise")
 
         num_actuated = len(self.actuated_dof_indices)
         joint_pos_deltas = 2. * (torch.rand(num_ids, num_actuated, device=self.device) - 0.5)
         joint_vel_deltas = 2. * (torch.rand(num_ids, num_actuated, device=self.device) - 0.5)
+
+        # Zero out noise for finger joints (indices 7+), keep only arm (first 7)
+        joint_pos_deltas[:, 7:] = 0.0
+        joint_vel_deltas[:, 7:] = 0.0
 
         # Calculate joint positions
         dof_pos = self.robot_start_joint_pos[env_ids].clone()
