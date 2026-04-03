@@ -10,23 +10,68 @@ type: project
 
 ## Summary — All standalone student evaluations
 
-| Run | Method | Loss | Iters | Standalone Lift | Unsafe Rate | Key Failure | Stored |
-|---|---|---|---|---|---|---|---|
-| run1b | SafeDagger | L2 | 100k | 0% | — | beta=0.875, student barely acted | — |
-| run1c | SafeDagger | L2 | 350k | 36% | 67.5% | harmful_collision (41%) | — |
-| **run2a** | **Vanilla DAgger** | **KL** | **350k** | **50%** | **75%** | harmful_collision (45%) | `stored_policies/.../vanilla_dagger_kl_run2a_350k/` |
-| run2b | Vanilla DAgger | KL | 700k | 0% | 100% | Collapsed — hand_close (69%) | — |
-| **run3a** | **SafeDagger** | **L2** | **~120k** | **59%** | **72.7%** | physics_instability (63%), harmful_collision (19.5%) | — |
+**Teacher 11 benchmark** (480 episodes): 85.8% lift, 23.1% unsafe
+**Teacher 10 benchmark** (80 episodes): 96.3% lift, 53.8% unsafe
+**Best student: run5a — 61.3% lift** (SafeDagger + L2, teacher 11, 24 envs, 100k iters)
 
-**Teacher 10 ceiling:** 96.25% lift, 53.75% unsafe (mostly physics_instability)
-**Teacher 11 ceiling:** 85.83% lift, 23.13% unsafe — safer but lower lift (sim2real effort/velocity limits)
-**Best student: run3a — 59% lift** (SafeDagger + L2, run11 teacher, 24 envs, ~120k iters, 480 episode eval)
+| Run | Method | Loss | Teacher | Iters | Lift | Unsafe | Key Failure (% all eps) | Notes |
+|---|---|---|---|---|---|---|---|---|
+| run1b | SafeDagger | L2 | T10 | 100k | 0% | — | beta=0.875, student barely acted | — |
+| run1c | SafeDagger | L2 | T10 | 350k | 36% | 67.5% | harmful_collision (27%) | — |
+| run2a | DAgger | KL | T10 | 350k | 50% | 75% | harmful_collision (34%) | — |
+| run2b | DAgger | KL | T10 | 700k | 0% | 100% | Collapsed | LR too high, no decay |
+| run3a | SafeDagger | L2 | T11 | ~120k | 59% | 72.7% | physics (45%), collision (14%) | — |
+| run3b | DAgger | KL | T11 | ~105k | 57.7% | 70.6% | physics (46%), collision (13%) | — |
+| run4a | SafeDagger | L2 | T11 | 100k | 36.9% | 79.6% | physics (49%), collision (16%) | per-object logging |
+| run4b | DAgger | KL | T11 | 100k | 52.1% | 44.8% | physics (24%), collision (7%) | **lowest unsafe** |
+| **run5a** | **SafeDagger** | **L2** | **T11** | **100k** | **61.3%** | **75.4%** | physics (41%), collision (14%) | **best lift** |
+| run5b | DAgger | KL | T11 | 100k | 49.2% | 58.5% | object_oob (18%), palm (17%) | real term logging |
+| run6a | SafeDagger | L2 | T11 | 100k | — | — | — | scaled L2 threshold (0.665) |
+| run6b | DAgger | KL | T11 | 100k | — | — | — | AverageMeter logging |
 
-| run3b | Vanilla DAgger | KL | ~105k | 57.7% | 70.6% | physics_instability (65%), harmful_collision (18%) | — |
-| run4a | SafeDagger | L2 | 100k | 36.9% | 79.6% | physics_instability (62%), harmful_collision (20%) | — |
-| **run4b** | **Vanilla DAgger** | **KL** | **100k** | **52.1%** | **44.8%** | physics_instability (53%), object_oob (24%) | — |
-| run5a | SafeDagger | L2 | 100k | — | — | per-object real termination logging | *running* |
-| run5b | Vanilla DAgger | KL | 100k | — | — | per-object real termination logging | *running* |
+## run6a/6b — SafeDagger vs DAgger with episode-level AverageMeter logging (2026-04-03)
+
+**Motivation:** run5 showed that per-step termination rates (~0.1%) are not comparable to eval episode-level unsafe rates (~50-75%). Adopted upstream tg2_inspirehand AverageMeter pattern for episode-level tracking. Now `train/avg/unsafe_episode_rate` directly matches eval's `unsafe_episode_rate`.
+
+**Changes from run5:**
+- `classify_out_of_reach_reasons()` from `eval_utils.py` classifies termination reasons per step (matching eval)
+- `AverageMeter` rolling window (100 episodes) tracks episode-level: `train/avg/unsafe_episode_rate`, `train/avg/unsafe_reason_prop/<reason>`
+- Per-object episode-level: `train/<object>/unsafe_episode_rate`, `train/<object>/unsafe_reason_prop/<reason>`
+- Per-env `current_unsafe_terminated` and `current_unsafe_reason_idx` accumulate within episodes, reset on done
+- `per_object_lifted/<name>` tracks `lift_success` (object above table, less strict than `in_success_region`)
+- ResNet18 backbone confirmed finetuning during distillation (ImageNet pretrained, gradients enabled)
+- **L2 threshold scaled by action dim**: `0.5 × sqrt(23/13) = 0.665` (was 0.5). Matches effective per-joint difficulty of upstream tg2_inspirehand (13 actions). Should reduce beta from ~75% toward ~20-40%.
+
+**Teacher:** `11_multi_object_adr14_sim2real_03-30_17-41-43`
+
+**Run directories:**
+- run6a (SafeDagger): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_03-13-04-24/`
+- run6b (Vanilla DAgger): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_03-13-06-54/`
+
+**Status (2026-04-03):** Both running. SafeDagger (6a) started 13:04 on GPU 0, DAgger (6b) started 13:06 on GPU 1.
+
+**Commands:** Same as run5a/5b.
+
+**Results:** *pending*
+
+### SafeDagger beta analysis — why beta stays at ~75% vs upstream's ~20%
+
+**Finding:** Both upstream (tg2_inspirehand) and fr3_agilehand use `unsafe_l2_threshold = 0.5`. But the L2 norm behaves differently due to action space size:
+
+| Factor | tg2_inspirehand | fr3_agilehand |
+|---|---|---|
+| Action space | 13 (7 arm + 6 hand) | 23 (7 arm + 16 hand) |
+| L2 threshold | 0.5 | 0.5 |
+| L2 computation | `weighted_l2(mus, dim=-1)` — sums across ALL dims | same |
+| Expected L2 at same per-joint error | lower (fewer dims) | ~√(23/13) ≈ 1.33× higher |
+| Distillation envs | 48 (paper) | 24 |
+| Envs per object | ~4-5 | ~1.8 |
+
+The `weighted_l2` sums `(student - teacher)² * weight` across all action dimensions, then takes `sqrt`. With 23 dims vs 13, the L2 norm is inherently larger even if per-joint error is identical. The same 0.5 threshold is much harder to satisfy with 23 dims.
+
+**Proposed fix:** Scale threshold by action dimensionality: `0.5 * sqrt(23/13) ≈ 0.67` or simply try `0.3` to match the effective difficulty. Alternatively, normalize L2 by `sqrt(num_actions)` before comparing to threshold.
+
+**Additional concern:** 24 envs / 13 objects = 1.8 envs per object. Upstream likely uses 48 envs with fewer objects, giving 4-5× more gradient signal per object. This may slow learning independently of the threshold issue.
 
 ## run5a/5b — SafeDagger vs DAgger with per-object real termination logging (2026-04-02)
 
@@ -47,7 +92,56 @@ type: project
 
 **Commands:** Same as run4a/4b.
 
-**Results:** *pending*
+**Standalone eval (480 episodes, 2026-04-03):**
+
+**Teacher 11 benchmark** (480 episodes, `eval_metrics_20260331_193003.json`): 85.8% lift, 23.1% unsafe. All student comparisons are relative to this teacher.
+
+| Metric | run5a SafeDagger+L2 | run5b Vanilla DAgger+KL | Teacher 11 |
+|---|---|---|---|
+| **Lift success** | **61.3%** | 49.2% | 85.8% |
+| **Unsafe rate** | 75.4% | 58.5% | 23.1% |
+| Physics instability (% all eps) | 40.6% | 14.6% | 11.0% |
+| Harmful collision (% all eps) | 13.8% | 9.8% | 1.7% |
+| Object out of bound (% all eps) | 8.5% | 17.5% | 9.4% |
+| Palm flipped (% all eps) | 12.5% | 16.7% | 0.6% |
+
+*Note: failure breakdown scaled to % of all episodes (= reason_pct × unsafe_rate), not % of unsafe episodes.*
+
+**Per-object standalone eval (480 episodes = 20 rollouts × 24 envs):**
+
+| Object | run5a SafeD Lift | run5b DAgger Lift | run5a Unsafe | run5b Unsafe |
+|---|---|---|---|---|
+| basketball_shoe | 52.5% | 45.0% | 90.0% | 80.0% |
+| chicken_head_in_car | 22.5% | 7.5% | 80.0% | 45.0% |
+| closed_fist | **92.5%** | 85.0% | 65.0% | **35.0%** |
+| elephant_toy | **87.5%** | 75.0% | **47.5%** | **45.0%** |
+| homer | 42.5% | 35.0% | 92.5% | 62.5% |
+| mario | 62.5% | 40.0% | 60.0% | 52.5% |
+| milk_pot | 77.5% | 70.0% | 82.5% | 70.0% |
+| plane | 45.0% | 22.5% | 85.0% | 67.5% |
+| teddy_bear | 90.0% | **100.0%** | 52.5% | 55.0% |
+| toy_bagger | 67.5% | 50.0% | 90.0% | 57.5% |
+| toy_cow | 52.5% | 30.0% | 90.0% | 57.5% |
+| train | 15.0% | 20.0% | 85.0% | 95.0% |
+| tutle_candle_holder | 70.0% | 40.0% | 55.0% | 55.0% |
+
+**Eval JSONs:**
+- run5a: `eval_results/eval_metrics_20260403_105154.json`
+- run5b: `eval_results/eval_metrics_20260403_105805.json`
+
+**Key findings:**
+- SafeDagger run5a achieves **61.3% lift — new best student** (surpassing run3a 59%)
+- High variance between identical runs: SafeDagger 4a=36.9% vs 5a=61.3%, DAgger 4b=52.1% vs 5b=49.2%
+- SafeDagger has higher lift but consistently higher unsafe rate (~75-80% vs DAgger ~45-59%)
+- Palm_flipped emerged as significant failure mode in run5 (12.5-16.7% of all eps) — was <8% in run4
+- DAgger achieves 100% lift on `teddy_bear` — best single-object result
+- `train` and `chicken_head_in_car` remain hardest objects for both methods
+- Excluding physics instability: SafeDagger real unsafe = 34.8%, DAgger real unsafe = 43.9%
+
+**Metric insights from run5 analysis:**
+- **`in_success_region` ≠ `lift_success`**: training-time `per_object_lift/<name>` logs `in_success_region` (object at goal, strict) — shows 0% for `train` and `chicken_head_in_car`. Eval `lift_success` (object above table, less strict) shows 15-20%. Added `per_object_lifted/<name>` for next run.
+- **Per-step termination rate ≠ episode-level unsafe rate**: `termination/real_unsafe` during training is ~0.1% (instantaneous per-step), while eval shows 58-75% episode-level unsafe. This is because a termination flag is True for 1 step out of ~200 per episode. Added `episode/unsafe_rate` and `episode_per_object_unsafe/<name>` (cumulative episode-level) for next run — directly comparable to eval.
+- **`out_of_reach_reason_pct` must be scaled**: values are % of unsafe episodes, not % of all episodes. Multiply by `unsafe_episode_rate` for absolute rates. All tables updated.
 
 ## run4a/4b — SafeDagger vs DAgger head-to-head with per-object logging (2026-04-02)
 

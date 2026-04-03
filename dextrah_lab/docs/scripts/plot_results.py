@@ -835,6 +835,178 @@ def plot_distillation_comparison(max_iter: int = 100_000, ema_alpha: float = 0.9
     save_fig(fig, "distillation_unsafe_episode_rate")
 
 
+DISTILLATION_RUNS_5 = [
+    ("student_run5a_safedagger_l2_teacher11.csv", 24,
+     "SafeDAgger", COLORS["blue"]),
+    ("student_run5b_vanilla_kl_teacher11.csv", 24,
+     "DAgger", COLORS["orange"]),
+]
+
+
+def plot_distillation_comparison_run5(max_iter: int = 100_000, ema_alpha: float = 0.999):
+    """Three separate plots for run5a/5b with real termination data."""
+    runs = DISTILLATION_RUNS_5
+
+    # 1. Lift success normalized to teacher ceiling
+    fig = _plot_distillation_single(
+        "in_success_region", "Student Policy Lift Success (Run 5)",
+        "Lift Success (normed to teacher)", (0, 1.05), runs, max_iter, ema_alpha,
+        normalize_by=TEACHER_11_LIFT)
+    save_fig(fig, "run5_lift_success_normed")
+
+    # 2. Intervention rate beta
+    fig = _plot_distillation_single(
+        "beta", "Intervention Rate Beta (Run 5)",
+        r"$\beta$ (teacher intervention rate)", (0, 1.05), runs, max_iter, ema_alpha,
+        beta_dagger_zero=True)
+    save_fig(fig, "run5_intervention_rate")
+
+    # 3. Real unsafe episode rate (per-step termination rate)
+    fig = _plot_distillation_single(
+        "termination/real_unsafe", "Real Unsafe Termination Rate (Run 5)",
+        "Per-step termination rate", (0, 0.01), runs, max_iter, ema_alpha)
+    save_fig(fig, "run5_unsafe_episode_rate")
+
+
+def plot_per_object_eval_run5(eval_dir: Path = None):
+    """Per-object lift success and unsafe rate from run5 standalone evals."""
+    import json
+    if eval_dir is None:
+        eval_dir = EXPORTS_DIR.parent.parent / "distillation_new" / "eval_results"
+
+    eval_files = {
+        "SafeDAgger (run5a)": eval_dir / "eval_metrics_20260403_105154.json",
+        "DAgger (run5b)": eval_dir / "eval_metrics_20260403_105805.json",
+    }
+
+    for metric_key, ylabel, title, fname in [
+        ("lift_success", "Lift success (%)", "Per-Object Lift Success — Standalone Eval (Run 5)", "run5_per_object_lift_eval"),
+        ("unsafe_episode_rate", "Unsafe rate (%)", "Per-Object Unsafe Rate — Standalone Eval (Run 5)", "run5_per_object_unsafe_eval"),
+    ]:
+        fig, ax = plt.subplots(figsize=(14/2.54, 7/2.54))
+        x = np.arange(len(OBJECTS))
+        w = 0.35
+        colors_list = [COLORS["blue"], COLORS["orange"]]
+
+        for i, (label, path) in enumerate(eval_files.items()):
+            with open(path) as fh:
+                data = json.load(fh)
+            vals = [data["per_object_metrics"].get(obj, {}).get(metric_key, 0) * 100
+                    for obj in OBJECTS]
+            bars = ax.bar(x + (i - 0.5) * w, vals, w, label=label,
+                          color=colors_list[i], edgecolor="white", linewidth=0.5)
+            for bar, val in zip(bars, vals):
+                if val > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, val + 1.5,
+                            f"{val:.0f}", ha="center", va="bottom", fontsize=4)
+
+        ax.set_ylabel(ylabel)
+        ax.set_xticks(x)
+        ax.set_xticklabels([o.replace("_", " ") for o in OBJECTS],
+                           fontsize=5, rotation=45, ha="right")
+        ax.set_ylim(0, 105)
+        ax.legend(fontsize=7)
+        ax.set_title(title, fontsize=8)
+        fig.tight_layout()
+        save_fig(fig, fname)
+
+
+def plot_per_object_term_real_head_to_head(max_iter: int = 100_000, ema_alpha: float = 0.999):
+    """Per-object REAL unsafe termination rate: SafeDagger vs DAgger (run5a/5b).
+    One subplot per object, EMA smoothed.
+    """
+    n_cols = 4
+    n_rows = (len(OBJECTS) + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(18/2.54, n_rows * 4/2.54),
+                             sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+
+    runs = DISTILLATION_RUNS_5
+
+    for idx, obj in enumerate(OBJECTS):
+        ax = axes_flat[idx]
+        for csv_name, n_envs, method, color in runs:
+            df = _load_distillation_metric(
+                csv_name, f"per_object_term_real/{obj}", n_envs,
+                max_iter=max_iter, smooth_window=1)
+            if df.empty:
+                continue
+            raw = df["value"].values * 100
+            smoothed = _ema(raw, alpha=ema_alpha)
+            iters = df["iteration"].values
+            step = max(1, len(iters) // 500)
+            ax.plot(iters[::step], smoothed[::step], color=color,
+                    linewidth=1.2, alpha=0.9, label=method)
+
+        ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
+        ax.set_ylim(0, 2)
+        ax.set_xlim(0, max_iter)
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        ax.tick_params(labelsize=5)
+
+    for idx in range(len(OBJECTS), len(axes_flat)):
+        axes_flat[idx].set_visible(False)
+
+    for ax in axes[-1, :]:
+        if ax.get_visible():
+            ax.set_xlabel("Iteration", fontsize=7)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("Unsafe (%)", fontsize=7)
+
+    axes_flat[0].legend(fontsize=5, loc="upper right")
+    fig.suptitle("Per-Object Real Unsafe Rate (per-step): SafeDAgger vs DAgger (Run 5)", fontsize=9)
+    fig.tight_layout()
+
+    save_fig(fig, "per_object_term_real_head_to_head")
+
+
+def plot_per_object_lift_head_to_head_run5(max_iter: int = 100_000, ema_alpha: float = 0.999):
+    """Per-object lift success: SafeDagger vs DAgger (run5a/5b)."""
+    n_cols = 4
+    n_rows = (len(OBJECTS) + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(18/2.54, n_rows * 4/2.54),
+                             sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+
+    runs = DISTILLATION_RUNS_5
+
+    for idx, obj in enumerate(OBJECTS):
+        ax = axes_flat[idx]
+        for csv_name, n_envs, method, color in runs:
+            df = _load_distillation_metric(
+                csv_name, f"per_object_lift/{obj}", n_envs,
+                max_iter=max_iter, smooth_window=1)
+            if df.empty:
+                continue
+            raw = df["value"].values * 100
+            smoothed = _ema(raw, alpha=ema_alpha)
+            iters = df["iteration"].values
+            step = max(1, len(iters) // 500)
+            ax.plot(iters[::step], smoothed[::step], color=color,
+                    linewidth=1.2, alpha=0.9, label=method)
+
+        ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
+        ax.set_ylim(0, 100)
+        ax.set_xlim(0, max_iter)
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        ax.tick_params(labelsize=5)
+
+    for idx in range(len(OBJECTS), len(axes_flat)):
+        axes_flat[idx].set_visible(False)
+
+    for ax in axes[-1, :]:
+        if ax.get_visible():
+            ax.set_xlabel("Iteration", fontsize=7)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("Lift (%)", fontsize=7)
+
+    axes_flat[0].legend(fontsize=5, loc="lower right")
+    fig.suptitle("Per-Object Lift Success: SafeDAgger vs DAgger (Run 5)", fontsize=9)
+    fig.tight_layout()
+
+    save_fig(fig, "per_object_lift_head_to_head_run5")
+
+
 def plot_termination_breakdown(max_iter: int = 100_000, smooth: int = 1000):
     """Termination breakdown: real_unsafe vs physics_instability for run4a and run4b."""
     fig, ax = plt.subplots()
@@ -905,6 +1077,10 @@ def main():
     plot_per_object_unsafe_real()
     plot_per_object_unsafe_real_per_run()
     plot_distillation_comparison()
+    plot_distillation_comparison_run5()
+    plot_per_object_eval_run5()
+    plot_per_object_term_real_head_to_head()
+    plot_per_object_lift_head_to_head_run5()
     plot_termination_breakdown()
     print("Done.")
 

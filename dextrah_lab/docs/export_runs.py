@@ -63,6 +63,18 @@ DISTILLATION_RUNS = {
         "dextrah-fr3-agilehand-safedagger-stereo-transformer_02-14-28-35",
         "Vanilla DAgger + KL, teacher 11, 24 envs, 100k iters, per-object logging",
     ),
+    "student_run5a_safedagger_l2_teacher11": (
+        "dextrah-fr3-agilehand-safedagger-stereo-transformer_02-23-45-55",
+        "SafeDagger + L2, teacher 11, 24 envs, 100k iters, per-object real termination",
+    ),
+    "student_run5b_vanilla_kl_teacher11": (
+        "dextrah-fr3-agilehand-safedagger-stereo-transformer_02-23-41-36",
+        "Vanilla DAgger + KL, teacher 11, 24 envs, 100k iters, per-object real termination",
+    ),
+    "student_kuka_allegro_vanilla_kl": (
+        "dextrah-kuka-allegro-safedagger-stereo-transformer_02-21-52-43",
+        "Vanilla DAgger + KL, kuka_allegro, 24 envs, 100k iters, ADR 0",
+    ),
 }
 
 

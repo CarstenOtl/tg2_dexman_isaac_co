@@ -31,6 +31,10 @@ from tensorboardX import SummaryWriter
 import wandb
 
 from typing import Dict
+from dextrah_lab.distillation_new.eval_utils import (
+    UNSAFE_REASON_NAMES,
+    classify_out_of_reach_reasons,
+)
 
 # Imitation loss options (imitation_loss_type):
 # - "kl": KL(N_teacher || N_student) over action distributions.
@@ -250,7 +254,49 @@ class SafeDagger:
         wp.init()
         self.aux_coeff = self.ov_env.cfg.aux_coeff
         self.stereo = self.ov_env.cfg.simulate_stereo
-        self.unsafe_l2_threshold = 0.5 # default 0.1
+        # Scale L2 threshold by sqrt(num_actions/reference_actions) so that
+        # the per-joint error budget matches the tg2_inspirehand baseline (13 actions).
+        reference_actions = 13  # tg2_inspirehand action dim (upstream baseline)
+        base_threshold = float(self.config.get("unsafe_l2_threshold", 0.5))
+        scale = math.sqrt(self.num_actions / reference_actions)
+        self.unsafe_l2_threshold = base_threshold * scale
+        if self.rank == 0:
+            print(f"Unsafe L2 threshold: {self.unsafe_l2_threshold:.3f} "
+                  f"(base={base_threshold} × sqrt({self.num_actions}/{reference_actions})={scale:.3f})")
+
+        # Episode-level tracking (AverageMeter, matching upstream tg2_inspirehand pattern)
+        self.unsafe_reason_names = UNSAFE_REASON_NAMES
+        self.unsafe_reason_to_idx = {
+            name: idx for idx, name in enumerate(self.unsafe_reason_names)
+        }
+        self.game_rewards = torch_ext.AverageMeter(
+            self.value_size, self.games_to_track
+        ).to(self.device)
+        self.game_lengths = torch_ext.AverageMeter(1, self.games_to_track).to(self.device)
+        self.game_unsafe_terminated = torch_ext.AverageMeter(1, self.games_to_track).to(self.device)
+        self.game_unsafe_reason = {
+            name: torch_ext.AverageMeter(1, self.games_to_track).to(self.device)
+            for name in self.unsafe_reason_names
+        }
+        # Per-object episode-level tracking
+        self.metric_object_names = getattr(self.ov_env, "object_names", [])
+        self.env_object_idx = getattr(self.ov_env, "multi_object_idx", None)
+        self.game_unsafe_terminated_by_object = {
+            name: torch_ext.AverageMeter(1, self.games_to_track).to(self.device)
+            for name in self.metric_object_names
+        }
+        self.game_unsafe_reason_by_object = {
+            name: {
+                reason: torch_ext.AverageMeter(1, self.games_to_track).to(self.device)
+                for reason in self.unsafe_reason_names
+            }
+            for name in self.metric_object_names
+        }
+        # Per-env episode state
+        self.current_unsafe_terminated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.current_unsafe_reason_idx = torch.full(
+            (self.num_envs,), -1, dtype=torch.long, device=self.device
+        )
         self.viz_imgs = False
         if self.viz_imgs:
             self.fig, (self.ax1, self.ax2) = plt.subplots(1, 2, figsize=(10, 5))
@@ -580,6 +626,18 @@ class SafeDagger:
             self.frame += self.num_envs
             self.current_rewards += rew.unsqueeze(-1)
             self.current_lengths += 1
+            # Classify unsafe termination reasons (episode-level, matching upstream)
+            reason_idx = classify_out_of_reach_reasons(
+                ov_env=self.ov_env,
+                out_of_reach=out_of_reach,
+                reason_names=self.unsafe_reason_names,
+                reason_to_idx=self.unsafe_reason_to_idx,
+                device=self.device,
+            )
+            self.current_unsafe_terminated = self.current_unsafe_terminated | out_of_reach
+            classified = reason_idx >= 0
+            new_reason_mask = (self.current_unsafe_reason_idx < 0) & out_of_reach & classified
+            self.current_unsafe_reason_idx[new_reason_mask] = reason_idx[new_reason_mask]
             self.dones = out_of_reach | timed_out
             all_done_indices = self.dones.nonzero(as_tuple=False)
 
@@ -615,9 +673,35 @@ class SafeDagger:
             done_indices = all_done_indices[:]
             self.game_rewards.update(self.current_rewards[done_indices])
             self.game_lengths.update(self.current_lengths[done_indices])
+            # Episode-level unsafe tracking (matching upstream AverageMeter pattern)
+            self.game_unsafe_terminated.update(self.current_unsafe_terminated[done_indices].float())
+            if len(done_indices) > 0:
+                done_env_ids = done_indices.squeeze(-1) if done_indices.ndim > 1 else done_indices
+                done_reason_idx = self.current_unsafe_reason_idx[done_env_ids].clone()
+                # Per-reason episode counts
+                for name, idx in self.unsafe_reason_to_idx.items():
+                    self.game_unsafe_reason[name].update((done_reason_idx == idx).float())
+                # Per-object episode tracking
+                if self.env_object_idx is not None and len(self.metric_object_names) > 0:
+                    done_obj_idx = self.env_object_idx[done_env_ids]
+                    for obj_idx, obj_name in enumerate(self.metric_object_names):
+                        obj_mask = done_obj_idx == obj_idx
+                        if not obj_mask.any():
+                            continue
+                        obj_done_ids = done_env_ids[obj_mask]
+                        self.game_unsafe_terminated_by_object[obj_name].update(
+                            self.current_unsafe_terminated[obj_done_ids].float()
+                        )
+                        obj_reason_idx = done_reason_idx[obj_mask]
+                        for reason_name, reason_i in self.unsafe_reason_to_idx.items():
+                            self.game_unsafe_reason_by_object[obj_name][reason_name].update(
+                                (obj_reason_idx == reason_i).float()
+                            )
             not_dones = 1.0 - self.dones.float()
             self.current_rewards = self.current_rewards * not_dones.unsqueeze(1)
             self.current_lengths = self.current_lengths * not_dones
+            self.current_unsafe_terminated = self.current_unsafe_terminated & self.dones.logical_not()
+            self.current_unsafe_reason_idx[done_indices] = -1
             self.actions_teacher[done_indices] *= 0.
             if len(done_indices) > 0:
                 self.unsafe[done_indices] = False
@@ -701,6 +785,39 @@ class SafeDagger:
                 self.writer.add_scalar(
                     "in_success_region", perf, self.frame
                 )
+                # --- Episode-level metrics (AverageMeter, matching upstream) ---
+                if self.game_unsafe_terminated.current_size > 0:
+                    unsafe_episode_rate = float(
+                        np.asarray(self.game_unsafe_terminated.get_mean()).reshape(-1)[0]
+                    )
+                    self.writer.add_scalar(
+                        "train/avg/unsafe_episode_rate", unsafe_episode_rate, self.frame
+                    )
+                    for name in self.unsafe_reason_names:
+                        reason_rate = float(
+                            np.asarray(self.game_unsafe_reason[name].get_mean()).reshape(-1)[0]
+                        )
+                        self.writer.add_scalar(
+                            f"train/avg/unsafe_reason_prop/{name}", reason_rate, self.frame
+                        )
+                    # Per-object episode-level
+                    for obj_name in self.metric_object_names:
+                        obj_meter = self.game_unsafe_terminated_by_object[obj_name]
+                        if obj_meter.current_size > 0:
+                            obj_unsafe = float(
+                                np.asarray(obj_meter.get_mean()).reshape(-1)[0]
+                            )
+                            self.writer.add_scalar(
+                                f"train/{obj_name}/unsafe_episode_rate", obj_unsafe, self.frame
+                            )
+                            for reason_name in self.unsafe_reason_names:
+                                reason_meter = self.game_unsafe_reason_by_object[obj_name][reason_name]
+                                if reason_meter.current_size > 0:
+                                    self.writer.add_scalar(
+                                        f"train/{obj_name}/unsafe_reason_prop/{reason_name}",
+                                        float(np.asarray(reason_meter.get_mean()).reshape(-1)[0]),
+                                        self.frame
+                                    )
                 # --- Per-object metrics ---
                 if hasattr(self.ov_env, "multi_object_idx") and hasattr(self.ov_env, "object_names"):
                     obj_indices = self.ov_env.multi_object_idx
@@ -714,11 +831,17 @@ class SafeDagger:
                             self.writer.add_scalar(
                                 f"per_object_unsafe/{obj_name}", obj_unsafe, self.frame
                             )
-                        # Per-object lift success
+                        # Per-object in-goal (object near goal position)
                         obj_lift = self.ov_env.in_success_region[env_mask].float().mean().item()
                         self.writer.add_scalar(
                             f"per_object_lift/{obj_name}", obj_lift, self.frame
                         )
+                        # Per-object lifted (object above table — less strict than in-goal)
+                        if hasattr(self.ov_env, "lift_success"):
+                            obj_lifted = self.ov_env.lift_success[env_mask].float().mean().item()
+                            self.writer.add_scalar(
+                                f"per_object_lifted/{obj_name}", obj_lifted, self.frame
+                            )
                 # --- Termination breakdown (physics artifacts vs real failures) ---
                 if hasattr(self.ov_env, "_early_terminated"):
                     term = self.ov_env._early_terminated.float().mean().item()

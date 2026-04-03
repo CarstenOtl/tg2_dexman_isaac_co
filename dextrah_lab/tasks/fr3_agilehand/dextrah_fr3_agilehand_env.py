@@ -1260,6 +1260,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         table_top_z = table_center_z + 0.5 * self.cfg.table_size_z
         lift_height_thresh = table_top_z + getattr(self.cfg, "object_height_thresh", 0.0)
         lift_success = (lift_weight != 0.0) & (self.object_pos[:, 2] > lift_height_thresh)
+        self.lift_success = lift_success  # per-env tensor for distillation logging
         self.extras["lift_success"] = lift_success.float().mean()
 
         # print('reach reward', hand_to_object_reward.mean())

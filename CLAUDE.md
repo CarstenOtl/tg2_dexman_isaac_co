@@ -167,6 +167,13 @@ python eval_student.py --task=dextrah_fr3_agilehand --num_envs 4 --enable_camera
 ```
 Reports: lift success (hold-gated), unsafe episode rate, failure reason breakdown, per-object metrics. Prefer over legacy `distillation/eval.py`.
 
+**Eval metric interpretation:**
+- `lift_success` and `unsafe_episode_rate` are NOT mutually exclusive — an episode can lift the object AND terminate unsafely (e.g., lifted then knocked out of bounds). They don't sum to 1.
+- `out_of_reach_reason_pct` values are percentages **within unsafe episodes** (sum to ~100%), NOT of all episodes. To get % of all episodes, multiply by `unsafe_episode_rate`. Example: physics_instability=47.7% with unsafe_rate=23.1% → 11.0% of all episodes.
+- Always scale failure breakdowns when plotting or comparing across runs with different unsafe rates.
+
+**Teacher 11 benchmark** (480 episodes, `eval_metrics_20260331_193003.json`): 85.8% lift, 23.1% unsafe. All fr3_agilehand student comparisons are relative to this teacher.
+
 ### Available Task IDs
 - `dextrah_fr3_agilehand` — FR3 + AgileHand (active development)
 - `Dextrah-Kuka-Allegro` — KUKA + Allegro hand
@@ -224,6 +231,8 @@ Each robot/hand combo lives in `dextrah_lab/tasks/<task_name>/` with this patter
 - **Run directories are timestamp-unique** — experiment name includes `datetime.now().strftime("_%d-%H-%M-%S")`, so parallel runs won't overwrite each other unless started in the same second.
 - **Noisy per-object metrics** — with 24 envs and 13 objects, each object gets ~2 envs. Per-step data is binary (0/1). Use EMA smoothing α=0.999 (matching TensorBoard 0.999) for readable per-object plots, not rolling mean.
 - **`per_object_unsafe/<name>` is L2-based**, not actual terminations. For real unsafe episodes (object OOB, hand too far, palm flipped), use `per_object_term_real/<name>` (added 2026-04-02, requires re-run to populate).
+- **`in_success_region` vs `lift_success`** — `in_success_region` = object at goal position (strict). `lift_success` = object above table (less strict). Per-object training plots logged `in_success_region` which shows zero for hard objects that get lifted but never reach goal. `self.lift_success` per-env tensor logged as `per_object_lifted/<name>` (added 2026-04-03, requires re-run).
+- **Per-step vs episode-level termination rates** — `termination/real_unsafe` is a per-step instantaneous rate (~0.1%), NOT comparable to eval's episode-level unsafe rate (~50-75%). Episode-level metrics (`episode/unsafe_rate`, `episode_per_object_unsafe/<name>`) added 2026-04-03 — these accumulate episode outcomes and match eval numbers.
 
 ### Config Override Pattern
 
