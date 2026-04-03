@@ -337,3 +337,35 @@ python train.py --headless --task=dextrah_fr3_agilehand --seed 42 \
 
 **Stored policy:** `stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/`
 **Pretrained ckpt:** `pretrained_ckpts/best_dextrah_tekken_lstm_adr14.pth`
+
+### run2a — Teacher v2: hardware-realistic starting limits (2026-04-03)
+
+**Branch:** `fr3_agilehand_teacher_v2` (commit `32a8924`)
+**Checkpoint:** none — fresh start from random init
+**Config:** 1024 envs, single GPU, headless, starting_adr=0, min_steps_for_dr_change=3k, max_epochs=100000
+
+**Motivation:** Teacher 11 (run1m) plateaued at ADR 14/50 with large curriculum gaps — the policy learned with unrealistically permissive starting limits (100 Nm arm torque, 10 rad/s thumb velocity, 20° thumb stiffness) and then struggled when ADR tightened them toward hardware values. Teacher v2 starts near hardware from the beginning, reducing the curriculum gap and forcing the policy to learn under realistic constraints from step 0.
+
+**Changes vs run1m (Teacher 11):**
+
+| Parameter | Teacher 11 (run1m) | Teacher v2 (run2a) | Why |
+|---|---|---|---|
+| `soft_joint_pos_limit_factor` | 0.9 | 0.8 | More margin for mimic joint physics stability |
+| `franka_arm effort_limit_sim` (j1-4) | 100 Nm | 90 Nm | FR3 hardware spec |
+| `franka_joints_ee effort_limit_sim` (j5-7) | 50 Nm | 20 Nm | FR3 hardware spec |
+| `thumb_rot stiffness` | 20 | 60 | 3× stiffer for better position tracking |
+| `thumb_rot velocity_limit_sim` | 20.0 rad/s | 0.2618 rad/s (~15 deg/s) | Near hardware (~8-12 deg/s) |
+| `thumb_rot_vel_limit` ADR start | 10.0 rad/s | 0.2618 rad/s | Start near hardware, tiny ramp to 0.1396 |
+| `arm_14_effort_limit` ADR start | 100 Nm | 90 Nm | Start at hardware, ramp to 87 |
+| `arm_57_effort_limit` ADR start | 50 Nm | 20 Nm | Start at hardware, ramp to 12 |
+| Arm joint init randomization | None (only ADR `robot_spawn`) | ±0.2 rad EventTerm from step 0 | Diverse approach trajectories from the start |
+| `robot_spawn` finger noise | Applied to all joints | Arm joints only | Fingers start at fixed init positions |
+
+**Key design principle:** Minimal curriculum. Instead of starting easy (high torque, fast thumb) and ramping to hard (hardware limits), start at hardware limits and let the policy learn under realistic constraints. The remaining ADR ramps are tiny:
+- arm j1-4 effort: 90→87 Nm (3% reduction)
+- arm j5-7 effort: 20→12 Nm (40% reduction — most significant remaining curriculum)
+- thumb velocity: 0.2618→0.1396 rad/s (15→8 deg/s)
+
+**Expected outcome:** Slower early learning (harder constraints from start), but higher ADR ceiling (no cliff when curriculum tightens). If the policy can learn to lift under these constraints, it should transfer better to hardware.
+
+**Result:** *running*

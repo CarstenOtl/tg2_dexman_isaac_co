@@ -8,6 +8,10 @@ DextrAH (Dexterous Hand Manipulation) on Isaac Lab — a reinforcement learning 
 
 **Current focus**: FR3 + AgileHand robot configuration (branch `fr3_agilehand`).
 
+**Active branches:**
+- `fr3_agilehand` — distillation experiments (student training from Teacher 11)
+- `fr3_agilehand_teacher_v2` — Teacher v2 training with hardware-realistic starting limits (see exp_03 run2a)
+
 **Distillation strategy**: Train one **per-object teacher** (N=1 each), then use **multi-teacher distillation** to produce a single vision-based student that works across all objects. The `distillation_safedagger.py` script handles multi-teacher routing automatically when `--teacher` points to a directory.
 
 ## Key Dependencies
@@ -174,6 +178,8 @@ Reports: lift success (hold-gated), unsafe episode rate, failure reason breakdow
 
 **Teacher 11 benchmark** (480 episodes, `eval_metrics_20260331_193003.json`): 85.8% lift, 23.1% unsafe. All fr3_agilehand student comparisons are relative to this teacher.
 
+**Teacher v2** (branch `fr3_agilehand_teacher_v2`, exp_03 run2a): *training in progress*. Hardware-realistic starting limits (90/20 Nm arm effort, 15 deg/s thumb velocity, 60 stiffness thumb_rot, soft_joint_pos_limit=0.8, arm init randomization ±0.2 rad). Goal: push past ADR 14 ceiling by reducing curriculum gap.
+
 ### Available Task IDs
 - `dextrah_fr3_agilehand` — FR3 + AgileHand (active development)
 - `Dextrah-Kuka-Allegro` — KUKA + Allegro hand
@@ -251,6 +257,8 @@ Robot URDFs/USDs are in `dextrah_lab/assets/`. Training objects in `assets/visde
 
 **Per-object teacher collection** (for multi-teacher distillation): copy best `.pth` for each object into `stored_policies/fr3_agilehand/per_object_teachers/<object_name>/`. Subfolder names must match `multi_objects/3/USD/` subdirectory names exactly.
 
+**Object subsets for limited envs**: `multi_objects/visdex_top8/` contains the 8 best-performing objects from Teacher 11 eval (≥60% lift): toy_cow, mario, teddy_bear, train, plane, basketball_shoe, closed_fist, milk_pot. Use with 24 envs for 3 envs/object. A single teacher trained on all 13 objects works with any subset — `teacher_onehot` is a size-1 placeholder, not N-dimensional, so obs space is independent of object count.
+
 Git LFS is used for `.pth` model weight files.
 
 **USD physics bake-in**: `FR3_tekkenadof_left.usd` and `fr3.usd` bake in joint physics (damping, joint limits, collision meshes) that can override Python actuator config. When `vel_explosion` fires on every reset after a config change, restore the USD from the known-good commit.
@@ -294,7 +302,7 @@ Git LFS is used for `.pth` model weight files.
 
 Training experiment logs are tracked in `dextrah_lab/docs/experiments/`. **Convention:** Log new distillation runs in `exp_04_distillation.md` with: full bash command, GPU assignment, env count, objects_dir, run directory, and what metrics are being tracked. Mark as `*running*` in summary table until results are in.
 - `exp_02_runs.md` — Multi-object reward tuning, reward shaping, physics stability
-- `exp_03_sim2real.md` — Sim2real curriculum: hardware actuator gains, thumb velocity, effort limits
+- `exp_03_sim2real.md` — Sim2real curriculum: hardware actuator gains, thumb velocity, effort limits, Teacher v2 (run2a)
 - `exp_04_distillation.md` — SafeDagger distillation from multi-object teacher
 - `per_object_teacher_workflow.md` — Per-object teacher training and directory structure
 - `exp_07_baseline_comparisons.md` — Kuka+Allegro and TG2+InspireHand teacher/distillation baselines
