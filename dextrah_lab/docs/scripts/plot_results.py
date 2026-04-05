@@ -1377,9 +1377,18 @@ def plot_run(run_name, runs, objects, eval_files=None,
     # 7. Eval per-object bar charts (if eval files provided)
     if eval_files:
         import json
-        for metric_key, ylabel, title, fname in [
-            ("lift_success", "Lift success (%)", "Per-Object Lift Success — Eval", "per_object_lift_eval"),
-            ("unsafe_episode_rate", "Unsafe rate (%)", "Per-Object Unsafe Rate — Eval", "per_object_unsafe_eval"),
+
+        # Helper to get per-object real unsafe (excluding physics instability)
+        def _get_real_unsafe(per_obj_data, obj):
+            m = per_obj_data.get(obj, {})
+            total = m.get("unsafe_episode_rate", 0)
+            reasons = m.get("unsafe_reason_prop", {})
+            phys = reasons.get("physics_instability", 0)
+            return total - phys  # reason_prop is fraction of all episodes
+
+        for metric_key, ylabel, title, fname, use_real_unsafe in [
+            ("lift_success", "Lift success (%)", "Per-Object Lift Success — Eval", "per_object_lift_eval", False),
+            ("unsafe_episode_rate", "Real unsafe rate (%)", "Per-Object Real Unsafe Rate — Eval (excl. physics)", "per_object_unsafe_eval", True),
         ]:
             fig, ax = plt.subplots(figsize=(14/2.54, 7/2.54))
             x = np.arange(len(objects))
@@ -1391,8 +1400,11 @@ def plot_run(run_name, runs, objects, eval_files=None,
                     continue
                 with open(path) as fh:
                     data = json.load(fh)
-                vals = [data.get("per_object_metrics", {}).get(obj, {}).get(metric_key, 0) * 100
-                        for obj in objects]
+                per_obj = data.get("per_object_metrics", {})
+                if use_real_unsafe:
+                    vals = [_get_real_unsafe(per_obj, obj) * 100 for obj in objects]
+                else:
+                    vals = [per_obj.get(obj, {}).get(metric_key, 0) * 100 for obj in objects]
                 bars = ax.bar(x + (i - 0.5) * w, vals, w, label=label,
                               color=colors_list[i], edgecolor="white", linewidth=0.5)
                 for bar, val in zip(bars, vals):

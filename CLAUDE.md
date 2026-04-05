@@ -257,7 +257,7 @@ Robot URDFs/USDs are in `dextrah_lab/assets/`. Training objects in `assets/visde
 
 **Per-object teacher collection** (for multi-teacher distillation): copy best `.pth` for each object into `stored_policies/fr3_agilehand/per_object_teachers/<object_name>/`. Subfolder names must match `multi_objects/3/USD/` subdirectory names exactly.
 
-**Object subsets for limited envs**: `multi_objects/visdex_top8/` contains the 8 best-performing objects from Teacher 11 eval (≥60% lift): toy_cow, mario, teddy_bear, train, plane, basketball_shoe, closed_fist, milk_pot. Use with 24 envs for 3 envs/object. A single teacher trained on all 13 objects works with any subset — `teacher_onehot` is a size-1 placeholder, not N-dimensional, so obs space is independent of object count.
+**Object subsets for limited envs**: `multi_objects/visdex_top8/` contains the 8 best-performing objects from Teacher 11 eval (≥48% avg lift): teddy_bear, closed_fist, elephant_toy, milk_pot, toy_bagger, tutle_candle_holder, mario, basketball_shoe. Use with 24 envs for 3 envs/object. When distilling with a subset, set `env.teacher_onehot_size=13 env.teacher_objects_dir=multi_objects/visdex_selected` to match teacher's observation space and map object indices correctly.
 
 Git LFS is used for `.pth` model weight files.
 
