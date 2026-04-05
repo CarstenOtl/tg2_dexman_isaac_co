@@ -417,7 +417,11 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                         + 3 + 4 + 3
                         + 1          # object_scale
                         + num_actuated)  # actions
-        self.cfg.num_teacher_observations = teacher_base + num_unique_objects
+        # One-hot size can be overridden to match teacher checkpoint trained with
+        # more objects (e.g. teacher trained on 13 objects, distilling with 8).
+        cfg_onehot = getattr(self.cfg, "teacher_onehot_size", 0)
+        self._onehot_size = cfg_onehot if cfg_onehot > 0 else num_unique_objects
+        self.cfg.num_teacher_observations = teacher_base + self._onehot_size
 
         # Student obs: dof_pos(act) + dof_vel(act) + hand_pos(hb*3) + hand_vel(hb*3)
         #            + obj_goal(3) + actions(act)
@@ -444,7 +448,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                        + 3 + 4 + 6 + 3
                        + 1          # object_scale
                        + num_actuated)  # actions
-        self.cfg.num_states = critic_base + num_unique_objects
+        self.cfg.num_states = critic_base + self._onehot_size
 
         self.cfg.state_space = self.cfg.num_states
         self.cfg.observation_space = self.cfg.num_observations
@@ -660,12 +664,43 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         # round-robin distribution across envs so the policy conditions on object identity.
         self.object_names = list(sub_dirs)
         self.num_unique_objects = len(self.object_names)
-        object_indices = [i % self.num_unique_objects for i in range(self.num_envs)]
 
+        # When distilling with a subset of objects, the one-hot indices must match
+        # the teacher's original object ordering. Build a mapping from the teacher's
+        # full training set (teacher_objects_dir) to get correct indices.
+        teacher_objects_dir = getattr(self.cfg, "teacher_objects_dir", "")
+        if teacher_objects_dir and len(teacher_objects_dir) > 0 and self.cfg.distillation:
+            teacher_path = scene_objects_usd_path + teacher_objects_dir + "/USD"
+            teacher_obj_names = sorted([
+                d for d in os.listdir(teacher_path)
+                if os.path.isdir(os.path.join(teacher_path, d))
+            ])
+            teacher_name_to_idx = {name: idx for idx, name in enumerate(teacher_obj_names)}
+            # Map each current object to its teacher index
+            self._obj_teacher_indices = []
+            for name in self.object_names:
+                if name not in teacher_name_to_idx:
+                    raise ValueError(
+                        f"Object '{name}' not found in teacher training set at {teacher_path}. "
+                        f"Available: {teacher_obj_names}"
+                    )
+                self._obj_teacher_indices.append(teacher_name_to_idx[name])
+            print(f"Object-to-teacher index mapping: "
+                  + ", ".join(f"{n}→{i}" for n, i in zip(self.object_names, self._obj_teacher_indices)))
+        else:
+            # No remapping needed — using the same object set as teacher
+            self._obj_teacher_indices = list(range(self.num_unique_objects))
+
+        # Round-robin object assignment across envs
+        object_indices = [i % self.num_unique_objects for i in range(self.num_envs)]
         self.multi_object_idx = torch.tensor(object_indices, dtype=torch.long, device=self.device)
-        # N-dim one-hot over object identity — used in teacher and critic obs.
+
+        # One-hot uses teacher indices so the teacher sees the correct object identity
+        teacher_indices_per_env = [self._obj_teacher_indices[i % self.num_unique_objects]
+                                   for i in range(self.num_envs)]
+        teacher_idx_tensor = torch.tensor(teacher_indices_per_env, dtype=torch.long, device=self.device)
         self.multi_object_idx_onehot = F.one_hot(
-            self.multi_object_idx, num_classes=self.num_unique_objects
+            teacher_idx_tensor, num_classes=self._onehot_size
         ).float()
 
         stage = omni.usd.get_context().get_stage()

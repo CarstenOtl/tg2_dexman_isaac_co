@@ -75,6 +75,38 @@ DISTILLATION_RUNS = {
         "dextrah-kuka-allegro-safedagger-stereo-transformer_02-21-52-43",
         "Vanilla DAgger + KL, kuka_allegro, 24 envs, 100k iters, ADR 0",
     ),
+    "student_run6a_safedagger_l2_teacher11": (
+        "dextrah-fr3-agilehand-safedagger-stereo-transformer_03-13-04-24",
+        "SafeDagger + L2, teacher 11, 24 envs, 100k iters, scaled L2 threshold, AverageMeter",
+    ),
+    "student_run6b_dagger_l2_teacher11": (
+        "dextrah-fr3-agilehand-safedagger-stereo-transformer_03-13-06-54",
+        "DAgger + L2, teacher 11, 24 envs, 100k iters, AverageMeter",
+    ),
+    "student_run7a_safedagger_l2_teacher11": (
+        "dextrah-fr3-agilehand-safedagger-stereo-transformer_03-14-53-40",
+        "SafeDagger + L2, teacher 11, 24 envs, 100k iters, threshold=3.0, visdex_top8",
+    ),
+    "student_run7b_dagger_l2_teacher11": (
+        "dextrah-fr3-agilehand-safedagger-stereo-transformer_03-14-54-52",
+        "DAgger + L2, teacher 11, 24 envs, 100k iters, visdex_top8",
+    ),
+    "student_run8a_safedagger_l2_teacher11": (
+        "dextrah-fr3-agilehand-safedagger-stereo-transformer_03-20-30-06",
+        "SafeDagger + L2, teacher 11, 24 envs, 100k iters, threshold=2.0, top8, 10s eps",
+    ),
+    "student_run8b_dagger_l2_teacher11": (
+        "dextrah-fr3-agilehand-safedagger-stereo-transformer_03-20-33-10",
+        "DAgger + L2, teacher 11, 24 envs, 100k iters, top8, 10s eps",
+    ),
+    "student_run9a_safedagger_l2_teacher11": (
+        "dextrah-fr3-agilehand-safedagger-stereo-transformer_04-14-07-25",
+        "SafeDagger + L2, teacher 11, 24 envs, 100k iters, FIXED one-hot mapping",
+    ),
+    "student_run9b_dagger_l2_teacher11": (
+        "dextrah-fr3-agilehand-safedagger-stereo-transformer_04-14-08-19",
+        "DAgger + L2, teacher 11, 24 envs, 100k iters, FIXED one-hot mapping",
+    ),
 }
 
 

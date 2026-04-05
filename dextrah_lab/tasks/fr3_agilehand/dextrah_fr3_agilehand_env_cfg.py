@@ -192,6 +192,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                         "single_object_shoe",
                         "single_object_female_knight",
                         "multi_objects/visdex_selected",
+                        "multi_objects/visdex_top8",
                         ]
 
     # Toggle for using cuda graph
@@ -212,6 +213,13 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     num_teacher_observations = 0
     num_observations = 0
     num_states = 0
+    # Override one-hot size to match teacher checkpoint when distilling with fewer objects.
+    # 0 = use actual num_unique_objects. Set to teacher's object count (e.g. 13) if distilling
+    # with a subset of objects.
+    teacher_onehot_size: int = 0
+    # Directory of objects the teacher was trained on. Used during distillation to map
+    # object names to correct one-hot indices. If None, assumes same objects as current.
+    teacher_objects_dir: str = ""
 
     state_space = 0
     observation_space = 0
