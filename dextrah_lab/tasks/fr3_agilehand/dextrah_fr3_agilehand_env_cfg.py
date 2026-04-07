@@ -752,8 +752,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     #phase 3: lifting
     object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
-    success_bonus_weight = 10.0  # flat bonus per step when object is in goal region
-    lift_sharpness = 2.0 #default 8.5; 5→2: much flatter gradient so policy discovers lifting from table height
+    success_bonus_weight = 20.0  # bumped from 10: stronger incentive to close last few cm to goal
+    lift_sharpness = 4.0 #default 8.5; 2→4: steeper lift saturation so goal reward dominates once object is off table
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
@@ -840,25 +840,25 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "restitution_range": (0.8, 1.0)
         },
         "arm_joint_stiffness_and_damping": {
-            "stiffness_distribution_params": (0.5, 2.),
-            "damping_distribution_params": (0.5, 2.),
+            "stiffness_distribution_params": (0.7, 1.5),
+            "damping_distribution_params": (0.7, 1.5),
         },
-        # Finger gains: matched to kuka_allegro/tg2_inspirehand proven sim2real ranges
+        # Finger gains: tightened min from 0.5→0.7 to reduce grasp fragility at higher ADR
         "finger_mcp_pitch_gains": {
-            "stiffness_distribution_params": (0.5, 2.),
-            "damping_distribution_params": (0.5, 2.),
+            "stiffness_distribution_params": (0.7, 2.),
+            "damping_distribution_params": (0.7, 2.),
         },
         "finger_mcp_yaw_gains": {
-            "stiffness_distribution_params": (0.5, 2.),
-            "damping_distribution_params": (0.5, 2.),
+            "stiffness_distribution_params": (0.7, 2.),
+            "damping_distribution_params": (0.7, 2.),
         },
         "finger_pip_gains": {
-            "stiffness_distribution_params": (0.5, 2.),
-            "damping_distribution_params": (0.5, 2.),
+            "stiffness_distribution_params": (0.7, 2.),
+            "damping_distribution_params": (0.7, 2.),
         },
         "thumb_rot_gains": {
-            "stiffness_distribution_params": (0.5, 2.),
-            "damping_distribution_params": (0.5, 2.),
+            "stiffness_distribution_params": (0.7, 2.),
+            "damping_distribution_params": (0.7, 2.),
         },
         "robot_joint_friction": {
             "friction_distribution_params": (0., 5.),
@@ -907,7 +907,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "robot_spawn": {
             # TODO: Re-enable joint position noise after verifying open hand behavior
             # Original value was (0., 0.35) which adds ±20° randomization at reset
-            "joint_pos_noise": (0., 0.8),  
+            "joint_pos_noise": (0., 0.35),  # matched to kuka_allegro; EventTerm adds ±0.2 rad on top
             "joint_vel_noise": (0., 1.),
         },
         "robot_state_noise": {
@@ -919,8 +919,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "reward_weights": {
             "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
-            "lift_weight": (40., 20.),  # 20→40 start; floor raised 5→20 so lift stays dominant throughout ADR
-            "finger_curl_reg": (-0.5, -1.2),  # ADR: stronger curl penalty to prevent thumb curling inward
+            "lift_weight": (40., 30.),  # slower decay so lift signal stays strong while goal sharpness ramps up
+            "finger_curl_reg": (-0.3, -0.8),  # reduced: previous (-0.5,-1.2) penalized grasps too aggressively at higher ADR
         },
         "pd_targets": {
             "velocity_target_factor": (1., 0.)

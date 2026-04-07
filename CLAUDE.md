@@ -8,6 +8,10 @@ DextrAH (Dexterous Hand Manipulation) on Isaac Lab — a reinforcement learning 
 
 **Current focus**: FR3 + AgileHand robot configuration (branch `fr3_agilehand`).
 
+**Active branches:**
+- `fr3_agilehand` — distillation experiments (student training from Teacher 11)
+- `fr3_agilehand_teacher_v2` — Teacher v2 training with hardware-realistic starting limits (see exp_03 run2a)
+
 **Distillation strategy**: Train one **per-object teacher** (N=1 each), then use **multi-teacher distillation** to produce a single vision-based student that works across all objects. The `distillation_safedagger.py` script handles multi-teacher routing automatically when `--teacher` points to a directory.
 
 ## Key Dependencies
@@ -174,6 +178,8 @@ Reports: lift success (hold-gated), unsafe episode rate, failure reason breakdow
 
 **Teacher 11 benchmark** (480 episodes, `eval_metrics_20260331_193003.json`): 85.8% lift, 23.1% unsafe. All fr3_agilehand student comparisons are relative to this teacher.
 
+**Teacher v2** (branch `fr3_agilehand_teacher_v2`, exp_03 run2a): *training in progress*. Hardware-realistic starting limits (90/20 Nm arm effort, 15 deg/s thumb velocity, 60 stiffness thumb_rot, soft_joint_pos_limit=0.8, arm init randomization ±0.2 rad). Goal: push past ADR 14 ceiling by reducing curriculum gap.
+
 ### Available Task IDs
 - `dextrah_fr3_agilehand` — FR3 + AgileHand (active development)
 - `Dextrah-Kuka-Allegro` — KUKA + Allegro hand
@@ -201,6 +207,11 @@ Each robot/hand combo lives in `dextrah_lab/tasks/<task_name>/` with this patter
 - `debug_tools/` — Ad-hoc diagnostic scripts for physics, rewards, and robot validation.
 
 **Action space**: `kuka_allegro` uses FGPs (Finger Grasp Primitives / PCA basis) for hand control. All other tasks (`fr3_agilehand`, `tg2_inspirehand`, `kuka_inspirehand`) use **direct joint position control** — actions map directly to target joint angles.
+
+### FABRICS vs Direct Joint Control
+- `kuka_allegro` uses FABRICS (geometric fabrics) as intermediate controller — smooths policy outputs into physically consistent trajectories. The FABRICS controller is deterministic with no internal randomization; all noise comes from ADR at reset.
+- `fr3_agilehand`, `tg2_inspirehand`, `kuka_inspirehand` use direct joint position control — no smoothing layer. More sensitive to spawn noise since the policy must handle recovery trajectories itself.
+- When comparing ADR parameters across tasks, account for FABRICS' smoothing effect — the same `robot_spawn.joint_pos_noise` is much harder to handle without it.
 
 ### Training Pipeline
 
@@ -251,6 +262,8 @@ Robot URDFs/USDs are in `dextrah_lab/assets/`. Training objects in `assets/visde
 
 **Per-object teacher collection** (for multi-teacher distillation): copy best `.pth` for each object into `stored_policies/fr3_agilehand/per_object_teachers/<object_name>/`. Subfolder names must match `multi_objects/3/USD/` subdirectory names exactly.
 
+**Object subsets for limited envs**: `multi_objects/visdex_top8/` contains the 8 best-performing objects from Teacher 11 eval (≥60% lift): toy_cow, mario, teddy_bear, train, plane, basketball_shoe, closed_fist, milk_pot. Use with 24 envs for 3 envs/object. A single teacher trained on all 13 objects works with any subset — `teacher_onehot` is a size-1 placeholder, not N-dimensional, so obs space is independent of object count.
+
 Git LFS is used for `.pth` model weight files.
 
 **USD physics bake-in**: `FR3_tekkenadof_left.usd` and `fr3.usd` bake in joint physics (damping, joint limits, collision meshes) that can override Python actuator config. When `vel_explosion` fires on every reset after a config change, restore the USD from the known-good commit.
@@ -294,7 +307,7 @@ Git LFS is used for `.pth` model weight files.
 
 Training experiment logs are tracked in `dextrah_lab/docs/experiments/`. **Convention:** Log new distillation runs in `exp_04_distillation.md` with: full bash command, GPU assignment, env count, objects_dir, run directory, and what metrics are being tracked. Mark as `*running*` in summary table until results are in.
 - `exp_02_runs.md` — Multi-object reward tuning, reward shaping, physics stability
-- `exp_03_sim2real.md` — Sim2real curriculum: hardware actuator gains, thumb velocity, effort limits
+- `exp_03_sim2real.md` — Sim2real curriculum: hardware actuator gains, thumb velocity, effort limits, Teacher v2 (run2a)
 - `exp_04_distillation.md` — SafeDagger distillation from multi-object teacher
 - `per_object_teacher_workflow.md` — Per-object teacher training and directory structure
 - `exp_07_baseline_comparisons.md` — Kuka+Allegro and TG2+InspireHand teacher/distillation baselines
@@ -332,6 +345,16 @@ Generates all thesis plots to `dextrah_lab/docs/Report/figures/plots/` (PDF + PN
 - **LSTM hidden states are NOT saved in checkpoints** — reset to zero on load. Resuming LSTM policies from checkpoints at high ADR levels causes degradation because the LSTM can't rebuild temporal context fast enough. Prefer training from scratch over checkpoint resume for LSTM policies.
 - **`min_steps_for_dr_change` counts reset-batch calls, not epochs** — with 1024 envs, `_reset_idx` is called multiple times per epoch. `5 * episode_steps = 3000` ≈ 300-600 epochs per ADR step. Scale accordingly.
 - **Finger gain ADR ranges** — proven sim2real range is `(0.5, 2.0)` (matching kuka_allegro/tg2_inspirehand). More aggressive ranges like `(0.1, 1.0)` cause vel_explode and training instability without sim2real benefit, since the real hardware PID handles position tracking independently.
+
+### ADR Plateau Debugging (fr3_agilehand)
+- **ADR 13 wall pattern**: If policy plateaus at a specific ADR level, check (1) reward curriculum eroding signal — rewards declining *within* a fixed ADR level means reward shaping issue, not randomization; (2) `robot_spawn.joint_pos_noise` compounding with arm EventTerm randomization — fr3_agilehand has both, kuka_allegro only has spawn noise; (3) hand_to_object_distance increasing = arm can't reach object = spawn noise too aggressive.
+- **`robot_spawn.joint_pos_noise` for fr3_agilehand** should be (0, 0.35) matching kuka_allegro — the ±0.2 rad arm init EventTerm already provides diversity from step 0. Original (0, 0.8) caused 4.5× more randomization than kuka_allegro at same ADR level.
+- **`lift_sharpness` affects ADR progression**: 2.0 (flat) → policy hovers near table for easy reward, never reaches goal → `in_success_region` stays low. 4.0+ saturates lift reward faster, forcing goal reward to dominate. kuka_allegro uses 8.5.
+- **Object set composition affects `in_success_region` average**: 13 curated objects (visdex_selected) have higher difficulty than 152 ShapeNet objects (visdex_objects). Hard objects drag average below `success_for_adr` threshold (0.4).
+- **Reward curriculum can erode within a fixed ADR level** — `lift_weight` decay + `object_to_goal_sharpness` increase + `finger_curl_reg` increase compound to reduce total reward signal. If metrics decline at fixed ADR, the reward shaping is the issue.
+- **Eval at ADR 0 reveals reward-driven forgetting** — `eval_teacher.py` runs at ADR 0 (no randomization). If a later checkpoint trained at ADR N performs *worse* at lifting than an earlier checkpoint pre-ADR-N, the policy is forgetting learned behavior under reward decay (not failing due to harder conditions). This was observed in run2g: ep 6500 (ADR 13 settled) had 75.9% lift vs ep 2500 (pre-ADR-13) at 79.1%.
+- **ADR 13 wall is structural for fr3_agilehand Teacher v2** — invariant across reward tuning, spawn noise reduction, object set changes (13/152), arm gain tightening, finger gain tightening. Best Teacher v2 result: 79.1% lift / 25.3% unsafe (run2g ep 2500), ~7pp lift gap to Teacher 11 (85.8%). Hardware-realistic actuator constraints from step 0 pay a real cost.
+- **`eval_teacher.py` runs at ADR 0** — no `--starting_adr_increments` flag. To eval at a higher ADR level, modify the env config or set via Hydra (which `eval_teacher.py` doesn't fully support — use `train.py` with `--checkpoint` and a tiny step count instead).
 
 ## Code Conventions
 
