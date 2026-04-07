@@ -1191,6 +1191,20 @@ RUN9_EVAL_FILES = {
     "DAgger (run9b)": "eval_metrics_20260404_201628.json",
 }
 
+DISTILLATION_RUNS_10 = [
+    ("student_run10a_safedagger_arm_rand.csv", 24,
+     "SafeD + arm rand", COLORS["blue"]),
+    ("student_run10b_safedagger_32envs.csv", 32,
+     "SafeD + 32 envs", COLORS["green"]),
+    ("student_run9a_safedagger_l2_teacher11.csv", 24,
+     "SafeD baseline (run9a)", COLORS["gray"]),
+]
+
+RUN10_EVAL_FILES = {
+    "arm rand (run10a)": "eval_metrics_20260405_224028.json",
+    "32 envs (run10b)": "eval_metrics_20260405_224012.json",
+}
+
 
 def plot_run(run_name, runs, objects, eval_files=None,
              max_iter=100_000, ema_alpha=0.999):
@@ -1718,6 +1732,7 @@ def main():
     plot_run("run7", DISTILLATION_RUNS_7, OBJECTS_TOP8)
     plot_run("run8", DISTILLATION_RUNS_8, OBJECTS_TOP8, eval_files=RUN8_EVAL_FILES)
     plot_run("run9", DISTILLATION_RUNS_9, OBJECTS_TOP8, eval_files=RUN9_EVAL_FILES)
+    plot_run("run10", DISTILLATION_RUNS_10, OBJECTS_TOP8, eval_files=RUN10_EVAL_FILES)
     print("Done.")
 
     if args.show:

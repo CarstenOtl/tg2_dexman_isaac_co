@@ -107,6 +107,22 @@ DISTILLATION_RUNS = {
         "dextrah-fr3-agilehand-safedagger-stereo-transformer_04-14-08-19",
         "DAgger + L2, teacher 11, 24 envs, 100k iters, FIXED one-hot mapping",
     ),
+    "student_run10a_safedagger_arm_rand": (
+        "dextrah-fr3-agilehand-safedagger-stereo-transformer_05-15-21-00",
+        "SafeDagger + L2, teacher 11, 24 envs, 100k iters, arm randomization ON",
+    ),
+    "student_run10b_safedagger_32envs": (
+        "dextrah-fr3-agilehand-safedagger-stereo-transformer_05-15-21-49",
+        "SafeDagger + L2, teacher 11, 32 envs, 100k iters, 4 envs/obj",
+    ),
+    "student_run11a_safedagger_adr5": (
+        "dextrah-fr3-agilehand-safedagger-stereo-transformer_06-14-00-34",
+        "SafeDagger + L2, teacher 11, 32 envs, ADR 5",
+    ),
+    "student_run11b_dagger_adr5": (
+        "dextrah-fr3-agilehand-safedagger-stereo-transformer_06-14-01-16",
+        "DAgger + L2, teacher 11, 32 envs, ADR 5",
+    ),
 }
 
 
