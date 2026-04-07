@@ -541,11 +541,13 @@ CUDA_VISIBLE_DEVICES=1 python train.py --headless --task=dextrah_fr3_agilehand -
 
 | Checkpoint | Lift | Unsafe | Failure breakdown |
 |---|---|---|---|
-| ep 2500 (best reward, pre-ADR-13) | **79.1%** | 25.3% | OOB 42%, phys_inst 37%, harmful_collision 14%, palm_flip 7% |
+| `dextrah_tekken_lstm.pth` (best reward auto-save) | **79.1%** | 25.3% | OOB 42%, phys_inst 37%, harmful_collision 14%, palm_flip 7% |
 | ep 6500 (settled at ADR 13) | 75.9% | 23.1% | phys_inst 63%, OOB 29%, harmful_collision 8% |
 
 - Eval JSONs: `logs/eval_tb_20260407_101145/eval_metrics_20260407_103836.json`, `logs/eval_tb_20260407_102855/eval_metrics_20260407_104305.json`
-- ep 2500 is the best Teacher v2 checkpoint across all runs (highest lift)
+- `dextrah_tekken_lstm.pth` is the rl-games auto-saved best-reward checkpoint and is the best Teacher v2 result across all runs.
+
+**Stored policy:** `stored_policies/fr3_agilehand/12_teacher_v2_hw_realistic_adr13_04-06_12-49-15/nn/dextrah_tekken_lstm.pth`
 
 **Critical insight:** Eval at ADR 0 (no randomization) shows ep 6500 (later, more training, settled at ADR 13) has *worse* lifting than ep 2500 (earlier). A policy trained at ADR 13 should do **better** at ADR 0 (easier conditions), not worse. This proves the training process at ADR 13 is **actively degrading** lifting ability — the policy is forgetting how to lift while trying to handle harder conditions. The within-ADR reward decay (lift_weight 40→30) is washing out learned behavior.
 
@@ -555,7 +557,7 @@ CUDA_VISIBLE_DEVICES=1 python train.py --headless --task=dextrah_fr3_agilehand -
 |---|---|---|---|---|
 | Teacher 11 (baseline) | — | **85.8%** | 23.1% | reached ADR 14, unrealistic starting limits |
 | run2a | ep 6500 | 78.3% | **21.6%** | hardware limits, ADR 13 |
-| **run2g** | **ep 2500** | **79.1%** | 25.3% | best Teacher v2 lift |
+| **run2g** | **`dextrah_tekken_lstm.pth`** | **79.1%** | 25.3% | best Teacher v2, stored as policy 12 |
 | run2g | ep 6500 | 75.9% | 23.1% | post-decay |
 
 **~7pp lift gap to Teacher 11 — Teacher v2 hardware-realistic constraints pay a real cost.**
