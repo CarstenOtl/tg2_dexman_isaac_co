@@ -1468,13 +1468,17 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
 
         self.object.write_root_state_to_sim(object_default_state, env_ids)
 
-        # Spawning robot
+        # Spawning robot — apply ADR spawn noise to arm joints only (not fingers)
         joint_pos_noise = self.dextrah_adr.get_custom_param_value("robot_spawn" ,"joint_pos_noise")
         joint_vel_noise = self.dextrah_adr.get_custom_param_value("robot_spawn" ,"joint_vel_noise")
 
         num_actuated = len(self.actuated_dof_indices)
         joint_pos_deltas = 2. * (torch.rand(num_ids, num_actuated, device=self.device) - 0.5)
         joint_vel_deltas = 2. * (torch.rand(num_ids, num_actuated, device=self.device) - 0.5)
+
+        # Zero out noise for finger joints (indices 7+), keep only arm (first 7)
+        joint_pos_deltas[:, 7:] = 0.0
+        joint_vel_deltas[:, 7:] = 0.0
 
         # Calculate joint positions
         dof_pos = self.robot_start_joint_pos[env_ids].clone()

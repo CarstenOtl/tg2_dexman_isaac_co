@@ -368,4 +368,206 @@ python train.py --headless --task=dextrah_fr3_agilehand --seed 42 \
 
 **Expected outcome:** Slower early learning (harder constraints from start), but higher ADR ceiling (no cliff when curriculum tightens). If the policy can learn to lift under these constraints, it should transfer better to hardware.
 
-**Result:** *running*
+**Result:** Rapid ADR progression to 13/50, then plateau. Policy couldn't push past ADR 13 — analysis showed lift reward decaying (40→~35) while object-to-goal sharpness increasing (making goal reward harder to earn), creating a reward gap mid-curriculum.
+
+**Eval (ep 6500, best reward, ADR ~13):** 640 episodes, 32 envs
+- **lift_success: 78.3%** | **unsafe_rate: 21.6%**
+- Failure breakdown: physics_instability 75.4%, object_out_of_bound 21.0%, harmful_collision 2.9%, palm_flipped 0.7%, hand_too_far 0.0%
+- Checkpoint: `logs/rl_games/dextrah_tekken_lstm/04-03_20-36-28/nn/last_dextrah_tekken_lstm_ep_6500_rew_15365.232.pth`
+- Eval JSON: `logs/eval_tb_20260404_124555/eval_metrics_20260404_125132.json`
+- Config: 2048 envs (vs documented 1024), single GPU
+
+**Comparison vs Teacher 11:** lift 78.3% vs 85.8% (−7.5pp), unsafe 21.6% vs 23.1% (−1.5pp, slightly better). Competitive despite starting with much harder actuator constraints and only reaching ADR 13 vs 14.
+
+**Next:** run2b — adjust reward curriculum to close the mid-ADR gap: `lift_weight` (40,20)→(40,30), `object_to_goal_sharpness` (-5,-10)→(-8,-13). Stronger goal gradient from step 0 + slower lift decay.
+
+### run2b — reward curriculum + tighter finger gains (2026-04-04)
+
+**Branch:** `fr3_agilehand_teacher_v2`
+**Config:** 2048 envs, single GPU, headless, starting_adr=0
+
+**Changes vs run2a:**
+- `lift_weight`: (40, 20) → (40, 30) — slower decay
+- `object_to_goal_sharpness`: (-5, -10) → (-8, -13) — stronger goal gradient from start
+- Finger gain min: 0.5 → 0.7 (all finger groups: mcp_pitch, mcp_yaw, pip, thumb_rot)
+
+**Result:** Same ADR 13 plateau. Starting goal sharpness at -8 was too aggressive — policy lifted objects consistently but couldn't earn goal reward at typical distances. Lift reward declined from 23.4 → 17.7, lift_success peaked at 0.53 (ADR 3) then decayed to ~0.35. Object-to-goal reward also declined from ~15 → ~10. Crucially, these metrics continued declining **within** ADR 13 (fixed randomization), confirming the reward curriculum itself was eroding the learning signal — not just the randomization.
+
+**Diagnosis:** `lift_sharpness=2.0` too flat → policy earns lift reward by hovering near table without committing to full lift. Combined with increasing goal sharpness and finger curl penalty, the policy drifts toward a conservative, low-lifting strategy.
+
+### run2c — lift sharpness + goal reward rebalance (2026-04-04)
+
+**Branch:** `fr3_agilehand_teacher_v2`
+**Config:** 2048 envs, single GPU, headless, starting_adr=0
+
+**Changes vs run2b:**
+
+| Parameter | run2b | run2c | Why |
+|---|---|---|---|
+| `lift_sharpness` | 2.0 | 4.0 | Steeper saturation — stop rewarding "hover near table", force policy to fully lift |
+| `object_to_goal_sharpness` | (-8, -13) | (-5, -10) | Reverted start to -5 for broad early gradient; less aggressive terminal |
+| `finger_curl_reg` | (-0.5, -1.2) | (-0.3, -0.8) | Previous penalty too aggressive, discouraged grasps at higher ADR |
+| `success_bonus_weight` | 10 | 20 | Stronger discrete reward for reaching goal tolerance (0.1m) |
+
+**Key principle:** Make lift reward saturate faster (sharpness 4.0 vs 2.0) so goal reward becomes the dominant signal once object is off table. Broader goal gradient at start (-5) for easier discovery, gentler curl penalty to allow aggressive grasps.
+
+**Result:** Same ADR 13 plateau. in_success_region peaked at ~25%, never reaching 0.4 threshold. hand_to_object_distance increased sharply after ADR 12 (~5k epochs), with hand_to_object_reward dropping correspondingly — the hand couldn't reliably reach the object. Reward and lift_success continued declining within ADR 13 (fixed randomization level).
+
+**Root cause identified:** `robot_spawn.joint_pos_noise` (0, 0.8) at ADR 13 gives ±0.21 rad, plus ±0.2 rad EventTerm = ±0.41 rad total (23°). kuka_allegro uses (0, 0.35) with no EventTerm AND has FABRICS smoothing. fr3_agilehand at ADR 13 has 4.5× more arm randomization than kuka_allegro at the same level, with no motion planner to smooth recovery.
+
+### run2d — reduced spawn noise + reward tuning (2026-04-05)
+
+**Branch:** `fr3_agilehand_teacher_v2`
+**Config:** 2048 envs, single GPU, headless, starting_adr=0, visdex_selected (13 objects)
+**Log dir:** `logs/rl_games/dextrah_tekken_lstm/04-05_14-05-55/`
+
+**Changes vs run2c:**
+
+| Parameter | run2c | run2d | Why |
+|---|---|---|---|
+| `robot_spawn.joint_pos_noise` | (0, 0.8) | (0, 0.35) | Matched to kuka_allegro; EventTerm ±0.2 rad still provides diversity |
+
+**Cumulative changes from run2a (all still active):**
+- `lift_sharpness`: 2.0 → 4.0
+- `lift_weight`: (40, 20) → (40, 30)
+- `object_to_goal_sharpness`: (-5, -10) — reverted to original
+- `finger_curl_reg`: (-0.5, -1.2) → (-0.3, -0.8)
+- `success_bonus_weight`: 10 → 20
+- Finger gain min: 0.5 → 0.7
+- `robot_spawn.joint_pos_noise`: (0, 0.8) → (0, 0.35)
+
+**Hypothesis:** Reducing arm spawn noise will keep hand_to_object_distance manageable through ADR 13+, allowing the reward tuning from run2c to take effect.
+
+**Result:** Same ADR 13 plateau despite reduced spawn noise. hand_to_object_distance still increased from ADR 9 (~4k epochs), hand_to_object_reward decreased correspondingly. vel_explosions increased from 10-20 to 25-50. `lifted_now` decayed from 55% (early ADR) → 40%, `in_goal_now` hovered 35-37%, `in_success_region` peaked at ~40% to trigger ADR but settled at 30% at ADR 13. Arm gain randomization (0.5, 2.0) likely the remaining culprit — 0.5× stiffness degrades arm tracking, 2× causes overshoot/vel_explosion, and no FABRICS to smooth it.
+
+**Key insight:** With 13 curated objects (visdex_selected), hard objects (~4-5) rarely lift, permanently dragging `in_success_region` below 0.4 threshold. kuka_allegro trains on 150 objects where easy shapes dominate the average.
+
+### run2e — full object set visdex_objects (2026-04-05)
+
+**Branch:** `fr3_agilehand_teacher_v2`
+**Config:** 2048 envs, single GPU, headless, starting_adr=0, visdex_objects (152 objects, ~13 envs/object)
+**Log dir:** `logs/rl_games/dextrah_tekken_lstm/04-05_19-59-06/`
+
+**Changes vs run2d:** Object set only — `visdex_selected` (13 curated) → `visdex_objects` (152 ShapeNet). All other params unchanged from run2d.
+
+**Hypothesis:** More objects with many easy/compact shapes (mugs, boxes, bottles) will keep `in_success_region` average above 0.4 through higher ADR levels, matching kuka_allegro's training regime. Tradeoff: thin coverage per object (~13 envs each) may cause noisy gradients.
+
+```bash
+cd dextrah_lab/rl_games && \
+CUDA_VISIBLE_DEVICES=1 python train.py --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 2048 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=visdex_objects \
+  env.use_cuda_graph=False
+```
+
+**Result:** Failed to learn — no lifting, no ADR progression, no in_success_region. 2048 envs / 152 objects = ~13 envs/object, too thin for stable gradients.
+
+### run2f — visdex_objects with 4096 envs (2026-04-05)
+
+**Branch:** `fr3_agilehand_teacher_v2`
+**Config:** 4096 envs, single GPU, headless, starting_adr=0, visdex_objects (152 objects, ~27 envs/object)
+**Log dir:** `logs/rl_games/dextrah_tekken_lstm/04-05_22-29-29/`
+
+**Changes vs run2e:** Doubled envs 2048→4096, minibatch 4096→8192. All other params unchanged.
+
+```bash
+cd dextrah_lab/rl_games && \
+CUDA_VISIBLE_DEVICES=1 python train.py --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 4096 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=8192 \
+  agent.params.config.central_value_config.minibatch_size=8192 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=visdex_objects \
+  env.use_cuda_graph=False
+```
+
+**Hypothesis:** 27 envs/object should provide enough gradient signal per object. If OOMs on single 4090, will need multi-GPU.
+
+**Result:** Same ADR 13 plateau. in_goal ~30% increasing slowly but never triggered ADR past 13. ~160 vel_explosions, 26 palm_flips at 4096 envs. lift_success peaked at 60% (ADR 6, ~2.5k epochs), decayed to 40% by ADR 13 (~5k epochs) and stayed flat. 152 objects didn't help — the ADR 13 wall is independent of object set.
+
+**Conclusion after runs 2a–2f:** ADR 13 wall is consistent across all reward configs, spawn noise settings, and object sets. The one unchanged parameter: `arm_joint_stiffness_and_damping` (0.5, 2.0). vel_explosions climb at ADR 13 as arm gain randomization destabilizes physics.
+
+### run2g — tighter arm gain randomization (2026-04-06)
+
+**Branch:** `fr3_agilehand_teacher_v2`
+**Config:** 2048 envs, single GPU, headless, starting_adr=0, visdex_selected (13 objects)
+**Log dir:** `logs/rl_games/dextrah_tekken_lstm/04-06_12-49-15/`
+
+**Changes vs run2d (back to visdex_selected baseline):**
+
+| Parameter | run2d | run2g | Why |
+|---|---|---|---|
+| `arm_joint_stiffness_and_damping` | (0.5, 2.0) | (0.7, 1.5) | Reduce arm physics instability — 2× stiffness causes overshoot/vel_explosion, 0.5× makes arm too sluggish to reach objects |
+
+All other params unchanged from run2d (lift_sharpness=4.0, lift_weight=(40,30), object_to_goal_sharpness=(-5,-10), finger_curl_reg=(-0.3,-0.8), success_bonus=20, finger gains min 0.7, robot_spawn noise (0,0.35)).
+
+```bash
+cd dextrah_lab/rl_games && \
+CUDA_VISIBLE_DEVICES=1 python train.py --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 2048 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Hypothesis:** Tighter arm gains (0.7, 1.5) will reduce vel_explosions and keep arm tracking stable through ADR 13+, finally breaking through the wall. This is the one parameter unchanged across all previous runs.
+
+**Result:** Same ADR 13 plateau. Arm gain tightening did NOT break the wall — the issue is not arm physics instability.
+
+**Eval (640 episodes, 32 envs, ADR 0):**
+
+| Checkpoint | Lift | Unsafe | Failure breakdown |
+|---|---|---|---|
+| `dextrah_tekken_lstm.pth` (best reward auto-save) | **79.1%** | 25.3% | OOB 42%, phys_inst 37%, harmful_collision 14%, palm_flip 7% |
+| ep 6500 (settled at ADR 13) | 75.9% | 23.1% | phys_inst 63%, OOB 29%, harmful_collision 8% |
+
+- Eval JSONs: `logs/eval_tb_20260407_101145/eval_metrics_20260407_103836.json`, `logs/eval_tb_20260407_102855/eval_metrics_20260407_104305.json`
+- `dextrah_tekken_lstm.pth` is the rl-games auto-saved best-reward checkpoint and is the best Teacher v2 result across all runs.
+
+**Stored policy:** `stored_policies/fr3_agilehand/12_teacher_v2_hw_realistic_adr13_04-06_12-49-15/nn/dextrah_tekken_lstm.pth`
+
+**Critical insight:** Eval at ADR 0 (no randomization) shows ep 6500 (later, more training, settled at ADR 13) has *worse* lifting than ep 2500 (earlier). A policy trained at ADR 13 should do **better** at ADR 0 (easier conditions), not worse. This proves the training process at ADR 13 is **actively degrading** lifting ability — the policy is forgetting how to lift while trying to handle harder conditions. The within-ADR reward decay (lift_weight 40→30) is washing out learned behavior.
+
+**Final Teacher v2 results vs Teacher 11 baseline:**
+
+| Run | Checkpoint | Lift | Unsafe | Notes |
+|---|---|---|---|---|
+| Teacher 11 (baseline) | — | **85.8%** | 23.1% | reached ADR 14, unrealistic starting limits |
+| run2a | ep 6500 | 78.3% | **21.6%** | hardware limits, ADR 13 |
+| **run2g** | **`dextrah_tekken_lstm.pth`** | **79.1%** | 25.3% | best Teacher v2, stored as policy 12 |
+| run2g | ep 6500 | 75.9% | 23.1% | post-decay |
+
+**~7pp lift gap to Teacher 11 — Teacher v2 hardware-realistic constraints pay a real cost.**
+
+**Conclusion:** ADR 13 plateau is invariant across all tested parameter changes. The wall is structural — likely a combination of:
+1. Lift reward decay actively degrading learned behavior within a fixed ADR level
+2. `success_for_adr=0.4` threshold too strict for fr3_agilehand (vs kuka_allegro's 152-object easy-shape average)
+3. No FABRICS smoothing means direct joint control is more sensitive to physics randomization
+
+**Next options (untested):**
+- **Flatline `lift_weight` (40, 40)** — remove the decay that's degrading lifting
+- **Lower `success_for_adr` to 0.3** — let policy advance through ADR 13 with current performance
+- **Resume from ep 2500 with `starting_adr_increments=14`** — skip the wall (caveat: LSTM hidden state lost on resume)
