@@ -1205,6 +1205,18 @@ RUN10_EVAL_FILES = {
     "32 envs (run10b)": "eval_metrics_20260405_224012.json",
 }
 
+DISTILLATION_RUNS_11 = [
+    ("student_run11a_safedagger_adr5.csv", 32,
+     "SafeDAgger + ADR5", COLORS["blue"]),
+    ("student_run11b_dagger_adr5.csv", 32,
+     "DAgger + ADR5", COLORS["orange"]),
+]
+
+RUN11_EVAL_FILES = {
+    "SafeDAgger (run11a)": "eval_metrics_20260407_084953.json",
+    "DAgger (run11b)": "eval_metrics_20260407_084926.json",
+}
+
 
 def plot_run(run_name, runs, objects, eval_files=None,
              max_iter=100_000, ema_alpha=0.999):
@@ -1434,6 +1446,145 @@ def plot_run(run_name, runs, objects, eval_files=None,
             ax.set_title(title, fontsize=8)
             fig.tight_layout()
             save_fig(fig, fname, subdir=subdir)
+
+
+def plot_run10b_vs_run11_comparison(eval_dir: Path = None):
+    """Side-by-side per-object lift comparison: run10b (no ADR) vs run11a (SafeD ADR5) vs run11b (DAgger ADR5)."""
+    import json
+    if eval_dir is None:
+        eval_dir = EXPORTS_DIR.parent.parent / "distillation_new" / "eval_results"
+
+    runs = [
+        ("run10b SafeD (no ADR)", "eval_metrics_20260405_224012.json", COLORS["green"]),
+        ("run11a SafeD + ADR5", "eval_metrics_20260407_084953.json", COLORS["blue"]),
+        ("run11b DAgger + ADR5", "eval_metrics_20260407_084926.json", COLORS["orange"]),
+    ]
+
+    fig, ax = plt.subplots(figsize=(14/2.54, 7/2.54))
+    x = np.arange(len(OBJECTS_TOP8))
+    w = 0.27
+
+    for i, (label, fname, color) in enumerate(runs):
+        with open(eval_dir / fname) as fh:
+            d = json.load(fh)
+        per_obj = d.get("per_object_metrics", {})
+        vals = [per_obj.get(obj, {}).get("lift_success", 0) * 100 for obj in OBJECTS_TOP8]
+        offset = (i - 1) * w
+        bars = ax.bar(x + offset, vals, w, label=label, color=color,
+                      edgecolor="white", linewidth=0.4)
+        for bar, val in zip(bars, vals):
+            if val > 0:
+                ax.text(bar.get_x() + bar.get_width()/2, val + 1.5,
+                        f"{val:.0f}", ha="center", va="bottom", fontsize=4)
+
+    ax.set_ylabel("Lift success (%)")
+    ax.set_xticks(x)
+    ax.set_xticklabels([o.replace("_", " ") for o in OBJECTS_TOP8],
+                       fontsize=5, rotation=45, ha="right")
+    ax.set_ylim(0, 105)
+    ax.legend(fontsize=6, loc="upper right")
+    ax.set_title("Per-Object Lift Success: Best (run10b) vs ADR 5 ablation (run11a/b)", fontsize=8)
+    fig.tight_layout()
+    save_fig(fig, "run10b_vs_run11_per_object_lift", subdir="comparisons")
+
+
+def plot_physics_vs_real_unsafe_breakdown(eval_dir: Path = None):
+    """Stacked bar showing physics vs real unsafe contribution for run10b/11a/11b."""
+    import json
+    if eval_dir is None:
+        eval_dir = EXPORTS_DIR.parent.parent / "distillation_new" / "eval_results"
+
+    runs = [
+        ("run10b SafeD\n(no ADR)", "eval_metrics_20260405_224012.json"),
+        ("run11a SafeD\n+ ADR5", "eval_metrics_20260407_084953.json"),
+        ("run11b DAgger\n+ ADR5", "eval_metrics_20260407_084926.json"),
+    ]
+
+    labels, real_vals, phys_vals, lift_vals = [], [], [], []
+    for label, fname in runs:
+        with open(eval_dir / fname) as fh:
+            d = json.load(fh)
+        m = d["metrics"]
+        uer = m["eval/unsafe_episode_rate"]
+        reasons = m.get("eval/out_of_reach_reason_pct", {})
+        phys_pct_of_unsafe = reasons.get("physics_instability", 0) / 100
+        phys = uer * phys_pct_of_unsafe
+        real = uer - phys
+        labels.append(label)
+        real_vals.append(real * 100)
+        phys_vals.append(phys * 100)
+        lift_vals.append(m["eval/lift_success"] * 100)
+
+    fig, ax = plt.subplots(figsize=(12/2.54, 7/2.54))
+    x = np.arange(len(labels))
+    w = 0.35
+
+    # Stacked unsafe bars
+    b1 = ax.bar(x - w/2, real_vals, w, label="Real unsafe", color=COLORS["red"], alpha=0.85)
+    b2 = ax.bar(x - w/2, phys_vals, w, bottom=real_vals, label="Physics instab.",
+                color=COLORS["gray"], alpha=0.7)
+    # Lift bars
+    b3 = ax.bar(x + w/2, lift_vals, w, label="Lift success", color=COLORS["green"], alpha=0.85)
+
+    for i, (r, p, l) in enumerate(zip(real_vals, phys_vals, lift_vals)):
+        ax.text(x[i] - w/2, r + p + 1, f"{r+p:.0f}", ha="center", fontsize=6)
+        ax.text(x[i] + w/2, l + 1, f"{l:.0f}", ha="center", fontsize=6)
+
+    ax.set_ylabel("Rate (%)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=7)
+    ax.set_ylim(0, 105)
+    ax.legend(fontsize=6, loc="upper right")
+    ax.set_title("Unsafe Breakdown: Physics vs Real (eval)", fontsize=9)
+    fig.tight_layout()
+    save_fig(fig, "physics_vs_real_unsafe_breakdown", subdir="comparisons")
+
+
+def plot_object_stability_across_runs(eval_dir: Path = None):
+    """Per-object lift across all major runs to show object-level stability/sensitivity."""
+    import json
+    if eval_dir is None:
+        eval_dir = EXPORTS_DIR.parent.parent / "distillation_new" / "eval_results"
+
+    runs = [
+        ("run9a SafeD", "eval_metrics_20260404_201637.json"),
+        ("run9b DAgger", "eval_metrics_20260404_201628.json"),
+        ("run10b SafeD 32env", "eval_metrics_20260405_224012.json"),
+        ("run11a SafeD ADR5", "eval_metrics_20260407_084953.json"),
+        ("run11b DAgger ADR5", "eval_metrics_20260407_084926.json"),
+    ]
+
+    obj_data = {obj: [] for obj in OBJECTS_TOP8}
+    for label, fname in runs:
+        with open(eval_dir / fname) as fh:
+            d = json.load(fh)
+        per_obj = d.get("per_object_metrics", {})
+        for obj in OBJECTS_TOP8:
+            obj_data[obj].append(per_obj.get(obj, {}).get("lift_success", 0) * 100)
+
+    # Compute stability score = std deviation across runs (lower = more stable)
+    obj_stability = {obj: (np.mean(vals), np.std(vals)) for obj, vals in obj_data.items()}
+    sorted_objs = sorted(obj_stability.items(), key=lambda x: x[1][1])  # sort by std
+
+    fig, ax = plt.subplots(figsize=(14/2.54, 7/2.54))
+    x = np.arange(len(sorted_objs))
+    means = [s[1][0] for s in sorted_objs]
+    stds = [s[1][1] for s in sorted_objs]
+    names = [s[0].replace("_", " ") for s in sorted_objs]
+
+    bars = ax.bar(x, means, yerr=stds, capsize=3, color=COLORS["blue"], alpha=0.7,
+                  edgecolor="white", linewidth=0.5, error_kw={"linewidth": 0.8})
+    for bar, m, s in zip(bars, means, stds):
+        ax.text(bar.get_x() + bar.get_width()/2, m + s + 1.5,
+                f"σ={s:.0f}", ha="center", fontsize=5)
+
+    ax.set_ylabel("Lift success (%)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, fontsize=6, rotation=45, ha="right")
+    ax.set_ylim(0, 110)
+    ax.set_title("Per-Object Stability Across Runs (sorted by std, lowest=most stable)", fontsize=8)
+    fig.tight_layout()
+    save_fig(fig, "object_stability_across_runs", subdir="comparisons")
 
 
 def plot_failure_mode_detail(objects=("basketball_shoe", "teddy_bear"),
