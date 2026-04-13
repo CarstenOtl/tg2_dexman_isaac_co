@@ -81,14 +81,14 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
     actuators={
         "franka_arm": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[1-4]"],
-            effort_limit_sim=90.0,    # FR3 hardware spec for joints 1-4
+            effort_limit_sim=100.0,   # 200→87→100
             velocity_limit_sim=2.175,
             stiffness=200.0,          # 400→200: softer spring, less force on contact
             damping=40.0,
         ),
         "franka_joints_ee": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[5-7]"],
-            effort_limit_sim=20.0,    # FR3 hardware spec for joints 5-7
+            effort_limit_sim=50.0,    # 200→12→50
             velocity_limit_sim=2.175,
             stiffness=200.0,          # 400→200
             damping=40.0,
@@ -96,8 +96,8 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
         "thumb_rot": ImplicitActuatorCfg(
             joint_names_expr=["revolute_thumb_rot"],
             effort_limit_sim=10.0,
-            velocity_limit_sim=0.2618,  # ~15 deg/s, close to hardware
-            stiffness=60.0,             # 20→60: 3× stiffer for better tracking
+            velocity_limit_sim=20.0,
+            stiffness=20.0,
             damping=2.0,
         ),
         "mcp_pitch": ImplicitActuatorCfg(
@@ -159,7 +159,7 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
         #     },
         # ),
     },
-    soft_joint_pos_limit_factor=0.8,
+    soft_joint_pos_limit_factor=0.9,
 )
 
 # Create a variant of the config with explicit actuators for stability
