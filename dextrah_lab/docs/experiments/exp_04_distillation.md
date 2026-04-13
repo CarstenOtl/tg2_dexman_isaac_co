@@ -27,7 +27,381 @@ type: project
 | **run5a** | **SafeDagger** | **L2** | **T11** | **100k** | **61.3%** | **75.4%** | physics (41%), collision (14%) | **best lift** |
 | run5b | DAgger | KL | T11 | 100k | 49.2% | 58.5% | object_oob (18%), palm (17%) | real term logging |
 | run6a | SafeDagger | L2 | T11 | 100k | — | — | — | scaled L2 threshold (0.665) |
-| run6b | DAgger | KL | T11 | 100k | — | — | — | AverageMeter logging |
+| run6b | DAgger | L2 | T11 | 100k | — | — | — | AverageMeter logging |
+| run7a | SafeDagger | L2 | T11 | 100k | 27.9% | 79.0% | physics (58%), collision (14%) | threshold=3.0, visdex_top8 |
+| **run7b** | **DAgger** | **L2** | **T11** | **100k** | **56.9%** | **59.4%** | physics (39%), object_oob (11%) | visdex_top8, 3 envs/obj |
+| run8a | SafeDagger | L2 | T11 | 100k | 41.7% | 70.0% | physics (44%), collision (11%) | threshold=2.0, top8, 10s eps |
+| **run8b** | **DAgger** | **L2** | **T11** | **100k** | **55.2%** | **42.3%** | physics (21%), collision (12%) | top8, 10s eps |
+| **run9a** | **SafeDagger** | **L2** | **T11** | **100k** | **72.7%** | **62.7%** | physics (32%), collision (16%) | **FIXED one-hot, top8, 10s, threshold=2.0** |
+| **run9b** | **DAgger** | **L2** | **T11** | **100k** | **71.7%** | **58.3%** | physics (26%), object_oob (19%) | **FIXED one-hot, top8, 10s** |
+| run10a | SafeDagger | L2 | T11 | 100k | 62.3% | 72.9% | physics (37%), collision (19%) | arm randomization ON |
+| **run10b** | **SafeDagger** | **L2** | **T11** | **100k** | **79.2%** | **64.6%** | physics (27%), object_oob (15%) | **32 envs (4/obj), NEW BEST** |
+| run11a | SafeDagger | L2 | T11 | 100k | 63.9% | 73.3% | physics (39%), collision (19%) | ADR 5, 32 envs |
+| run11b | DAgger | L2 | T11 | 100k | 48.8% | 73.0% | collision (26%), object_oob (23%) | ADR 5, 32 envs |
+| run12 | SafeDagger | L2 | **Tv2** | 100k | — | — | — | *running*, 32 envs, same config as run10b |
+| run13 | **BC** | L2 | T11 | 100k | — | — | — | *running*, pure behavior cloning ablation, 32 envs |
+
+## run13 — Pure Behavior Cloning ablation (2026-04-13)
+
+**Motivation:** All previous distillation runs use online imitation learning (DAgger/SafeDagger) where the student's actions influence the state distribution. Pure BC is the simplest baseline — teacher always drives the environment, student only learns the observation→action mapping from teacher-generated trajectories. This ablation quantifies how much DAgger's distribution correction contributes vs. the teacher supervision signal alone.
+
+**Settings:** Same as run10b (32 envs, best config, ADR 0, visdex_top8) but with `--bc` flag. Teacher always steps the environment; student computes forward passes and loss but never acts.
+
+**Key differences from DAgger/SafeDagger:**
+- `step_student_actions=False` — teacher actions are always sent to `env.step()`
+- `disable_unsafe_override=True` — no SafeDagger intervention (irrelevant since teacher always steps)
+- `beta=1.0` throughout (teacher acts in all envs)
+- Training-time `lift_success`/`unsafe_rate` reflect teacher performance, not student — use `eval_student.py` for true student metrics
+- All other TensorBoard metrics identical (imitation_loss, l2_loss_mean, per-object metrics, termination breakdown)
+
+**Run 13 — Pure BC (32 envs, ADR 0):**
+```bash
+cd /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 32 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 --bc \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+  env.teacher_objects_dir=multi_objects/visdex_selected \
+  env.distillation_episode_length_s=10.0 \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run directory:** `runs/dextrah-fr3-agilehand-bc-stereo-transformer_13-15-18-51/`
+
+**Status (2026-04-13):** *Running* on GPU 0.
+
+**Expected outcome:** BC should underperform DAgger variants because the student never encounters its own error distribution during training — at eval time, small prediction errors compound without correction. The gap between BC and DAgger quantifies the value of online distribution correction for this task.
+
+## run12 — Teacher v2 distillation (2026-04-13)
+
+**Motivation:** All previous distillation runs used Teacher 11 (85.8% lift, ADR 14, unrealistic starting limits). Teacher v2 (79.1% lift, ADR 13, hardware-realistic constraints from step 0) may produce a student that transfers better to real hardware despite lower sim performance. This run isolates the teacher variable — identical distillation config to run10b (best student, 79.2% lift).
+
+**Settings:** Same as run10b: SafeDagger + L2, 32 envs, threshold=2.0, visdex_top8, 10s episodes, no ADR, arm randomization OFF.
+
+```bash
+cd dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 32 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/12_teacher_v2_hw_realistic_adr13_04-06_12-49-15/nn/dextrah_tekken_lstm.pth \
+  --max_iterations 100000 --unsafe_l2_threshold 2.0 \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+  env.teacher_objects_dir=multi_objects/visdex_selected \
+  env.distillation_episode_length_s=10.0 \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run directory:** `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_13-11-07-04/`
+
+**Status (2026-04-13):** *Running* on GPU 0.
+
+**Key question:** Does Teacher v2's ~7pp lift gap propagate linearly to the student, or does the more realistic teacher produce a proportionally better student for sim2real?
+
+## run11a/11b — SafeDagger vs DAgger at ADR 5 (2026-04-06)
+
+**Motivation:** All previous distillation runs used `enable_adr=False` (ADR 0). The teacher was trained to ADR 14, so it performs well at ADR 5. Running at ADR 5 adds moderate physics randomization (friction, mass, stiffness) during distillation — student sees diverse physical conditions while teacher still provides good supervision. This should improve sim2real robustness without degrading teacher quality.
+
+**Settings:** Same as run10b (32 envs, best config) but with `enable_adr=True starting_adr_increments=5`.
+
+**Run 11a — SafeDagger + ADR 5:**
+```bash
+cd dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 32 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 --unsafe_l2_threshold 2.0 \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+  env.teacher_objects_dir=multi_objects/visdex_selected \
+  env.distillation_episode_length_s=10.0 \
+  env.enable_adr=True env.starting_adr_increments=5 env.disable_arm_randomization=True
+```
+
+**Run 11b — DAgger + ADR 5:**
+```bash
+cd dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 32 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 \
+  --vanilla_dagger \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+  env.teacher_objects_dir=multi_objects/visdex_selected \
+  env.distillation_episode_length_s=10.0 \
+  env.enable_adr=True env.starting_adr_increments=5 env.disable_arm_randomization=True
+```
+
+**Run directories:**
+- run11a (SafeDagger): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_06-14-00-34/`
+- run11b (DAgger): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_06-14-01-16/`
+
+**Status (2026-04-06):** Both running. SafeDagger (11a) started 14:00 on GPU 0, DAgger (11b) started 14:01 on GPU 1.
+
+**Standalone eval (640 episodes = 20 rollouts × 32 envs, 2026-04-07):**
+
+| Metric | run11a SafeD+ADR5 | run11b DAgger+ADR5 | run10b (no ADR) | Teacher 11 |
+|---|---|---|---|---|
+| **Lift success** | 63.9% | 48.8% | **79.2%** | 85.8% |
+| **Unsafe rate** | 73.3% | 73.0% | 64.6% | 23.1% |
+| Physics (% all eps) | 39.2% | 19.9% | 27.1% | 11.0% |
+| Collision (% all eps) | 19.4% | 25.9% | 13.1% | 1.7% |
+| Object OOB (% all eps) | 12.7% | 23.3% | 14.6% | 9.4% |
+| Palm flipped (% all eps) | 2.1% | 3.9% | 9.2% | 0.6% |
+
+**Eval JSONs:**
+- run11a: `eval_results/eval_metrics_20260407_084953.json`
+- run11b: `eval_results/eval_metrics_20260407_084926.json`
+
+**Key findings:**
+- **ADR 5 hurts both methods at 100k iters** — SafeDagger -15.3pp (79.2→63.9%), DAgger -22.9pp (71.7→48.8%)
+- **SafeDagger more robust to physics randomization** — drops less than DAgger, smaller relative degradation
+- DAgger's collision rate jumped (12.5→25.9%) — student can't compensate for novel physics
+- Both methods need longer training to learn ADR-randomized dynamics
+- ADR during distillation may help sim2real but trades off sim eval performance
+
+## run10a/10b — Ablation: arm randomization + 32 envs (2026-04-05)
+
+**Motivation:** run9a/9b reached 72.7%/71.7% lift (85% of teacher). Two ablations to push further:
+- **run10a**: Enable visual randomization (`disable_arm_randomization=False`) — randomizes robot arm textures, table textures at each reset. May hurt training lift slightly but improves sim2real robustness.
+- **run10b**: Increase to 32 envs (4 envs/object, up from 3) — cleaner gradients. May hang on RTX 4090 (previous finding: 32 hangs, 24 works). Both use SafeDagger to isolate each variable against run9a baseline.
+
+**Baseline (run9a):** 72.7% lift, 62.7% unsafe, 24 envs, arm randomization OFF.
+
+**Run 10a — SafeDagger + arm randomization (GPU 0, 24 envs):**
+```bash
+cd dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=0 ... --num_envs 24 ... env.disable_arm_randomization=False
+```
+
+**Run 10b — SafeDagger + 32 envs (GPU 1):**
+```bash
+cd dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=1 ... --num_envs 32 ... env.disable_arm_randomization=True
+```
+
+**All other settings identical to run9a:** threshold=2.0, visdex_top8, teacher_onehot_size=13, teacher_objects_dir=visdex_selected, 10s episodes, L2 loss, ADR off.
+
+**Run directories:**
+- run10a (arm randomization): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_05-15-21-00/`
+- run10b (32 envs): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_05-15-21-49/`
+
+**Status (2026-04-05):** Both running. run10a started 15:21 on GPU 0, run10b started 15:21 on GPU 1. 32 envs did NOT hang.
+
+**Standalone eval (480 episodes, 2026-04-05):**
+
+| Metric | run10a (arm rand) | run10b (32 envs) | run9a (baseline) | Teacher 11 |
+|---|---|---|---|---|
+| **Lift success** | 62.3% | **79.2%** | 72.7% | 85.8% |
+| **Unsafe rate** | 72.9% | 64.6% | 62.7% | 23.1% |
+| Physics (% all eps) | 36.7% | 27.1% | 32.5% | 11.0% |
+| Collision (% all eps) | 18.5% | 13.1% | 16.2% | 1.7% |
+| Object OOB (% all eps) | 15.8% | 14.6% | 11.5% | 9.4% |
+| Palm flipped (% all eps) | 1.9% | 9.2% | 2.5% | 0.6% |
+
+**Eval JSONs:**
+- run10a: `eval_results/eval_metrics_20260405_224028.json`
+- run10b: `eval_results/eval_metrics_20260405_224012.json`
+
+**Key findings:**
+- **32 envs = new best student: 79.2% lift (92.3% of teacher ceiling)**
+- More envs/object (4 vs 3) provides cleaner gradients → better policy
+- Arm randomization hurts training lift (-10pp) — visual diversity adds learning difficulty without matching eval conditions
+- 32 envs confirmed working on RTX 4090 (no hang) — updates previous finding
+
+## run9a/9b — SafeDagger vs DAgger with FIXED one-hot index mapping (2026-04-04)
+
+**Motivation: CRITICAL BUG FIX.** All previous runs using `visdex_top8` (runs 7-8) had **wrong teacher one-hot indices**. When distilling with a subset of objects, `multi_object_idx_onehot` used sequential indices (0-7) instead of the teacher's original indices (from 13-object training). This meant the teacher received the wrong object identity for 7 out of 8 objects:
+
+| Object | Teacher index (correct) | Distillation index (run7-8, wrong) |
+|---|---|---|
+| basketball_shoe | 0 | 0 ✅ |
+| closed_fist | 2 | 1 ❌ (teacher thought: chicken_head_in_car) |
+| elephant_toy | 3 | 2 ❌ (teacher thought: closed_fist) |
+| mario | 5 | 3 ❌ (teacher thought: elephant_toy) |
+| milk_pot | 6 | 4 ❌ (teacher thought: homer) |
+| teddy_bear | 8 | 5 ❌ (teacher thought: mario) |
+| toy_bagger | 9 | 6 ❌ (teacher thought: milk_pot) |
+| tutle_candle_holder | 12 | 7 ❌ (teacher thought: plane) |
+
+**Evidence:** basketball_shoe (index 0, the only correctly mapped object) consistently had the best per-object lift across all run7-8 results for both methods.
+
+**Fix:** Added `teacher_objects_dir` config — specifies the teacher's training object directory. The env now maps each object name to its correct index in the teacher's sorted object list. One-hot vectors use the teacher indices, not sequential indices.
+
+**All other settings identical to run8:** threshold=2.0, top8, 10s episodes, L2 loss, AverageMeter logging.
+
+**Run 9a — SafeDagger:**
+```bash
+cd dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 24 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 --unsafe_l2_threshold 2.0 \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+  env.teacher_objects_dir=multi_objects/visdex_selected \
+  env.distillation_episode_length_s=10.0 \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run 9b — DAgger:**
+```bash
+cd dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 24 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 \
+  --vanilla_dagger \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+  env.teacher_objects_dir=multi_objects/visdex_selected \
+  env.distillation_episode_length_s=10.0 \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run directories:**
+- run9a (SafeDagger): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_04-14-07-25/`
+- run9b (DAgger): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_04-14-08-19/`
+
+**Status (2026-04-04):** Both running. SafeDagger (9a) started 14:07 on GPU 0, DAgger (9b) started 14:08 on GPU 1.
+
+**Expected:** Significant improvement across all objects (especially non-basketball_shoe). Teacher now provides correct actions for each object.
+
+**Standalone eval (480 episodes, 2026-04-04):**
+
+| Metric | run9a SafeDagger+L2 | run9b DAgger+L2 | run8a (broken) | run8b (broken) | Teacher 11 |
+|---|---|---|---|---|---|
+| **Lift success** | **72.7%** | **71.7%** | 41.7% | 55.2% | 85.8% |
+| **Unsafe rate** | 62.7% | **58.3%** | 70.0% | 42.3% | 23.1% |
+| Physics instab. (% all eps) | 32.5% | 25.6% | 44.1% | 20.8% | 11.0% |
+| Harmful collision (% all eps) | 16.2% | 12.5% | 11.5% | 11.7% | 1.7% |
+| Object OOB (% all eps) | 11.5% | 19.2% | 9.4% | 9.8% | 9.4% |
+| Palm flipped (% all eps) | 2.5% | 1.1% | 5.0% | 0.0% | 0.6% |
+
+**Eval JSONs:**
+- run9a: `eval_results/eval_metrics_20260404_201637.json`
+- run9b: `eval_results/eval_metrics_20260404_201628.json`
+
+**Key findings:**
+- **One-hot fix produced massive improvement:** SafeDagger +31pp (41.7→72.7%), DAgger +16.5pp (55.2→71.7%)
+- **SafeDagger and DAgger now comparable in lift** (72.7% vs 71.7%) — first time SafeDagger matches DAgger
+- **Best student results yet:** 72.7% lift = 84.7% of teacher ceiling
+- SafeDagger unsafe rate still higher (62.7% vs 58.3%) but gap narrowed significantly
+- Confirms the one-hot index bug was the dominant issue in runs 7-8
+
+## run8a/8b — SafeDagger vs DAgger with calibrated threshold + episode-level lift (2026-04-03)
+
+**Motivation:** Consolidating all fixes from runs 6-7. Key improvements over run7:
+
+1. **L2 threshold calibrated to 2.0** — Based on original SafeDagger paper principle: set threshold so ~20-30% of envs are unsafe at start, let it decay naturally. Analysis of run7 L2 distribution: early p80=2.6, late p80=1.7. Threshold=2.0 gives ~30% initial intervention → ~5% at convergence. Previous: 0.665 (beta=70%, behavior cloning) and 3.0 (beta=5%, essentially DAgger).
+2. **Episode length doubled to 10s** — `distillation_episode_length_s=10.0` (was 5.0 = 150 steps). Matches teacher training episode length (300 steps). Gives student more time to approach, grasp, and lift each object.
+3. **Episode-level lift tracking** — `train/avg/lift_success` and `train/<object>/lift_success` via AverageMeter. Tracks "was object lifted at any point during episode" — directly comparable to eval. Previous per-step `in_success_region` / `per_object_lifted` didn't reflect standalone student capability.
+4. **Global `lift_success` scalar** logged to TensorBoard each step.
+
+**Unchanged from run7:** visdex_top8 (8 objects, 3 envs/obj), L2 loss for both methods, teacher 11, `teacher_onehot_size=13`.
+
+**Teacher:** `11_multi_object_adr14_sim2real_03-30_17-41-43`
+
+**Run 8a — SafeDagger (L2, threshold=2.0, 10s episodes):**
+```bash
+cd dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 24 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 --unsafe_l2_threshold 2.0 \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+  env.distillation_episode_length_s=10.0 \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run 8b — DAgger (L2, no override, 10s episodes):**
+```bash
+cd dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 24 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 \
+  --vanilla_dagger \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+  env.distillation_episode_length_s=10.0 \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run directories:**
+- run8a (SafeDagger): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_03-20-30-06/`
+- run8b (DAgger): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_03-20-33-10/`
+
+**Status (2026-04-03):** Both running. SafeDagger (8a) started 20:30 on GPU 0, DAgger (8b) started 20:33 on GPU 1.
+
+**Threshold calibration summary:**
+
+| Run | Threshold | Beta (start) | Beta (end) | Behavior |
+|---|---|---|---|---|
+| run6a | 0.665 | ~95% | ~70% | Behavior cloning |
+| run7a | 3.0 | ~30% | ~5% | Essentially DAgger |
+| **run8a** | **2.0** | **~30%** | **~5-10%** | **Calibrated SafeDagger** |
+| Paper (tg2) | 0.5 | ~80% | ~20% | Paper's SafeDagger |
+
+**Results:** *pending*
+
+## run7a/7b — SafeDagger vs DAgger with corrected threshold + top 8 objects (2026-04-03)
+
+**Motivation:** Three critical fixes from run6 analysis:
+1. **L2 threshold too low** — threshold 0.665 produced beta=70% = behavior cloning. DAgger L2 mean is ~4.4, so threshold must be much higher for student to act. Set to **3.0** (teacher only intervenes when student is dramatically off).
+2. **Loss function corrected** — previous DAgger runs used KL loss (`--vanilla_dagger` set `imitation_loss_type: "kl"`). Paper uses weighted L2 for both methods. Fixed: both SafeDagger and DAgger now use L2.
+3. **Reduced object set** — `visdex_top8` (8 best-performing objects) instead of `visdex_selected` (13). Gives 3 envs/object (up from 1.8) for cleaner gradients.
+
+**Teacher:** `11_multi_object_adr14_sim2real_03-30_17-41-43` — trained on 13 objects, compatible with 8-object subset.
+
+**Objects (visdex_top8):** basketball_shoe, closed_fist, mario, milk_pot, plane, teddy_bear, toy_cow, train
+
+**Run 7a — SafeDagger (L2 loss + teacher override, threshold=3.0):**
+```bash
+cd dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 24 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 --unsafe_l2_threshold 3.0 \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run 7b — DAgger (L2 loss, no teacher override):**
+```bash
+cd dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 24 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 \
+  --vanilla_dagger \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run directories:**
+- run7a (SafeDagger): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_03-14-53-40/`
+- run7b (DAgger): `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_03-14-54-52/`
+
+**Status (2026-04-03):** Both running. SafeDagger (7a) started 14:53 on GPU 0, DAgger (7b) started 14:54 on GPU 1.
+
+**What changed from run6:**
+- L2 threshold: 0.665 → **3.0** (expect beta ~20-30% instead of ~70%)
+- Loss: DAgger now L2 (was KL in runs 2a-5b)
+- Objects: 13 → **8** (visdex_top8, 3 envs/obj)
+- `--unsafe_l2_threshold` CLI flag added
+
+**What to watch:**
+- Beta decay — should drop much faster with threshold=3.0
+- DAgger L2 vs SafeDagger with same loss function — first true apples-to-apples comparison
+- Per-object lift/unsafe with better gradient signal (3 envs/obj)
+
+**Results:** *pending*
 
 ## run6a/6b — SafeDagger vs DAgger with episode-level AverageMeter logging (2026-04-03)
 

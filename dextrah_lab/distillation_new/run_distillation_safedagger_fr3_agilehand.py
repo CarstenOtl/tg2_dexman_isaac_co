@@ -27,6 +27,8 @@ parser.add_argument("--data_aug", action="store_true", default=False, help="Whet
 parser.add_argument("--mono", action="store_true", default=False, help="Use monocular instead of stereo (default: stereo)")
 parser.add_argument("--no_transformer", action="store_true", default=False, help="Disable transformer student (default: transformer)")
 parser.add_argument("--vanilla_dagger", action="store_true", default=False, help="Use vanilla DAgger (KL loss, no unsafe override) instead of SafeDAgger")
+parser.add_argument("--bc", action="store_true", default=False, help="Pure behavior cloning: teacher always steps the env, student only learns the mapping.")
+parser.add_argument("--unsafe_l2_threshold", type=float, default=2.0, help="L2 threshold for SafeDagger teacher intervention (default: 2.0)")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -86,6 +88,9 @@ def main(env_cfg, agent_cfg: dict):
     vision_tag = "stereo" if use_stereo else "mono"
     arch_tag = "transformer" if use_transformer else "cnn"
 
+    if args_cli.bc and args_cli.vanilla_dagger:
+        raise ValueError("Cannot use both --behavior-cloning and --vanilla_dagger.")
+
     if use_stereo and use_transformer:
         student_yaml = "rl_games_ppo_stereo_transformer.yaml"
     elif not use_stereo and use_transformer:
@@ -121,8 +126,14 @@ def main(env_cfg, agent_cfg: dict):
             teacher_ckpt = os.path.join(parent_path, "pretrained_ckpts/fr3_agilehand_teacher.pth")
 
     train_dir = "runs"
+    if args_cli.bc:
+        method_tag = "bc"
+    elif args_cli.vanilla_dagger:
+        method_tag = "dagger"
+    else:
+        method_tag = "safedagger"
     experiment_name = (
-        f"dextrah-fr3-agilehand-safedagger-{vision_tag}-{arch_tag}"
+        f"dextrah-fr3-agilehand-{method_tag}-{vision_tag}-{arch_tag}"
         + datetime.now().strftime("_%d-%H-%M-%S")
     )
     experiment_dir = os.path.join(train_dir, experiment_name)
@@ -148,7 +159,9 @@ def main(env_cfg, agent_cfg: dict):
         },
         "imitation_loss_type": "kl" if args_cli.vanilla_dagger else "l2",
         "play_policy": args_cli.play_policy,
-        "disable_unsafe_override": args_cli.vanilla_dagger,
+        "disable_unsafe_override": args_cli.vanilla_dagger or args_cli.bc,
+        "behavior_cloning": args_cli.bc,
+        "unsafe_l2_threshold": args_cli.unsafe_l2_threshold,
     }
 
     model_builder.register_network("a2c_aux_depth_enc", A2CWithAuxDepthBuilder)
@@ -162,7 +175,7 @@ def main(env_cfg, agent_cfg: dict):
 
     dagger = SafeDagger(env, dagger_config, summaries_dir=summaries_dir, nn_dir=nn_dir, max_iterations=args_cli.max_iterations)
     dagger.distill()
-    dagger.save(f"dextrah_student_safedagger_{vision_tag}_{arch_tag}")
+    dagger.save(f"dextrah_student_{method_tag}_{vision_tag}_{arch_tag}")
 
 
 if __name__ == "__main__":
