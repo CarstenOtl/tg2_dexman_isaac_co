@@ -38,6 +38,32 @@ type: project
 | **run10b** | **SafeDagger** | **L2** | **T11** | **100k** | **79.2%** | **64.6%** | physics (27%), object_oob (15%) | **32 envs (4/obj), NEW BEST** |
 | run11a | SafeDagger | L2 | T11 | 100k | 63.9% | 73.3% | physics (39%), collision (19%) | ADR 5, 32 envs |
 | run11b | DAgger | L2 | T11 | 100k | 48.8% | 73.0% | collision (26%), object_oob (23%) | ADR 5, 32 envs |
+| run12 | SafeDagger | L2 | **Tv2** | 100k | — | — | — | *running*, 32 envs, same config as run10b |
+
+## run12 — Teacher v2 distillation (2026-04-13)
+
+**Motivation:** All previous distillation runs used Teacher 11 (85.8% lift, ADR 14, unrealistic starting limits). Teacher v2 (79.1% lift, ADR 13, hardware-realistic constraints from step 0) may produce a student that transfers better to real hardware despite lower sim performance. This run isolates the teacher variable — identical distillation config to run10b (best student, 79.2% lift).
+
+**Settings:** Same as run10b: SafeDagger + L2, 32 envs, threshold=2.0, visdex_top8, 10s episodes, no ADR, arm randomization OFF.
+
+```bash
+cd dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 32 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/12_teacher_v2_hw_realistic_adr13_04-06_12-49-15/nn/dextrah_tekken_lstm.pth \
+  --max_iterations 100000 --unsafe_l2_threshold 2.0 \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+  env.teacher_objects_dir=multi_objects/visdex_selected \
+  env.distillation_episode_length_s=10.0 \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run directory:** `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_13-11-07-04/`
+
+**Status (2026-04-13):** *Running* on GPU 0.
+
+**Key question:** Does Teacher v2's ~7pp lift gap propagate linearly to the student, or does the more realistic teacher produce a proportionally better student for sim2real?
 
 ## run11a/11b — SafeDagger vs DAgger at ADR 5 (2026-04-06)
 

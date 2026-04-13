@@ -204,11 +204,14 @@ class SafeDagger:
             print("USING AUX")
         else:
             self.is_aux = False
-        self.step_student_actions = True
+        self.behavior_cloning = self.config.get("behavior_cloning", False)
+        self.step_student_actions = not self.behavior_cloning
         self.play_policy = self.config["play_policy"]
         if self.play_policy is True:
             self.step_student_actions = True
         self.disable_unsafe_override = self.config.get("disable_unsafe_override", False)
+        if self.behavior_cloning and self.rank == 0:
+            print("Mode: Pure Behavior Cloning (teacher always steps the environment)")
 
         # logging
         self.games_to_track = 100
@@ -552,8 +555,12 @@ class SafeDagger:
                 total_loss_step = imitation_loss + self.aux_coeff * aux_sum_tensor
                 total_loss += total_loss_step
                 self.unsafe = self.check_unsafe(l2_loss_per_env=l2_loss_per_env, obs=obs)
-                # beta = actual teacher intervention rate (0 for vanilla DAgger)
-                if self.disable_unsafe_override:
+                # beta = fraction of envs where teacher steps
+                # BC: 1.0 (teacher always), DAgger: 0.0 (student always),
+                # SafeDagger: fraction where L2 > threshold
+                if self.behavior_cloning:
+                    beta = 1.0
+                elif self.disable_unsafe_override:
                     beta = 0.0
                 else:
                     beta = float(self.unsafe.float().mean().item())
