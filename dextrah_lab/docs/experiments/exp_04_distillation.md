@@ -34,6 +34,7 @@ type: project
 | **run8b** | **DAgger** | **L2** | **T11** | **100k** | **55.2%** | **42.3%** | physics (21%), collision (12%) | top8, 10s eps |
 | **run9a** | **SafeDagger** | **L2** | **T11** | **100k** | **72.7%** | **62.7%** | physics (32%), collision (16%) | **FIXED one-hot, top8, 10s, threshold=2.0** |
 | **run9b** | **DAgger** | **L2** | **T11** | **100k** | **71.7%** | **58.3%** | physics (26%), object_oob (19%) | **FIXED one-hot, top8, 10s** |
+| **run9c** | **BC** | **L2** | **T11** | **100k** | **87.8%** | **90.8%** | physics (49%), object_oob (21%), collision (19%) | **pure BC baseline ablation (32 envs)** |
 | run10a | SafeDagger | L2 | T11 | 100k | 62.3% | 72.9% | physics (37%), collision (19%) | arm randomization ON |
 | **run10b** | **SafeDagger** | **L2** | **T11** | **100k** | **79.2%** | **64.6%** | physics (27%), object_oob (15%) | **32 envs (4/obj), NEW BEST** |
 | run11a | SafeDagger | L2 | T11 | 100k | 63.9% | 73.3% | physics (39%), collision (19%) | ADR 5, 32 envs |
@@ -64,6 +65,76 @@ CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pytho
 **Status (2026-04-13):** *Running* on GPU 0.
 
 **Key question:** Does Teacher v2's ~7pp lift gap propagate linearly to the student, or does the more realistic teacher produce a proportionally better student for sim2real?
+
+## run9c — Pure Behavior Cloning ablation (2026-04-13)
+
+**Role in thesis:** Third baseline method in the distillation comparison (SafeDagger/run9a vs DAgger/run9b vs BC/run9c). Forms the minimal imitation baseline — no online distribution correction.
+
+**Motivation:** All previous distillation runs use online imitation learning (DAgger/SafeDagger) where the student's actions influence the state distribution. Pure BC is the simplest baseline — teacher always drives the environment, student only learns the observation→action mapping from teacher-generated trajectories. This ablation quantifies how much DAgger's distribution correction contributes vs. the teacher supervision signal alone.
+
+**Settings:** Same as run10b config (32 envs, ADR 0, visdex_top8, 10s episodes) with `--bc` flag. Teacher always steps the environment; student computes forward passes and loss but never acts. Note: uses 32 envs vs run9a/9b's 24 envs — direct comparison to run10b (SafeDagger 32 envs: 79.2% lift) is cleanest, but the run9a/9b pairing remains valid since method is the primary variable.
+
+**Key differences from DAgger/SafeDagger:**
+- `step_student_actions=False` — teacher actions are always sent to `env.step()`
+- `disable_unsafe_override=True` — no SafeDagger intervention (irrelevant since teacher always steps)
+- `beta=1.0` throughout (teacher acts in all envs)
+- Training-time `lift_success`/`unsafe_rate` reflect teacher performance, not student — use `eval_student.py` for true student metrics
+- All other TensorBoard metrics identical (imitation_loss, l2_loss_mean, per-object metrics, termination breakdown)
+
+**Run 9c — Pure BC (32 envs, ADR 0):**
+```bash
+cd /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 32 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 --bc \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+  env.teacher_objects_dir=multi_objects/visdex_selected \
+  env.distillation_episode_length_s=10.0 \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run directory:** `runs/dextrah-fr3-agilehand-bc-stereo-transformer_13-18-09-23/`
+
+**Standalone eval (640 episodes = 20 rollouts × 32 envs, 2026-04-13):**
+
+| Metric | run9c BC | run9a SafeD | run9b DAgger | run10b SafeD (32 envs) | Teacher 11 |
+|---|---|---|---|---|---|
+| **Lift success** | **87.8%** | 72.7% | 71.7% | 79.2% | 85.8% |
+| **Unsafe rate** | **90.8%** | 62.7% | 58.3% | 64.6% | 23.1% |
+| Physics (% all eps) | 49.0% | 32.4% | 25.8% | 27.1% | 11.0% |
+| Object OOB (% all eps) | 21.1% | 10.3% | 18.7% | 14.6% | 9.4% |
+| Collision (% all eps) | 19.3% | 15.9% | 11.0% | 13.1% | 1.7% |
+| Palm flipped (% all eps) | 1.3% | 4.1% | 2.8% | 9.2% | 0.6% |
+
+**Eval JSON:** `eval_results/eval_metrics_20260413_233515.json`
+
+**Key findings:**
+- **BC achieves highest lift of any student** (87.8%) — surpasses SafeDagger (run10b) by 8.6pp, matches Teacher 11 within 2pp
+- **BUT unsafe rate is catastrophically high** (90.8%) — 26pp worse than run10b SafeDagger, 4× worse than Teacher 11
+- Student learns the teacher's *grasping* well but not the *safety behavior* — during training, teacher always keeps trajectories in-distribution, so student never learns to recover from drift
+- Classic BC failure mode: high in-distribution accuracy, poor out-of-distribution robustness (covariate shift)
+- Physics instability dominates failures (49% of all episodes) — student's aggressive actions when slightly off-distribution cause sim instability
+- **Lift numbers are misleading** — many lifts succeed briefly before the episode terminates unsafely
+
+**Interpretation for thesis:** BC achieves high apparent success but cannot handle out-of-distribution states. DAgger's online correction (9a/9b) sacrifices peak lift performance for robustness. SafeDagger with more envs (run10b) hits the sweet spot. The 26pp unsafe gap between BC (9c) and SafeDagger (10b) quantifies the empirical value of online distribution correction for this task. This trio (9a/9b/9c) forms the clean ablation: all use identical env, teacher, loss, iterations, objects — only the stepping strategy differs.
+
+**Next step — overfitting check:** Eval intermediate checkpoints (10k, 25k, 50k, 75k, 100k) to determine if BC lift peaks early then degrades (overfitting) or stays monotonic (BC just learned well). Checkpoint sweep command:
+```bash
+cd /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/distillation_new
+RUN=runs/dextrah-fr3-agilehand-bc-stereo-transformer_13-18-09-23
+for iters in 10000 25000 50000 75000 100000; do
+  CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python eval_student.py \
+    --task=dextrah_fr3_agilehand --num_envs 32 --enable_cameras --headless \
+    --checkpoint $RUN/nn/dextrah_student_${iters}_iters.pth \
+    --num_episodes 20 \
+    env.distillation=True env.simulate_stereo=True \
+    env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+    env.teacher_objects_dir=multi_objects/visdex_selected \
+    env.distillation_episode_length_s=10.0
+done
+```
 
 ## run11a/11b — SafeDagger vs DAgger at ADR 5 (2026-04-06)
 

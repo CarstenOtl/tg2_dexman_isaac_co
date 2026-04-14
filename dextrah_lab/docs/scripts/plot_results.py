@@ -1184,11 +1184,14 @@ DISTILLATION_RUNS_9 = [
      "SafeDAgger", COLORS["blue"]),
     ("student_run9b_dagger_l2_teacher11.csv", 24,
      "DAgger", COLORS["orange"]),
+    ("student_run9c_bc_teacher11.csv", 32,
+     "BC", COLORS["green"]),
 ]
 
 RUN9_EVAL_FILES = {
     "SafeDAgger (run9a)": "eval_metrics_20260404_201637.json",
     "DAgger (run9b)": "eval_metrics_20260404_201628.json",
+    "BC (run9c)": "eval_metrics_20260413_233515.json",
 }
 
 DISTILLATION_RUNS_10 = [
@@ -1219,7 +1222,7 @@ RUN11_EVAL_FILES = {
 
 
 def plot_run(run_name, runs, objects, eval_files=None,
-             max_iter=100_000, ema_alpha=0.999):
+             max_iter=100_000, ema_alpha=0.999, failure_mode_ylim=30):
     """Generate all plots for a given run into a subdirectory."""
     subdir = run_name
     eval_dir = EXPORTS_DIR.parent.parent / "distillation_new" / "eval_results"
@@ -1314,7 +1317,8 @@ def plot_run(run_name, runs, objects, eval_files=None,
     for ax in axes[:, 0]:
         ax.set_ylabel("Lifted (%)", fontsize=7)
     axes_flat[0].legend(fontsize=5, loc="lower right")
-    fig.suptitle("Per-Object Lift (above table): SafeDAgger vs DAgger", fontsize=9)
+    method_list = " vs ".join(m for _, _, m, _ in runs)
+    fig.suptitle(f"Per-Object Lift (above table): {method_list}", fontsize=9)
     fig.tight_layout()
     save_fig(fig, "per_object_lifted_head_to_head", subdir=subdir)
 
@@ -1357,7 +1361,8 @@ def plot_run(run_name, runs, objects, eval_files=None,
     for ax in axes[:, 0]:
         ax.set_ylabel("Real unsafe (%)", fontsize=7)
     axes_flat[0].legend(fontsize=5, loc="upper right")
-    fig.suptitle("Per-Object Real Unsafe Rate (excl. physics): SafeDAgger vs DAgger", fontsize=9)
+    method_list = " vs ".join(m for _, _, m, _ in runs)
+    fig.suptitle(f"Per-Object Real Unsafe Rate (excl. physics): {method_list}", fontsize=9)
     fig.tight_layout()
     save_fig(fig, "per_object_unsafe_episode_head_to_head", subdir=subdir)
 
@@ -1383,7 +1388,7 @@ def plot_run(run_name, runs, objects, eval_files=None,
                         color=REASON_COLORS[reason], linewidth=1.0, alpha=0.9,
                         label=REASON_LABELS[reason])
             ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
-            ax.set_ylim(0, 30)
+            ax.set_ylim(0, failure_mode_ylim)
             ax.set_xlim(0, max_iter)
             ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
             ax.tick_params(labelsize=5)
@@ -1395,7 +1400,12 @@ def plot_run(run_name, runs, objects, eval_files=None,
         for ax in axes[:, 0]:
             ax.set_ylabel("Rate (%)", fontsize=7)
         axes_flat[0].legend(fontsize=4, loc="upper right")
-        tag = "safedagger" if "SafeD" in method else "dagger"
+        if "SafeD" in method:
+            tag = "safedagger"
+        elif "BC" in method:
+            tag = "bc"
+        else:
+            tag = "dagger"
         fig.suptitle(f"Per-Object Failure Modes — {method}", fontsize=9)
         fig.tight_layout()
         save_fig(fig, f"per_object_failure_modes_{tag}", subdir=subdir)
@@ -1418,8 +1428,11 @@ def plot_run(run_name, runs, objects, eval_files=None,
         ]:
             fig, ax = plt.subplots(figsize=(14/2.54, 7/2.54))
             x = np.arange(len(objects))
-            w = 0.35
-            colors_list = [COLORS["blue"], COLORS["orange"]]
+            n_methods = len(eval_files)
+            w = 0.8 / n_methods
+            colors_list = [COLORS["blue"], COLORS["orange"], COLORS["green"],
+                           COLORS["red"], COLORS["purple"], COLORS["gray"]]
+            offset_start = -(n_methods - 1) / 2
             for i, (label, eval_fname) in enumerate(eval_files.items()):
                 path = eval_dir / eval_fname
                 if not path.exists():
@@ -1431,8 +1444,8 @@ def plot_run(run_name, runs, objects, eval_files=None,
                     vals = [_get_real_unsafe(per_obj, obj) * 100 for obj in objects]
                 else:
                     vals = [per_obj.get(obj, {}).get(metric_key, 0) * 100 for obj in objects]
-                bars = ax.bar(x + (i - 0.5) * w, vals, w, label=label,
-                              color=colors_list[i], edgecolor="white", linewidth=0.5)
+                bars = ax.bar(x + (offset_start + i) * w, vals, w, label=label,
+                              color=colors_list[i % len(colors_list)], edgecolor="white", linewidth=0.5)
                 for bar, val in zip(bars, vals):
                     if val > 0:
                         ax.text(bar.get_x() + bar.get_width()/2, val + 1.5,
@@ -1446,6 +1459,141 @@ def plot_run(run_name, runs, objects, eval_files=None,
             ax.set_title(title, fontsize=8)
             fig.tight_layout()
             save_fig(fig, fname, subdir=subdir)
+
+
+def plot_run9_single_object_single_reason(
+    obj: str = "basketball_shoe",
+    reason: str = "object_out_of_bound",
+    max_iter: int = 100_000,
+    ema_alpha: float = 0.999,
+    ylim: float = 60,
+):
+    """Single-object, single-reason head-to-head comparison for run9 (SafeDAgger vs DAgger)."""
+    runs = DISTILLATION_RUNS_9
+    subdir = "run9/single_object_reason"
+
+    fig, ax = plt.subplots()
+    for csv_name, n_envs, method, color in runs:
+        metric = f"train/{obj}/unsafe_reason_prop/{reason}"
+        df = _load_distillation_metric(
+            csv_name, metric, n_envs,
+            max_iter=max_iter, smooth_window=1)
+        if df.empty:
+            continue
+        raw = df["value"].values * 100
+        smoothed = _ema(raw, alpha=ema_alpha)
+        iters = df["iteration"].values
+        step = max(1, len(iters) // 500)
+        ax.plot(iters[::step], smoothed[::step], color=color,
+                linewidth=1.5, alpha=0.95, label=method)
+
+    ax.set_xlim(0, max_iter)
+    ax.set_ylim(0, ylim)
+    ax.set_xlabel(r"Training Iteration ($\times 10^4$)")
+    ax.set_ylabel(f"{REASON_LABELS.get(reason, reason)} rate (%)")
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e4:.0f}"))
+    obj_pretty = obj.replace("_", " ")
+    reason_pretty = REASON_LABELS.get(reason, reason).lower()
+    ax.set_title(f"{obj_pretty}: {reason_pretty} — SafeDAgger vs DAgger", fontsize=8)
+    ax.legend(loc="best", fontsize=8)
+    fig.tight_layout()
+    save_fig(fig, f"single_{obj}_{reason}", subdir=subdir)
+
+
+def plot_run11_unsafe(max_iter: int = 100_000, ema_alpha: float = 0.999):
+    """Per-object UER and per-object failure mode plots for run 11 (SafeDAgger vs DAgger)."""
+    runs = DISTILLATION_RUNS_11
+    objects = OBJECTS_TOP8
+    subdir = "run11"
+    n_cols = 4
+    n_rows = (len(objects) + n_cols - 1) // n_cols
+
+    # 1. Per-object unsafe episode rate head-to-head (excluding physics instabilities)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(18/2.54, n_rows * 4/2.54),
+                             sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+    for idx, obj in enumerate(objects):
+        ax = axes_flat[idx]
+        for csv_name, n_envs, method, color in runs:
+            df_total = _load_distillation_metric(
+                csv_name, f"train/{obj}/unsafe_episode_rate", n_envs,
+                max_iter=max_iter, smooth_window=1)
+            df_phys = _load_distillation_metric(
+                csv_name, f"train/{obj}/unsafe_reason_prop/physics_instability", n_envs,
+                max_iter=max_iter, smooth_window=1)
+            if df_total.empty:
+                continue
+            total_raw = df_total["value"].values * 100
+            if not df_phys.empty and len(df_phys) == len(df_total):
+                phys_raw = df_phys["value"].values * 100
+                real_raw = np.clip(total_raw - phys_raw, 0, 100)
+            else:
+                real_raw = total_raw
+            smoothed_v = _ema(real_raw, alpha=ema_alpha)
+            iters = df_total["iteration"].values
+            step = max(1, len(iters) // 500)
+            ax.plot(iters[::step], smoothed_v[::step], color=color,
+                    linewidth=1.2, alpha=0.9, label=method)
+        ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
+        ax.set_ylim(0, 100)
+        ax.set_xlim(0, max_iter)
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        ax.tick_params(labelsize=5)
+    for idx in range(len(objects), len(axes_flat)):
+        axes_flat[idx].set_visible(False)
+    for ax in axes[-1, :]:
+        if ax.get_visible():
+            ax.set_xlabel("Iteration", fontsize=7)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("Real unsafe (%)", fontsize=7)
+    axes_flat[0].legend(fontsize=5, loc="upper right")
+    fig.suptitle("Per-Object Real Unsafe Rate (excl. physics): SafeDAgger vs DAgger", fontsize=9)
+    fig.tight_layout()
+    save_fig(fig, "per_object_unsafe_episode_head_to_head", subdir=subdir)
+
+    # 2. Per-object failure modes (one plot per method)
+    for csv_name, n_envs, method, _ in runs:
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(18/2.54, n_rows * 4/2.54),
+                                 sharex=True, sharey=True)
+        axes_flat = axes.flatten()
+        for idx, obj in enumerate(objects):
+            ax = axes_flat[idx]
+            for reason in UNSAFE_REASONS:
+                metric = f"train/{obj}/unsafe_reason_prop/{reason}"
+                df = _load_distillation_metric(
+                    csv_name, metric, n_envs,
+                    max_iter=max_iter, smooth_window=1)
+                if df.empty:
+                    continue
+                raw = df["value"].values * 100
+                smoothed_v = _ema(raw, alpha=ema_alpha)
+                iters = df["iteration"].values
+                step = max(1, len(iters) // 500)
+                ax.plot(iters[::step], smoothed_v[::step],
+                        color=REASON_COLORS[reason], linewidth=1.0, alpha=0.9,
+                        label=REASON_LABELS[reason])
+            ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
+            ax.set_ylim(0, 60)
+            ax.set_xlim(0, max_iter)
+            ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+            ax.tick_params(labelsize=5)
+        for idx in range(len(objects), len(axes_flat)):
+            axes_flat[idx].set_visible(False)
+        for ax in axes[-1, :]:
+            if ax.get_visible():
+                ax.set_xlabel("Iteration", fontsize=7)
+        for ax in axes[:, 0]:
+            ax.set_ylabel("Rate (%)", fontsize=7)
+        axes_flat[0].legend(fontsize=4, loc="upper right")
+        if "SafeD" in method:
+            tag = "safedagger"
+        elif "BC" in method:
+            tag = "bc"
+        else:
+            tag = "dagger"
+        fig.suptitle(f"Per-Object Failure Modes — {method}", fontsize=9)
+        fig.tight_layout()
+        save_fig(fig, f"per_object_failure_modes_{tag}", subdir=subdir)
 
 
 def plot_run10b_vs_run11_comparison(eval_dir: Path = None):
@@ -1882,8 +2030,14 @@ def main():
     plot_run("run6", DISTILLATION_RUNS_6, OBJECTS)
     plot_run("run7", DISTILLATION_RUNS_7, OBJECTS_TOP8)
     plot_run("run8", DISTILLATION_RUNS_8, OBJECTS_TOP8, eval_files=RUN8_EVAL_FILES)
-    plot_run("run9", DISTILLATION_RUNS_9, OBJECTS_TOP8, eval_files=RUN9_EVAL_FILES)
+    plot_run("run9", DISTILLATION_RUNS_9, OBJECTS_TOP8, eval_files=RUN9_EVAL_FILES, failure_mode_ylim=60)
+    # Run 9 single-object, single-reason head-to-heads
+    for _obj in ["basketball_shoe", "teddy_bear", "closed_fist", "elephant_toy",
+                 "milk_pot", "toy_bagger", "tutle_candle_holder", "mario"]:
+        for _reason in UNSAFE_REASONS:
+            plot_run9_single_object_single_reason(obj=_obj, reason=_reason)
     plot_run("run10", DISTILLATION_RUNS_10, OBJECTS_TOP8, eval_files=RUN10_EVAL_FILES)
+    plot_run11_unsafe()
     print("Done.")
 
     if args.show:
