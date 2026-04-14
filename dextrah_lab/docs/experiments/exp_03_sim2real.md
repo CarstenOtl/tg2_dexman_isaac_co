@@ -338,6 +338,45 @@ python train.py --headless --task=dextrah_fr3_agilehand --seed 42 \
 **Stored policy:** `stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/`
 **Pretrained ckpt:** `pretrained_ckpts/best_dextrah_tekken_lstm_adr14.pth`
 
+#### Per-object standalone eval (200 eps/object, 2026-04-14)
+
+Eval JSON: `rl_games/logs/eval_tb_20260414_024531/eval_metrics_20260414_031655.json`
+
+Run command:
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=3 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python eval_teacher.py \
+  --task dextrah_fr3_agilehand --headless --num_envs 26 --eval_episodes 100 \
+  --checkpoint /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --objects_dir multi_objects/visdex_selected
+```
+
+Aggregate: **82.7% lift, 22.3% unsafe** (2600 eps total). Matches the historical 480-ep aggregate (85.8% / 23.1%) within sample variance.
+
+| Object | Lift | Unsafe | Coll. | OOB | Palm | Phys. |
+|---|---:|---:|---:|---:|---:|---:|
+| basketball_shoe       |  99.0% | 32.0% |  7.0% | 21.0% |  0.0% |  4.0% |
+| closed_fist           | 100.0% | 19.5% |  0.0% |  9.0% |  0.0% | 10.5% |
+| elephant_toy          | 100.0% | 22.0% |  2.0% |  0.5% |  0.5% | 19.0% |
+| homer                 |  99.0% | 18.5% |  2.0% | 10.5% |  0.0% |  6.0% |
+| mario                 |  98.0% |  8.5% |  0.0% |  1.0% |  0.0% |  6.5% |
+| milk_pot              |  96.5% | 15.0% |  0.5% |  5.0% |  0.0% |  9.5% |
+| plane                 |  83.5% | 32.5% |  1.5% |  2.5% |  8.0% | 20.5% |
+| teddy_bear            |  99.5% | 21.5% |  0.5% | 14.5% |  0.0% |  6.5% |
+| toy_bagger            |  99.0% | 25.5% |  2.0% |  7.5% |  1.0% | 15.0% |
+| toy_cow               | 100.0% | 23.5% |  0.0% | 12.0% |  0.5% | 11.0% |
+| tutle_candle_holder   | 100.0% | 35.0% |  0.0% | 24.0% |  0.0% | 10.5% |
+| chicken_head_in_car   |   0.0% |  4.5% |  0.0% |  0.0% |  0.0% |  4.5% |
+| train                 |   0.0% | 31.5% |  2.0% |  7.5% |  0.5% | 20.5% |
+
+(Reason columns are % of all episodes, summing to the total Unsafe column.)
+
+**Findings:**
+- 11 of 13 objects achieve ≥83% lift; **chicken_head_in_car and train fail completely (0% lift)** — likely shape/scale outliers the teacher never learned.
+- `basketball_shoe`, `tutle_candle_holder`, `train` show high `object_out_of_bound` (21-24%) — the lift trajectory throws the object out of the workspace.
+- `plane`'s 8% palm_flipped is unusually high — only object where palm pose collapses systematically.
+- Physics instability dominates the unsafe budget for 6/13 objects (sim artifact, not policy failure).
+
 ### run2a — Teacher v2: hardware-realistic starting limits (2026-04-03)
 
 **Branch:** `fr3_agilehand_teacher_v2` (commit `32a8924`)

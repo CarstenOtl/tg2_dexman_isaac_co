@@ -328,6 +328,21 @@ CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pytho
 - SafeDagger unsafe rate still higher (62.7% vs 58.3%) but gap narrowed significantly
 - Confirms the one-hot index bug was the dominant issue in runs 7-8
 
+#### Train-vs-eval UER gap (SafeDagger 9a, BC 9c)
+
+A reader of the training plots will notice that **SafeDagger's training-time real UER hovers around 10-15%, while its eval real UER is 30.2%** (62.7% total - 32.5% physics). The 2× gap is expected and stems from three effects, in order of magnitude:
+
+1. **Teacher safety net masks unsafe terminations.** In `distillation_safedagger.py:611-616`, whenever per-env L2 > `unsafe_l2_threshold` (=2.0), the teacher's actions overwrite the student's before the env step. The env continues safely → no unsafe termination is recorded. The training-time UER counts only episodes that actually terminated unsafely, so every teacher rescue subtracts from the numerator. `beta` (intervention rate) shows how often this fires — typically ~30% at training start, ~5-15% at convergence.
+2. **Cleaner state distribution during training.** Even in envs the student is currently acting in, the env's history was partly shaped by past teacher rescues. The student acts from in-distribution states (close to teacher's trajectory). At eval, the student acts in **every** env from the very first step → small errors compound → out-of-distribution states the student has never seen. This is the classic DAgger covariate-shift argument.
+3. **Windowed AverageMeter.** `game_unsafe_terminated` keeps only the last `games_to_track` episodes, so the metric reflects recent behavior. As the student improves, the window flushes early bad episodes. Eval averages 480 fresh episodes uniformly.
+
+Sanity-check the asymmetry across methods:
+- **DAgger** (no rescue, vanilla): training real UER ≈ eval real UER (~25-32%). Run9b: training ~20-25%, eval 32.7%. Small gap, explained by #2 alone.
+- **SafeDagger** (rescue active): training ~10-15%, eval 30.2%. ~2× gap, mostly #1.
+- **BC** (teacher 100%, run9c): training UER ≈ teacher's UER inside env. Eval UER 90.8%. Largest gap, driven entirely by #1+#2 — student never acts in env during training.
+
+The eval/training UER ratio rank order — **BC >> SafeDagger > DAgger** — directly mirrors how much teacher steering happens during training. For sim2real-relevant comparisons, only the eval numbers should be trusted.
+
 ## run8a/8b — SafeDagger vs DAgger with calibrated threshold + episode-level lift (2026-04-03)
 
 **Motivation:** Consolidating all fixes from runs 6-7. Key improvements over run7:

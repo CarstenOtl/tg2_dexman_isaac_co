@@ -1500,6 +1500,50 @@ def plot_run9_single_object_single_reason(
     save_fig(fig, f"single_{obj}_{reason}", subdir=subdir)
 
 
+def plot_safedagger_threshold_beta(max_iter: int = 100_000, ema_alpha: float = 0.999):
+    """SafeDagger intervention rate (beta) over training for three L2 thresholds.
+
+    Compares teacher take-over frequency for three threshold values that span
+    the BC ↔ DAgger spectrum:
+      - δ=0.5 (run5a): default low threshold → teacher dominates (BC-like)
+      - δ=2.0 (run9a): calibrated baseline
+      - δ=3.0 (run7a): high threshold → near vanilla DAgger
+    """
+    runs = [
+        ("student_run5a_safedagger_l2_teacher11.csv", 24,
+         r"$\delta = 0.5$", COLORS["red"]),
+        ("student_run9a_safedagger_l2_teacher11.csv", 24,
+         r"$\delta = 2.0$", COLORS["blue"]),
+        ("student_run7a_safedagger_l2_teacher11.csv", 24,
+         r"$\delta = 3.0$", COLORS["green"]),
+    ]
+    subdir = "safedagger_threshold"
+
+    fig, ax = plt.subplots()
+    for csv_name, n_envs, label, color in runs:
+        df = _load_distillation_metric(csv_name, "beta", n_envs,
+                                        max_iter=max_iter, smooth_window=1)
+        if df.empty:
+            print(f"  WARNING: no beta data in {csv_name}")
+            continue
+        raw = df["value"].values * 100
+        smoothed = _ema(raw, alpha=ema_alpha)
+        iters = df["iteration"].values
+        step = max(1, len(iters) // 500)
+        ax.plot(iters[::step], smoothed[::step], color=color,
+                linewidth=1.5, alpha=0.95, label=label)
+
+    ax.set_xlim(0, max_iter)
+    ax.set_ylim(0, 100)
+    ax.set_xlabel(r"Training Iteration ($\times 10^4$)")
+    ax.set_ylabel(r"Teacher intervention rate $\beta$ (%)")
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e4:.0f}"))
+    ax.set_title(r"SafeDAgger Intervention Rate vs. L2 Threshold $\delta$", fontsize=8)
+    ax.legend(loc="best", fontsize=8)
+    fig.tight_layout()
+    save_fig(fig, "intervention_rate_threshold_sweep", subdir=subdir)
+
+
 def plot_run11_unsafe(max_iter: int = 100_000, ema_alpha: float = 0.999):
     """Per-object UER and per-object failure mode plots for run 11 (SafeDAgger vs DAgger)."""
     runs = DISTILLATION_RUNS_11
