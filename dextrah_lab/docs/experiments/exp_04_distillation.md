@@ -120,7 +120,31 @@ CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pytho
 
 **Interpretation for thesis:** BC achieves high apparent success but cannot handle out-of-distribution states. DAgger's online correction (9a/9b) sacrifices peak lift performance for robustness. SafeDagger with more envs (run10b) hits the sweet spot. The 26pp unsafe gap between BC (9c) and SafeDagger (10b) quantifies the empirical value of online distribution correction for this task. This trio (9a/9b/9c) forms the clean ablation: all use identical env, teacher, loss, iterations, objects — only the stepping strategy differs.
 
-**Next step — overfitting check:** Eval intermediate checkpoints (10k, 25k, 50k, 75k, 100k) to determine if BC lift peaks early then degrades (overfitting) or stays monotonic (BC just learned well). Checkpoint sweep command:
+**Checkpoint sweep — overfitting analysis (640 eps / ckpt, 2026-04-14):**
+
+| Iter | Lift | Unsafe | Physics | Collision | Obj OOB | Palm flip |
+|---|---|---|---|---|---|---|
+| 10k  | 71.9% | 95.3% | 45.9% | 13.4% | 12.5% | **23.4%** |
+| 25k  | 86.9% | 86.6% | 39.4% | 13.9% | 23.4% | 9.8% |
+| **50k**  | **95.6%** | 91.4% | 52.3% | 19.4% | 16.6% | 3.1% |
+| **75k**  | 95.2% | 87.7% | 51.9% | 14.4% | 14.8% | 6.6% |
+| 100k | 85.6% | 91.7% | 51.6% | 20.6% | 18.0% | 1.6% |
+
+**Eval JSONs:** `eval_results/eval_metrics_20260414_{015240,022529,025853,033230,040714}.json` (iters 10k, 25k, 50k, 75k, 100k)
+
+**Overfitting confirmed:**
+- **Lift peaks at 50k (95.6%) and degrades to 85.6% at 100k** — a 10pp drop, classic overfitting signature
+- **75k (95.2%) plateaus with 50k** — no additional learning, just noise around the peak
+- **Peak BC (50k) exceeds Teacher 11** (95.6% vs 85.8%) — BC's in-distribution action prediction can briefly beat the teacher's own rollout performance on the lift metric
+
+**Safety does not improve with training:**
+- **Unsafe rate flat across all iters** (86-95%) — BC cannot learn safety regardless of training time
+- **Physics instability rises** (45.9% → 51.6%) — late BC is more aggressive, causes more sim-level instabilities
+- **Palm-flip drops monotonically** (23.4% → 1.6%) — the *only* thing BC robustly learns is hand orientation, but this gain is offset by increased physics failures
+
+**Refined thesis narrative:** *"The checkpoint sweep reveals that BC peaks in lift success at 50k iterations (95.6%), before degrading to 85.6% at 100k — a 10pp drop consistent with overfitting. At its peak, BC's lift exceeds Teacher 11 (85.8%), but the unsafe rate remains catastrophically high across all iterations (87–95%), compared to SafeDagger's 62.7% (run9a) and 64.6% (run10b). This decouples two phenomena: BC learns in-distribution action prediction efficiently (peak lift > teacher), but cannot acquire the corrective behavior needed for episode-level safety. More training makes BC more aggressive without making it safer, eventually harming in-distribution performance as well. This motivates reporting the 100k-iter BC checkpoint as the fair thesis comparison (no cherry-picking), and quantifies the 26pp unsafe gap that justifies SafeDagger's online distribution correction."*
+
+**Sweep command (reproducible):**
 ```bash
 cd /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/distillation_new
 RUN=runs/dextrah-fr3-agilehand-bc-stereo-transformer_13-18-09-23
