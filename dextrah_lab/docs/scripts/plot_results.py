@@ -1500,6 +1500,39 @@ def plot_run9_single_object_single_reason(
     save_fig(fig, f"single_{obj}_{reason}", subdir=subdir)
 
 
+def plot_run9_aux_loss_comparison(max_iter: int = 100_000, ema_alpha: float = 0.999):
+    """Auxiliary loss (object-pose regression) comparison across SafeD/DAgger/BC.
+
+    The auxiliary head regresses object position from stereo images — same
+    vision backbone and regression target across all three methods, so this
+    isolates the effect of the training distribution on vision-feature learning.
+    """
+    runs = DISTILLATION_RUNS_9
+    subdir = "run9"
+
+    fig, ax = plt.subplots()
+    for csv_name, n_envs, label, color in runs:
+        df = _load_distillation_metric(csv_name, "aux_loss_object_pos", n_envs,
+                                        max_iter=max_iter, smooth_window=1)
+        if df.empty:
+            continue
+        raw = df["value"].values
+        smoothed = _ema(raw, alpha=ema_alpha)
+        iters = df["iteration"].values
+        step = max(1, len(iters) // 500)
+        ax.plot(iters[::step], smoothed[::step],
+                color=color, linewidth=1.5, alpha=0.95, label=label)
+
+    ax.set_xlim(0, max_iter)
+    ax.set_xlabel(r"Training Iteration ($\times 10^4$)")
+    ax.set_ylabel("Auxiliary loss (object-pose regression)")
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e4:.0f}"))
+    ax.set_title("Auxiliary Loss: Object-Pose Regression", fontsize=8)
+    ax.legend(loc="upper right", fontsize=8)
+    fig.tight_layout()
+    save_fig(fig, "aux_loss_object_pos", subdir=subdir)
+
+
 def plot_safedagger_threshold_beta(max_iter: int = 100_000, ema_alpha: float = 0.999):
     """SafeDagger intervention rate (beta) over training for three L2 thresholds.
 

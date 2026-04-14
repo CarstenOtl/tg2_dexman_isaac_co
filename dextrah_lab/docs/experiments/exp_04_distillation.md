@@ -367,6 +367,24 @@ Sanity-check the asymmetry across methods:
 
 The eval/training UER ratio rank order — **BC >> SafeDagger > DAgger** — directly mirrors how much teacher steering happens during training. For sim2real-relevant comparisons, only the eval numbers should be trusted.
 
+#### Auxiliary loss comparison (2026-04-14)
+
+Plot: [aux_loss_object_pos.png](../Report/figures/plots/run9/aux_loss_object_pos.png)
+
+The student network has an auxiliary head that regresses object position from stereo images. The vision backbone and regression target are identical across all three methods, so comparing `aux_loss_object_pos` isolates the effect of the training **state distribution** on vision-feature learning.
+
+| Method | Early (first 10k iters) | Late (last 10k iters) |
+|---|---:|---:|
+| SafeDagger (9a) | 0.021 | **0.011** |
+| DAgger (9b) | 0.035 | **0.018** |
+| BC (9c) | 0.021 | **0.010** |
+
+**Observations:**
+- **SafeDagger and BC converge to nearly identical aux loss** (0.011 vs 0.010). Their training envs are both teacher-dominated (BC 100%, SafeD ~85% after rescues), so the vision backbone sees similar state distributions.
+- **DAgger's aux loss is ~1.7× higher** (0.018) throughout. Student-driven envs reach more off-distribution / unusual camera viewpoints that the object-pose regressor struggles with. This is a **clean measurement of covariate shift's impact on representation learning**, independent of the policy output.
+- All three methods' imitation losses (`l2_loss_mean`) follow the same ordering: BC 0.83 < SafeD 1.05 < DAgger 2.05. Teacher-dominated envs give the student easier targets to match; student-driven envs require the student to match teacher actions in states the teacher would never have reached.
+- The aux loss gap (1.7×) is much smaller than the imitation loss gap (2×), suggesting the vision backbone is relatively distribution-robust — the covariate shift cost is concentrated in the action-matching head, not the representation.
+
 ## run8a/8b — SafeDagger vs DAgger with calibrated threshold + episode-level lift (2026-04-03)
 
 **Motivation:** Consolidating all fixes from runs 6-7. Key improvements over run7:
