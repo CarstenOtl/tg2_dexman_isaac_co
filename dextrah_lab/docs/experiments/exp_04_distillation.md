@@ -41,9 +41,9 @@ type: project
 | run11b | DAgger | L2 | T11 | 100k | 48.8% | 73.0% | collision (26%), object_oob (23%) | ADR 5, 32 envs |
 | run12 | SafeDagger | L2 | **Tv2** | 100k | — | — | — | *running*, 32 envs, same config as run10b |
 | **run14a** | **DAgger** | **L2** | **T11** | **100k** | **83.4%** | **68.3%** | object_oob (35%), physics (16%), collision (15%) | **32 envs DAgger baseline (β=0) — beats run10b SafeDagger lift** |
-| run14b | SafeDagger | L2 | T11 | 100k | — | — | — | *running*, threshold=2.2 (≈ DAgger late p80) |
-| run14c | SafeDagger | L2 | T11 | 100k | — | — | — | *running*, threshold=2.4 (between late p80 and p95) |
-| run14h | SafeDagger | L2 | T11 | 100k | — | — | — | *running*, threshold=2.6 (densification step 0.2) |
+| **run14b** | **SafeDagger** | **L2** | **T11** | **100k** | **90.8%** | **80.2%** | physics (33%), collision (26%), object_oob (17%) | **threshold=2.2 — sharp recovery from the dip** |
+| **run14c** | **SafeDagger** | **L2** | **T11** | **100k** | **87.3%** | **86.7%** | **palm flip (37%)**, object_oob (20%), physics (17%) | **threshold=2.4 — anomalous palm-flip dominant failure mode** |
+| **run14h** | **SafeDagger** | **L2** | **T11** | **100k** | **88.8%** | **86.7%** | physics (52%), object_oob (18%), collision (13%) | **threshold=2.6 — palm-flip back to normal (4.5%)** |
 | run14i | SafeDagger | L2 | T11 | 100k | — | — | — | *running*, threshold=2.8 |
 | run14d,e,j–m | SafeDagger | L2 | T11 | 100k | — | — | — | *planned*, thresholds 3.0 / 3.2 / 3.4 / 3.6 / 3.8 / 4.0 |
 | **run14f** | **SafeDagger** | **L2** | **T11** | **100k** | **90.9%** | **86.4%** | physics (48%), object_oob (23%), collision (14%) | **threshold=0.5 (β≈0.95) — slightly beats BC on both axes** |
@@ -191,13 +191,13 @@ Together with existing endpoints this produces an 8-point curve:
 | β≈0.95 | run14f | 0.5 | 90.9% / 86.4% | ✅ done (beats BC slightly) |
 | β≈0.8 | run14g | 1.0 | **79.4% / 74.5%** | ✅ done (in the dip) |
 | β≈0.5 (mid) | run10b | 2.0 | 79.2% / 64.6% | ✅ done (previously miscalibrated) |
-| β≈0.3 (?) | **run14b** | **2.2** | — | ⏳ running |
-| β≈0.2 (?) | **run14c** | **2.4** | — | ⏳ running |
-| β≈0.15 (?) | **run14h** | **2.6** | — | ⏳ running |
+| β≈0.3 | **run14b** | **2.2** | **90.8% / 80.2%** | ✅ done (sharp recovery from dip) |
+| β≈0.2 | **run14c** | **2.4** | **87.3% / 86.7%** | ✅ done (palm-flip anomaly) |
+| β≈0.15 | **run14h** | **2.6** | **88.8% / 86.7%** | ✅ done (palm-flip resolved) |
 | β≈0.1 (?) | **run14i** | **2.8** | — | ⏳ running |
-| β≈0.07 (?) | **run14d** | **3.0** | — | *planned* |
-| β≈0.05 (?) | **run14j** | **3.2** | — | *planned* |
-| β≈0.03 (?) | **run14k** | **3.4** | — | *planned* |
+| β≈0.07 (?) | **run14d** | **3.0** | — | ⏳ running |
+| β≈0.05 (?) | **run14j** | **3.2** | — | ⏳ running |
+| β≈0.03 (?) | **run14k** | **3.4** | — | ⏳ running |
 | β≈0.02 (?) | **run14e** | **3.6** | — | *planned* |
 | β≈0.01 (?) | **run14l** | **3.8** | — | *planned* |
 | β≈0.005 (?) | **run14m** | **4.0** | — | *planned* |
@@ -304,7 +304,31 @@ Constant-ish safety net — threshold sits at the 80th percentile of late-traini
 
 **Run directory:** `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_15-17-51-09/`
 
-**Status (2026-04-15):** *running*, started 17:51.
+**Status (2026-04-16):** ✅ complete.
+
+**Standalone eval (640 episodes = 20 rollouts × 32 envs):**
+
+| Metric | run14b (t=2.2) | run10b (t=2.0, dip) | run14g (t=1.0, dip) | run14a DAgger (∞) |
+|---|---|---|---|---|
+| **Lift success** | **90.8%** | 79.2% | 79.4% | 83.4% |
+| **Unsafe rate** | **80.2%** | 64.6% | 74.5% | 68.3% |
+| Physics (% all eps) | 32.8% | 17.5% | 36.6% | 16.1% |
+| **Object OOB (% all eps)** | 17.5% | 9.4% | 20.1% | **35.0%** |
+| **Collision (% all eps)** | **25.8%** | 8.5% | 11.3% | 15.3% |
+| Palm flipped (% all eps) | 4.1% | 5.9% | 6.6% | 1.8% |
+
+**Eval JSON:** `eval_results/eval_metrics_20260416_011300.json`
+
+**Key finding: the dip is narrow — recovery is sharp at t=2.2.**
+
+Lift jumps from 79.2% (t=2.0) to 90.8% (t=2.2) — an 11.6pp increase from a 0.2 threshold change. The dip region is narrower than initially suspected: it spans roughly t∈[1.0, 2.0] (β≈0.5–0.8) and recovers sharply by t=2.2.
+
+But the recovery comes with a tradeoff:
+- **Lift recovers** to 90.8% (BC-comparable)
+- **Unsafe rate worsens** from 64.6% → 80.2% — student is more aggressive without enough teacher correction
+- **Collision dominates** (25.8% of all eps) — t=2.2 student grabs aggressively, hits things
+
+This suggests the 2.0 → 2.2 transition is a regime shift: at t=2.0 the teacher intervenes enough to keep the student conservative (low lift, low unsafe). At t=2.2 the threshold relaxes just enough that the student becomes confident-but-aggressive — high lift but high collision rate. The dense sweep (14c/h/i and beyond) will tell us if there's a sweet spot in between or if it's a hard regime boundary.
 
 ### run14c — SafeDagger threshold=2.4 (between late p80 and p95)
 
@@ -312,7 +336,38 @@ Slightly less aggressive than 2.2 — threshold falls between late p80 (2.21) an
 
 **Run directory:** `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_15-17-52-23/`
 
-**Status (2026-04-15):** *running*, started 17:52.
+**Status (2026-04-16):** ✅ complete.
+
+**Standalone eval (640 episodes = 20 rollouts × 32 envs):**
+
+| Metric | run14c (t=2.4) | run14b (t=2.2) | run10b (t=2.0) | run14a DAgger (∞) |
+|---|---|---|---|---|
+| **Lift success** | **87.3%** | 90.8% | 79.2% | 83.4% |
+| **Unsafe rate** | **86.7%** | 80.2% | 64.6% | 68.3% |
+| Physics (% all eps) | 17.3% | 32.8% | 17.5% | 16.1% |
+| Object OOB (% all eps) | 20.1% | 17.5% | 9.4% | 35.0% |
+| Collision (% all eps) | 11.7% | 25.8% | 8.5% | 15.3% |
+| **Palm flipped (% all eps)** | **37.5%** | 4.1% | 5.9% | 1.8% |
+
+**Eval JSON:** `eval_results/eval_metrics_20260416_011406.json`
+
+**Key finding: palm-flip emerges as the dominant failure mode at t=2.4 — anomalous and threshold-specific.**
+
+In every other run we've measured, palm flipping is a marginal failure mode (1-7% of all episodes). At t=2.4 it explodes to **37.5% of all episodes** — by far the dominant failure. This is a regime-specific anomaly worth investigating further.
+
+**Hypothesis for the palm-flip anomaly:** At t=2.4, the threshold sits in a narrow band where the teacher overrides occasionally during early grasp formation but not consistently. The student commits to an off-axis grasp orientation (palm rotated wrong) and proceeds to lift — by the time the orientation error compounds to detectable levels, the student has already lifted enough that the palm-flipped fault triggers. At lower thresholds (2.0, 2.2) the teacher catches this earlier; at higher thresholds (DAgger), the student presumably learns to correct palm orientation independently.
+
+**Worth verifying:** run14h (t=2.6) and run14i (t=2.8) — does palm-flip persist into the 2.5–3.0 range, or is it specifically a t=2.4 quirk?
+
+**Lift curve update:** With t=2.4 added, the lift curve is now oscillating, not monotonic or U-shaped:
+```
+β:     1.0    0.95   0.8    0.5    0.3    0.2    0
+t:     BC     0.5    1.0    2.0    2.2    2.4    ∞
+lift:  87.8 → 90.9 → 79.4 → 79.2 → 90.8 → 87.3 → 83.4
+       peak   peak   dip    dip    peak   dip2   recover
+```
+
+Different thresholds produce qualitatively different policies — the relationship between threshold and lift is not smooth.
 
 ### run14h — SafeDagger threshold=2.6 (≈ late p95, densification)
 
@@ -320,7 +375,26 @@ Fills the 2.4–3.0 gap. Threshold ≈ late p95 (2.53) → catches the worst 5% 
 
 **Run directory:** `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_15-17-59-06/`
 
-**Status (2026-04-15):** *running*, started 17:59.
+**Status (2026-04-16):** ✅ complete.
+
+**Standalone eval (640 episodes = 20 rollouts × 32 envs):**
+
+| Metric | run14h (t=2.6) | run14c (t=2.4) | run14b (t=2.2) |
+|---|---|---|---|
+| **Lift success** | **88.8%** | 87.3% | 90.8% |
+| **Unsafe rate** | **86.7%** | 86.7% | 80.2% |
+| Physics (% all eps) | 51.7% | 17.3% | 32.8% |
+| Object OOB (% all eps) | 18.0% | 20.1% | 17.5% |
+| Collision (% all eps) | 12.5% | 11.7% | 25.8% |
+| **Palm flipped (% all eps)** | **4.5%** | **37.5%** | 4.1% |
+
+**Eval JSON:** `eval_results/eval_metrics_20260416_011458.json`
+
+**Key finding: palm-flip anomaly was specific to t=2.4.**
+
+At t=2.6, palm-flip drops back to 3.9% (matching every run except t=2.4). This confirms the t=2.4 palm-flip dominance was a regime-specific artifact, not a general trend across the 2.4-2.6 range. **The threshold sweep reveals discrete policy regimes, not a smooth gradient** — within a 0.2 threshold step the dominant failure mode flipped from palm flip back to physics.
+
+The lift / unsafe values at t=2.6 (88.8% / 86.7%) are very close to t=2.4 (87.3% / 86.7%) — both are in a "high lift but high unsafe" regime where the student is competent at grasping but lacks safety margin. The β≈0.15-0.2 region appears to be a relatively flat plateau in lift, with physics instability rising back into dominance.
 
 ### run14d,e,i–m — Remaining sweep runs (2.8, 3.0, 3.2, 3.4, 3.6, 3.8, 4.0)
 
@@ -343,9 +417,9 @@ CUDA_VISIBLE_DEVICES=<N> /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pyt
 | Run | Threshold | Status | Run directory |
 |-----|-----------|--------|---------------|
 | run14i | 2.8 | *running*, started 20:50 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_15-20-50-53/` |
-| run14d | 3.0 | *planned* | TBD |
-| run14j | 3.2 | *planned* | TBD |
-| run14k | 3.4 | *planned* | TBD |
+| run14d | 3.0 | *running*, started 01:46 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-01-46-05/` |
+| run14j | 3.2 | *running*, started 01:46 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-01-46-49/` |
+| run14k | 3.4 | *running*, started 01:47 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-01-47-45/` |
 | run14e | 3.6 | *planned* | TBD |
 | run14l | 3.8 | *planned* | TBD |
 | run14m | 4.0 | *planned* | TBD |
