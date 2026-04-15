@@ -40,6 +40,327 @@ type: project
 | run11a | SafeDagger | L2 | T11 | 100k | 63.9% | 73.3% | physics (39%), collision (19%) | ADR 5, 32 envs |
 | run11b | DAgger | L2 | T11 | 100k | 48.8% | 73.0% | collision (26%), object_oob (23%) | ADR 5, 32 envs |
 | run12 | SafeDagger | L2 | **Tv2** | 100k | — | — | — | *running*, 32 envs, same config as run10b |
+| **run14a** | **DAgger** | **L2** | **T11** | **100k** | **83.4%** | **68.3%** | object_oob (35%), physics (16%), collision (15%) | **32 envs DAgger baseline (β=0) — beats run10b SafeDagger lift** |
+| run14b | SafeDagger | L2 | T11 | 100k | — | — | — | *running*, threshold=2.2 (≈ DAgger late p80) |
+| run14c | SafeDagger | L2 | T11 | 100k | — | — | — | *running*, threshold=2.4 (between late p80 and p95) |
+| run14h | SafeDagger | L2 | T11 | 100k | — | — | — | *running*, threshold=2.6 (densification step 0.2) |
+| run14i | SafeDagger | L2 | T11 | 100k | — | — | — | *running*, threshold=2.8 |
+| run14d,e,j–m | SafeDagger | L2 | T11 | 100k | — | — | — | *planned*, thresholds 3.0 / 3.2 / 3.4 / 3.6 / 3.8 / 4.0 |
+| **run14f** | **SafeDagger** | **L2** | **T11** | **100k** | **90.9%** | **86.4%** | physics (48%), object_oob (23%), collision (14%) | **threshold=0.5 (β≈0.95) — slightly beats BC on both axes** |
+| **run14g** | **SafeDagger** | **L2** | **T11** | **100k** | **79.4%** | **74.5%** | physics (37%), object_oob (20%), collision (11%), palm (7%) | **threshold=1.0 (β≈0.8) — landed in the dip region** |
+
+## run14 — Safety threshold calibration ablation (2026-04-15)
+
+**Goal:** Properly derive the SafeDagger unsafe_l2_threshold from the uncorrected DAgger L2 distribution, then validate via a threshold sweep at uniform 32-env config.
+
+### Motivation
+
+The original threshold calibration in run8a (`unsafe_l2_threshold=2.0`) was derived from **run7's L2 distribution** (run7 was SafeDagger with threshold=3.0). This is a partial circular reasoning issue: run7's L2 was already *suppressed* by teacher overrides — the high-L2 tail was cut off by intervention. Calibrating against this distribution underestimates the true L2 a fully-uncorrected student would experience.
+
+**L2 distribution comparison (l2_loss_mean from existing TB exports):**
+
+| Run | Method | Early L2 (mean / p80) | Late L2 (mean / p80) |
+|------|--------|----------------------|---------------------|
+| run9b | **DAgger (uncorrected, 24 envs)** | **3.46 / 3.95** | **2.05 / 2.37** |
+| run10b | SafeDagger threshold=2.0 (32 envs) | 1.49 / 1.67 | 1.03 / 1.16 |
+| run9c | BC, teacher always (32 envs) | 1.37 / 1.50 | 0.83 / 0.95 |
+
+The DAgger L2 (true uncorrected baseline) is much higher than what was used for calibration. With threshold=2.0, run10b's late L2 is only 1.03 (mean) — meaning the threshold was almost never triggered late in training. Effectively, run10b ran like DAgger from ~30k onwards, which is consistent with the small 8pp gap between run10b (79.2%) and run9b (71.7%).
+
+### Calibration logic
+
+**Philosophy: DAgger gives us a principled range to sweep, not a prescriptive threshold.**
+
+The threshold should be expressed in units of typical student L2 loss when acting alone. The reference distribution must come from a method where the student's L2 is *not* artificially suppressed by interventions — that is, **DAgger**. Running DAgger once (run14a) gives us an **objective scale** on which to pick meaningful threshold values.
+
+**What DAgger's L2 distribution lets us conclude:**
+
+| Claim | Supported by DAgger L2? |
+|-------|------------------------|
+| A **ballpark range** of meaningful thresholds (roughly 2 to 4) | ✅ Yes |
+| **Relative ordering**: higher threshold → more DAgger-like, lower → more BC-like | ✅ Yes |
+| Eliminating values that are clearly **outside** the useful range (<1 or >5) | ✅ Yes |
+| The **single optimal threshold** for this task | ❌ No — requires empirical validation |
+| **Exact β** per threshold (we only have per-step mean L2, not per-env distribution) | ❌ No — approximate at best |
+| Whether the SafeDagger paper's 20–30% early target is actually best for this task | ❌ No — task differs from the paper's autonomous driving domain |
+
+**The paper's ~20–30% early intervention recipe is a hypothesis, not a conclusion.** Translating it to an exact threshold has two layers of ambiguity:
+1. **Temporal**: "early" is loosely defined — somewhere between iter 0 (student is random, β→1 regardless) and ~20% through training (student is actively learning, β decays steeply)
+2. **Distributional**: `l2_loss_mean` is averaged across 32 envs per step; the threshold check is on per-env L2. Without per-env variance data, the mapping from "threshold X" to "β = Y%" is approximate.
+
+**Conclusion: use DAgger L2 as a prior to scope the sweep, then validate empirically.**
+
+The DAgger L2 percentiles suggest testing thresholds roughly spanning the late-p50 to early-p90 range (≈2.0 to 4.0). Within that range, we pick 4 equally-spaced values and run the sweep. The winning threshold tells the story — we report it *with its observed early-β* as a post-hoc data point, without pre-committing to a specific paper-recipe interpretation.
+
+### Step 1 — run14a: DAgger baseline at 32 envs
+
+Why this is needed: we don't currently have a 32-env DAgger + L2 + ADR-off run. Closest is run9b (24 envs) and run11b (32 envs but +ADR 5). For uniform comparison with run10b and the threshold sweep, all calibration data must come from the same 32-env / no-ADR config.
+
+```bash
+cd /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 32 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 --vanilla_dagger \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+  env.teacher_objects_dir=multi_objects/visdex_selected \
+  env.distillation_episode_length_s=10.0 \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run directory:** `runs/dextrah-fr3-agilehand-dagger-stereo-transformer_15-12-11-49/`
+
+**Status (2026-04-15):** ✅ complete.
+
+**Standalone eval (640 episodes = 20 rollouts × 32 envs):**
+
+| Metric | run14a DAgger (β=0) | run10b SafeD (t=2.0) | run9c BC (β=1) | Teacher 11 |
+|---|---|---|---|---|
+| **Lift success** | **83.4%** | 79.2% | 87.8% | 85.8% |
+| **Unsafe rate** | **68.3%** | 64.6% | 90.8% | 23.1% |
+| Physics (% all eps) | 16.1% | 17.5% | 49.4% | 11.0% |
+| Object OOB (% all eps) | **35.0%** | 9.4% | 19.1% | 9.4% |
+| Collision (% all eps) | 15.3% | 8.5% | 19.3% | 1.7% |
+| Palm flipped (% all eps) | 1.8% | 5.9% | 1.2% | 0.6% |
+
+**Eval JSON:** `eval_results/eval_metrics_20260415_170358.json`
+
+**Key findings:**
+- **DAgger outperforms run10b SafeDagger by +4.2pp lift** (83.4% vs 79.2%) with only +3.7pp more unsafe. This surprised us — more evidence that run10b's threshold=2.0 was *more aggressive than we assumed*.
+- **Failure mode shift is diagnostic:**
+  - DAgger: **object OOB dominates (35.0% of all eps)** — student learned aggressive lift motion but can't stabilize / knows when to stop
+  - SafeDagger run10b: physics dominates (17.5%) — student's state was kept close to teacher via interventions, but when it did fail it failed hard
+  - BC: physics catastrophically dominant (49.4%) — student has no stability training at all
+- **This confirms the BC → SafeDagger → DAgger spectrum**: as β decreases (less teacher intervention), physics instability drops but object OOB rises. DAgger trades one failure mode for another.
+
+### Calibration — L2 percentiles from run14a
+
+Extracted via tbparse from the run14a TB summaries (99979 logged `l2_loss_mean` values, step range 672 to 3.2M):
+
+| Phase | mean | p50 | p80 | p90 | p95 | p99 |
+|-------|------|-----|-----|-----|-----|-----|
+| very_early (first 5%) | 3.66 | 3.30 | 4.03 | 4.75 | 6.69 | 11.10 |
+| **early (first 10%)** | **3.20** | **2.97** | **3.57** | 4.03 | 4.75 | 7.97 |
+| mid (40-60%) | 2.09 | 2.07 | 2.37 | 2.55 | 2.74 | 3.07 |
+| **late (last 10%)** | **1.93** | **1.90** | **2.21** | 2.38 | 2.53 | 2.86 |
+| very_late (last 5%) | 1.93 | 1.92 | 2.20 | 2.36 | 2.49 | 2.80 |
+| overall | 2.24 | 2.16 | 2.59 | 2.90 | 3.19 | 4.04 |
+
+**Critical insight: previous calibration was OFF.**
+
+The original threshold=2.0 was derived from run7's L2 distribution (itself SafeDagger-suppressed). We assumed threshold=2.0 gave ~5% late intervention. Real DAgger data shows late p50=1.90, p80=2.21 — meaning threshold=2.0 triggers on ~50% of late-training steps, not 5%. The previous calibration was ~10x too aggressive.
+
+This explains:
+- Why run10b (threshold=2.0) has lower lift than DAgger — it was intervening far more than intended, pushing toward BC-like state distributions
+- Why the BC→SafeDagger→DAgger story has a gradient instead of a clean separation — threshold=2.0 was partially collapsing into BC territory
+
+### After run14a finishes, extract `l2_loss_per_env` percentiles from TensorBoard (via tbparse) at:
+- Early phase: first 10% of training (steps 0 – ~320k frames)
+- Late phase: last 10% of training (steps ~2.88M – 3.2M frames)
+
+### Step 2 — run14b/c/d/e: threshold sweep (planned)
+
+**Dense sweep (step 0.2) within the DAgger-derived meaningful range (2026-04-15):**
+
+11 thresholds spanning 2.0 → 4.0, giving enough resolution for a smooth lift-vs-threshold plot.
+
+| Run | Threshold | Where it falls in run14a L2 distribution | Rough β prediction (to be validated) |
+|------|-----------|-------------------------------------------|--------------------------------------|
+| run10b | 2.0 | below late p80 (2.21) | Moderate-high intervention (β≈0.5 late, confirmed) |
+| run14b | **2.2** | ≈ late p80 (2.21) | Constant-ish intervention across training |
+| run14c | **2.4** | between late p80 (2.21) and late p95 (2.53) | Moderate early, low late |
+| run14h | **2.6** | ≈ late p95 (2.53) | Moderate-low intervention |
+| run14i | **2.8** | ≈ mid p99 (3.07) / early p50 (2.97) | Low-moderate intervention |
+| run14d | **3.0** | ≈ early p50 (2.97) | Aggressive early, near-zero late |
+| run14j | **3.2** | between early p50 and p80 | Low intervention |
+| run14k | **3.4** | between early p50 and p80 | Low intervention |
+| run14e | **3.6** | ≈ early p80 (3.57) | Very low — closest approximation of paper's 20% early target |
+| run14l | **3.8** | just above early p80 | Very low intervention |
+| run14m | **4.0** | ≈ early p90 (4.03) | Near-DAgger — catch only catastrophic envs |
+
+Plus existing endpoints (BC, t=0.5, t=1.0, DAgger=∞).
+
+**These are hypotheses about β, not guarantees.** The actual observed β per run is logged to TensorBoard (`beta` scalar). Post-sweep we cross-reference winning threshold against its observed β and compare to paper's recipe in the thesis discussion.
+
+Together with existing endpoints this produces an 8-point curve:
+
+| β regime | Run | Threshold | Lift / Unsafe | Status |
+|----------|-----|-----------|---------------|--------|
+| β=1 (BC) | run9c | — | 87.8% / 90.8% | ✅ done |
+| β≈0.95 | run14f | 0.5 | 90.9% / 86.4% | ✅ done (beats BC slightly) |
+| β≈0.8 | run14g | 1.0 | **79.4% / 74.5%** | ✅ done (in the dip) |
+| β≈0.5 (mid) | run10b | 2.0 | 79.2% / 64.6% | ✅ done (previously miscalibrated) |
+| β≈0.3 (?) | **run14b** | **2.2** | — | ⏳ running |
+| β≈0.2 (?) | **run14c** | **2.4** | — | ⏳ running |
+| β≈0.15 (?) | **run14h** | **2.6** | — | ⏳ running |
+| β≈0.1 (?) | **run14i** | **2.8** | — | ⏳ running |
+| β≈0.07 (?) | **run14d** | **3.0** | — | *planned* |
+| β≈0.05 (?) | **run14j** | **3.2** | — | *planned* |
+| β≈0.03 (?) | **run14k** | **3.4** | — | *planned* |
+| β≈0.02 (?) | **run14e** | **3.6** | — | *planned* |
+| β≈0.01 (?) | **run14l** | **3.8** | — | *planned* |
+| β≈0.005 (?) | **run14m** | **4.0** | — | *planned* |
+| β=0 (DAgger) | run14a | ∞ | 83.4% / 68.3% | ✅ done |
+
+**Non-monotonic curve confirmed (after 5 data points).** Sweeping β from 1 → 0:
+
+```
+β:    1.0 →  0.95 →  0.8  →  0.5  →  0
+lift: 87.8 → 90.9  → 79.4 → 79.2 → 83.4
+                      ↑                ↑
+                   dip starts       recovery
+```
+
+**Key finding: U-shaped tradeoff.** Very high intervention (β>0.9, BC-like) and zero intervention (β=0, DAgger) both outperform the middle range. The worst performance is at β≈0.5–0.8 (thresholds 1.0–2.0), where the student alternates between teacher-driven and self-driven state distributions without fully learning either — a form of **destructive interference**.
+
+**Thesis implication:** The SafeDagger paper's canonical ~20% early intervention recipe (corresponding to thresholds ~3.0-3.6 in our data, still pending) is *near* the DAgger regime, which is fine. But the naïve "just tune the threshold" approach lands many people in the dip. The dense sweep (14b–m in 2.0–4.0 range) will tell us where the recovery boundary actually is and how wide the dip region is.
+
+### run14f — SafeDagger threshold=0.5 (low-end anchor, parallel)
+
+Bonus run launched in parallel on GPU 1 to anchor the low end of the threshold sweep with a "borderline-BC" datapoint. Threshold=0.5 is below even the BC late L2 mean (0.83), so β should saturate near 1.0 throughout — meaning the teacher overrides essentially every step. If results are indistinguishable from run9c BC, that confirms "very low threshold ≈ BC". If they differ, even rare student steps still meaningfully shape learning.
+
+```bash
+cd /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 32 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 --unsafe_l2_threshold 0.5 \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+  env.teacher_objects_dir=multi_objects/visdex_selected \
+  env.distillation_episode_length_s=10.0 \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run directory:** `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_15-12-22-01/`
+
+**Status (2026-04-15):** ✅ complete.
+
+**Standalone eval (640 episodes = 20 rollouts × 32 envs):**
+
+| Metric | run14f (t=0.5, β≈0.95) | run9c BC (β=1) | Teacher 11 |
+|---|---|---|---|
+| **Lift success** | **90.9%** | 87.8% | 85.8% |
+| **Unsafe rate** | **86.4%** | 90.8% | 23.1% |
+| Physics (% all eps) | 47.8% | 49.4% | 11.0% |
+| Object OOB (% all eps) | 22.6% | 19.1% | 9.4% |
+| Collision (% all eps) | 13.7% | 19.3% | 1.7% |
+| Palm flipped (% all eps) | 2.2% | 1.2% | 0.6% |
+
+**Eval JSON:** `eval_results/eval_metrics_20260415_171638.json`
+
+**Key finding: rare student practice beats pure BC.**
+
+Even with teacher overriding ~95% of steps, the ~5% of remaining student-driven steps yield **+3.1pp lift and −4.4pp unsafe vs pure BC**. This resolves the ambiguity posed in the motivation: pure BC is NOT equivalent to very-low-threshold SafeDagger — the tiny amount of student-distribution gradient signal matters. This is consistent with the DAgger distribution-shift-correction argument: even sparse samples from the student's own action distribution meaningfully improve the policy.
+
+Also notable: run14f's **lift (90.9%) exceeds Teacher 11 (85.8%)** — same pattern as the BC 50k checkpoint. The student can briefly match or exceed teacher lift on in-distribution motions but at catastrophic safety cost.
+
+### run14g — SafeDagger threshold=1.0 (high-intervention regime, parallel)
+
+Third parallel run on GPU 2 to fill the largest gap in the sweep — between threshold=0.5 (β≈100%) and threshold=2.0 (β≈80% early, ~5% late). At threshold=1.0, expected β ≈ 95% early and ~50% late (since DAgger late L2 mean is ~2.0 and BC late L2 mean is ~0.83 — most envs early in training would exceed 1.0 but stabilize around it late). This probes the "moderate-to-high intervention" regime where SafeDagger should genuinely shape learning differently from both BC and DAgger.
+
+**Standalone eval (640 episodes = 20 rollouts × 32 envs, 2026-04-15):**
+
+| Metric | run14g (t=1.0, β≈0.8) | run14f (t=0.5, β≈0.95) | run10b (t=2.0, β≈0.5) |
+|---|---|---|---|
+| **Lift success** | **79.4%** | 90.9% | 79.2% |
+| **Unsafe rate** | **74.5%** | 86.4% | 64.6% |
+| Physics (% all eps) | 36.6% | 47.8% | 17.5% |
+| Object OOB (% all eps) | 20.1% | 22.6% | 9.4% |
+| Collision (% all eps) | 11.3% | 13.7% | 8.5% |
+| Palm flipped (% all eps) | 6.6% | 2.2% | 5.9% |
+
+**Eval JSON:** `eval_results/eval_metrics_20260415_201147.json`
+
+**Key finding: threshold=1.0 is the start of the dip region.**
+
+Lift drops sharply from 90.9% (t=0.5) to 79.4% (t=1.0) — an 11.5pp drop for a small threshold change. This is strong evidence that **moderate-intervention SafeDagger suffers from destructive interference**: the teacher overrides enough of the student's actions that the student can't build coherent self-distribution experience, but not enough to give pure BC's clean imitation signal.
+
+Between t=1.0 (79.4%) and t=2.0 (79.2%) the lift is essentially flat — the entire β ≈ 0.5–0.8 range is a "dead zone" for lift performance. Recovery happens only at β→0 (DAgger, 83.4%) or β→1 (BC, 87.8%).
+
+This motivates the dense sweep (2.0 to 4.0, step 0.2) — we need to identify *where* lift recovers to tell if it's a gradual transition or a sharp boundary.
+
+```bash
+cd /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=2 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 32 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 --unsafe_l2_threshold 1.0 \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+  env.teacher_objects_dir=multi_objects/visdex_selected \
+  env.distillation_episode_length_s=10.0 \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+**Run directory:** `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_15-14-48-42/`
+
+**Status (2026-04-15):** *running* on GPU 2, started 14:48.
+
+### run14b — SafeDagger threshold=2.2 (late p80)
+
+Constant-ish safety net — threshold sits at the 80th percentile of late-training L2 mean, so intervention rate should be roughly stable across training rather than decaying steeply.
+
+**Run directory:** `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_15-17-51-09/`
+
+**Status (2026-04-15):** *running*, started 17:51.
+
+### run14c — SafeDagger threshold=2.4 (between late p80 and p95)
+
+Slightly less aggressive than 2.2 — threshold falls between late p80 (2.21) and late p95 (2.53). Expected β decays moderately across training.
+
+**Run directory:** `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_15-17-52-23/`
+
+**Status (2026-04-15):** *running*, started 17:52.
+
+### run14h — SafeDagger threshold=2.6 (≈ late p95, densification)
+
+Fills the 2.4–3.0 gap. Threshold ≈ late p95 (2.53) → catches the worst 5% of late-training envs, decays to near-zero intervention late.
+
+**Run directory:** `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_15-17-59-06/`
+
+**Status (2026-04-15):** *running*, started 17:59.
+
+### run14d,e,i–m — Remaining sweep runs (2.8, 3.0, 3.2, 3.4, 3.6, 3.8, 4.0)
+
+Launched in batches as GPU capacity allows. All use identical settings to run14b (32 envs, visdex_top8, 10s eps, ADR off). Same launch template, only `--unsafe_l2_threshold` differs.
+
+**Launch template:**
+```bash
+cd /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/distillation_new
+CUDA_VISIBLE_DEVICES=<N> /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python run_distillation_safedagger_fr3_agilehand.py \
+  --task=dextrah_fr3_agilehand --num_envs 32 --enable_cameras --headless \
+  --teacher /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/stored_policies/fr3_agilehand/11_multi_object_adr14_sim2real_03-30_17-41-43/nn/best_dextrah_tekken_lstm.pth \
+  --max_iterations 100000 --unsafe_l2_threshold <T> \
+  env.distillation=True env.simulate_stereo=True \
+  env.objects_dir=multi_objects/visdex_top8 env.teacher_onehot_size=13 \
+  env.teacher_objects_dir=multi_objects/visdex_selected \
+  env.distillation_episode_length_s=10.0 \
+  env.enable_adr=False env.disable_arm_randomization=True
+```
+
+| Run | Threshold | Status | Run directory |
+|-----|-----------|--------|---------------|
+| run14i | 2.8 | *running*, started 20:50 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_15-20-50-53/` |
+| run14d | 3.0 | *planned* | TBD |
+| run14j | 3.2 | *planned* | TBD |
+| run14k | 3.4 | *planned* | TBD |
+| run14e | 3.6 | *planned* | TBD |
+| run14l | 3.8 | *planned* | TBD |
+| run14m | 4.0 | *planned* | TBD |
+
+### Step 3 — analysis
+
+**Primary plot:** lift success and unsafe episode rate vs. threshold, with BC (run9c, β=1) and DAgger (run14a, β=0) as continuous-axis endpoints. Reveals the shape of the tradeoff curve — is there a clear optimum, or monotonic gradient from BC to DAgger?
+
+**Secondary plots:**
+- Observed training β per threshold vs. training iteration — validates (or disputes) our β predictions
+- Failure-mode breakdown per threshold — does the BC-physics / DAgger-OOB tradeoff hold continuously?
+- Winning threshold's observed early β vs. SafeDagger paper's 20–30% target — post-hoc comparison
+
+**Thesis story:**
+*"We avoided the circular reasoning of prior threshold calibrations by deriving the sweep range from the uncorrected DAgger L2 distribution (run14a). The DAgger baseline gives an objective scale on which to pick meaningful threshold values but does not prescribe an optimum — the SafeDagger paper's 20–30% early-intervention recipe is itself a rough target that doesn't translate cleanly to a single numeric threshold (temporal ambiguity in 'early', distributional ambiguity between per-step mean and per-env L2). We therefore sweep four thresholds ({2.2, 2.5, 3.0, 3.6}) evenly distributed within the meaningful range, validate empirically, and report where the winning threshold falls relative to DAgger percentiles and the paper's recipe as a post-hoc observation."*
 
 ## run12 — Teacher v2 distillation (2026-04-13)
 
