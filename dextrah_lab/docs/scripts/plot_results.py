@@ -2109,6 +2109,7 @@ RUN14_SWEEP = [
     ("3.4",    3.4,  "student_eval_metrics_20260416_102733.json", "swept"),
     ("3.6",    3.6,  "student_eval_metrics_20260416_175222.json", "swept"),
     ("3.8",    3.8,  "student_eval_metrics_20260416_175236.json", "swept"),
+    ("4.0",    4.0,  "student_eval_metrics_20260417_005736.json", "swept"),
     ("DAgger", None, "student_eval_metrics_20260415_170358.json", "dagger"),
 ]
 
@@ -2738,6 +2739,7 @@ RUN14_BETA_RUNS = [
     (3.4, "student_run14k_safedagger_t3.4.csv",  32),
     (3.6, "student_run14e_safedagger_t3.6.csv",  32),
     (3.8, "student_run14l_safedagger_t3.8.csv",  32),
+    (4.0, "student_run14m_safedagger_t4.0.csv",  32),
 ]
 
 

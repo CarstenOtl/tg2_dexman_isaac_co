@@ -68,7 +68,9 @@ Run14+ tables have been updated with corrected numbers. Older tables (run1-run11
 | **run14d** | **SafeDagger** | **L2** | **T11** | **100k** | **🎯 97.0%** | **75.3%** | physics (37%), object_oob (20%), collision (15%) | **threshold=3.0 — NEW PEAK, best lift of entire sweep** |
 | **run14j** | **SafeDagger** | **L2** | **T11** | **100k** | **89.5%** | **84.1%** | physics (45%), collision (22%), object_oob (15%) | **threshold=3.2 — drops from t=3.0 peak (spike is narrow)** |
 | **run14k** | **SafeDagger** | **L2** | **T11** | **100k** | **🎯 95.3%** | **76.7%** | physics (35%), object_oob (21%), collision (13%) | **threshold=3.4 — high-lift region confirmed (not just t=3.0 spike)** |
-| run14e,l,m | SafeDagger | L2 | T11 | 100k | — | — | — | *running/planned*, thresholds 3.6 / 3.8 / 4.0 |
+| **run14e** | **SafeDagger** | **L2** | **T11** | **100k** | **90.6%** | **82.0%** | physics (42%), object_oob (21%), collision (18%) | **threshold=3.6 — transitioning down from 3.4 peak** |
+| **run14l** | **SafeDagger** | **L2** | **T11** | **100k** | **85.9%** | **71.6%** | physics (34%), object_oob (20%), collision (17%) | **threshold=3.8 — near-DAgger dip** |
+| **run14m** | **SafeDagger** | **L2** | **T11** | **100k** | **94.7%** | **81.9%** | physics (47%), collision (21%), object_oob (13%) | **threshold=4.0 — lift recovers from 3.8 dip** |
 | **run14f** | **SafeDagger** | **L2** | **T11** | **100k** | **90.9%** | **86.4%** | physics (48%), object_oob (23%), collision (14%) | **threshold=0.5 (β≈0.95) — slightly beats BC on both axes** |
 | **run14g** | **SafeDagger** | **L2** | **T11** | **100k** | **79.4%** | **74.5%** | physics (37%), object_oob (20%), collision (11%), palm (7%) | **threshold=1.0 (β≈0.8) — landed in the dip region** |
 
@@ -223,7 +225,7 @@ Together with existing endpoints this produces an 8-point curve:
 | β≈0.03 | **run14k** | **3.4** | **🎯 95.3% / 76.7%** | ✅ done — **second high-lift confirmation** |
 | β≈0.02 | **run14e** | **3.6** | **90.6% / 82.0%** | ✅ done (transitioning down from 3.4 peak) |
 | β≈0.01 | **run14l** | **3.8** | **85.9% / 71.6%** | ✅ done (lift drops toward DAgger level) |
-| β≈0.005 (?) | **run14m** | **4.0** | — | ⏳ running (launched 17:40 after 11:27 run was accidentally t=3.4) |
+| β≈0.005 | **run14m** | **4.0** | **94.7% / 81.9%** | ✅ done — lift recovers (near t=3.0 peak) |
 | β=0 (DAgger) | run14a | ∞ | 83.4% / 68.3% | ✅ done |
 
 **Non-monotonic curve confirmed (after 5 data points).** Sweeping β from 1 → 0:
@@ -458,7 +460,7 @@ CUDA_VISIBLE_DEVICES=<N> /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pyt
 | run14e | 3.6 | ✅ **90.6% / 82.0%** (eval JSON `20260416_175222`) | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-11-25-07/` |
 | run14l | 3.8 | ✅ **85.9% / 71.6%** (eval JSON `20260416_175236`) — drops toward DAgger | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-11-26-21/` |
 | run14k-seed2 | **3.4** (second seed, originally mislogged as 4.0) | *done*, started 11:27 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-11-27-33/` |
-| run14m | 4.0 | *running*, started 17:40 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-17-40-20/` |
+| run14m | 4.0 | ✅ **94.7% / 81.9%** (eval JSON `20260417_005736`) — lift recovers | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-17-40-20/` |
 
 ### Step 3 — analysis
 
