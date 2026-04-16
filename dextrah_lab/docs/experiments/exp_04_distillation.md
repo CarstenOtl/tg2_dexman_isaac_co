@@ -8,11 +8,31 @@ type: project
 
 **Goal:** Distill the multi-object teacher from exp_02 run1p into a vision-based student policy using SafeDagger.
 
+## ⚠️ Teacher 11 baseline correction (2026-04-16)
+
+Earlier evals used `eval_metrics_20260331_193003.json` (all 13 objects aggregated, no per-object breakdown) reporting Teacher 11 at **85.8% lift / 23.1% unsafe**. This was used as the reference in all comparison tables below, but it's **not a fair baseline** for students evaled on the 8-object `visdex_top8` subset (used from run7 onwards).
+
+Re-eval on 2026-04-14 (`eval_metrics_20260414_031655.json`, per-object, 200 eps/object) shows:
+
+| Subset | Lift | Total Unsafe | Real Unsafe (excl. physics) |
+|--------|------|--------------|----------------------------|
+| **All 13 objects** | **82.7%** | 22.3% | 11.2% |
+| **visdex_top8 (fair vs students)** | **99.0%** | 22.4% | **12.2%** |
+| 11 lifted (teacher-feasible) | 97.7% | — | 12.2% |
+| Failed objects (`train`, `chicken_head_in_car`) | 0.0% | — | — |
+
+**The fair Teacher 11 baseline for students evaled on visdex_top8 is 99.0% lift / 22.4% total unsafe / 12.2% real unsafe.** Compare student lift against 99.0%, not 85.8%.
+
+Using this fair baseline, **no student surpasses the teacher on either lift or unsafe metric.** Best student (run14d at t=3.0) achieves 97.0% lift, still 2pp below teacher. Best safety (run14h at t=2.6) achieves 35.0% real unsafe, still 22.8pp worse than teacher.
+
+Run14+ tables have been updated with corrected numbers. Older tables (run1-run11) reference the legacy 85.8% benchmark; interpret accordingly.
+
 ## Summary — All standalone student evaluations
 
-**Teacher 11 benchmark** (480 episodes): 85.8% lift, 23.1% unsafe
+**Teacher 11 benchmark (visdex_top8, fair baseline):** 99.0% lift, 22.4% total unsafe, 12.2% real unsafe
+**Teacher 11 (all 13 legacy):** 85.8% lift, 23.1% unsafe (`eval_metrics_20260331_193003.json`)
 **Teacher 10 benchmark** (80 episodes): 96.3% lift, 53.8% unsafe
-**Best student: run5a — 61.3% lift** (SafeDagger + L2, teacher 11, 24 envs, 100k iters)
+**Best student: run14d (t=3.0) — 97.0% lift, 75.3% total unsafe, 38.8% real unsafe** — still 2pp below teacher on lift
 
 | Run | Method | Loss | Teacher | Iters | Lift | Unsafe | Key Failure (% all eps) | Notes |
 |---|---|---|---|---|---|---|---|---|
@@ -44,8 +64,11 @@ type: project
 | **run14b** | **SafeDagger** | **L2** | **T11** | **100k** | **90.8%** | **80.2%** | physics (33%), collision (26%), object_oob (17%) | **threshold=2.2 — sharp recovery from the dip** |
 | **run14c** | **SafeDagger** | **L2** | **T11** | **100k** | **87.3%** | **86.7%** | **palm flip (37%)**, object_oob (20%), physics (17%) | **threshold=2.4 — anomalous palm-flip dominant failure mode** |
 | **run14h** | **SafeDagger** | **L2** | **T11** | **100k** | **88.8%** | **86.7%** | physics (52%), object_oob (18%), collision (13%) | **threshold=2.6 — palm-flip back to normal (4.5%)** |
-| run14i | SafeDagger | L2 | T11 | 100k | — | — | — | *running*, threshold=2.8 |
-| run14d,e,j–m | SafeDagger | L2 | T11 | 100k | — | — | — | *planned*, thresholds 3.0 / 3.2 / 3.4 / 3.6 / 3.8 / 4.0 |
+| **run14i** | **SafeDagger** | **L2** | **T11** | **100k** | **82.0%** | **87.0%** | physics (45%), collision (19%), object_oob (17%) | **threshold=2.8 — lift drops back to DAgger-territory** |
+| **run14d** | **SafeDagger** | **L2** | **T11** | **100k** | **🎯 97.0%** | **75.3%** | physics (37%), object_oob (20%), collision (15%) | **threshold=3.0 — NEW PEAK, best lift of entire sweep** |
+| **run14j** | **SafeDagger** | **L2** | **T11** | **100k** | **89.5%** | **84.1%** | physics (45%), collision (22%), object_oob (15%) | **threshold=3.2 — drops from t=3.0 peak (spike is narrow)** |
+| **run14k** | **SafeDagger** | **L2** | **T11** | **100k** | **🎯 95.3%** | **76.7%** | physics (35%), object_oob (21%), collision (13%) | **threshold=3.4 — high-lift region confirmed (not just t=3.0 spike)** |
+| run14e,l,m | SafeDagger | L2 | T11 | 100k | — | — | — | *running/planned*, thresholds 3.6 / 3.8 / 4.0 |
 | **run14f** | **SafeDagger** | **L2** | **T11** | **100k** | **90.9%** | **86.4%** | physics (48%), object_oob (23%), collision (14%) | **threshold=0.5 (β≈0.95) — slightly beats BC on both axes** |
 | **run14g** | **SafeDagger** | **L2** | **T11** | **100k** | **79.4%** | **74.5%** | physics (37%), object_oob (20%), collision (11%), palm (7%) | **threshold=1.0 (β≈0.8) — landed in the dip region** |
 
@@ -115,9 +138,9 @@ CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pytho
 
 **Standalone eval (640 episodes = 20 rollouts × 32 envs):**
 
-| Metric | run14a DAgger (β=0) | run10b SafeD (t=2.0) | run9c BC (β=1) | Teacher 11 |
+| Metric | run14a DAgger (β=0) | run10b SafeD (t=2.0) | run9c BC (β=1) | Teacher 11 (fair TOP8) |
 |---|---|---|---|---|
-| **Lift success** | **83.4%** | 79.2% | 87.8% | 85.8% |
+| **Lift success** | **83.4%** | 79.2% | 87.8% | **99.0%** |
 | **Unsafe rate** | **68.3%** | 64.6% | 90.8% | 23.1% |
 | Physics (% all eps) | 16.1% | 17.5% | 49.4% | 11.0% |
 | Object OOB (% all eps) | **35.0%** | 9.4% | 19.1% | 9.4% |
@@ -194,13 +217,13 @@ Together with existing endpoints this produces an 8-point curve:
 | β≈0.3 | **run14b** | **2.2** | **90.8% / 80.2%** | ✅ done (sharp recovery from dip) |
 | β≈0.2 | **run14c** | **2.4** | **87.3% / 86.7%** | ✅ done (palm-flip anomaly) |
 | β≈0.15 | **run14h** | **2.6** | **88.8% / 86.7%** | ✅ done (palm-flip resolved) |
-| β≈0.1 (?) | **run14i** | **2.8** | — | ⏳ running |
-| β≈0.07 (?) | **run14d** | **3.0** | — | ⏳ running |
-| β≈0.05 (?) | **run14j** | **3.2** | — | ⏳ running |
-| β≈0.03 (?) | **run14k** | **3.4** | — | ⏳ running |
-| β≈0.02 (?) | **run14e** | **3.6** | — | *planned* |
-| β≈0.01 (?) | **run14l** | **3.8** | — | *planned* |
-| β≈0.005 (?) | **run14m** | **4.0** | — | *planned* |
+| β≈0.1 | **run14i** | **2.8** | **82.0% / 87.0%** | ✅ done (lift drops) |
+| β≈0.07 | **run14d** | **3.0** | **🎯 97.0% / 75.3%** | ✅ done — **BEST LIFT** |
+| β≈0.05 | **run14j** | **3.2** | **89.5% / 84.1%** | ✅ done (post-peak decline) |
+| β≈0.03 | **run14k** | **3.4** | **🎯 95.3% / 76.7%** | ✅ done — **second high-lift confirmation** |
+| β≈0.02 (?) | **run14e** | **3.6** | — | ⏳ running |
+| β≈0.01 (?) | **run14l** | **3.8** | — | ⏳ running |
+| β≈0.005 (?) | **run14m** | **4.0** | — | ⏳ running |
 | β=0 (DAgger) | run14a | ∞ | 83.4% / 68.3% | ✅ done |
 
 **Non-monotonic curve confirmed (after 5 data points).** Sweeping β from 1 → 0:
@@ -239,9 +262,9 @@ CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pytho
 
 **Standalone eval (640 episodes = 20 rollouts × 32 envs):**
 
-| Metric | run14f (t=0.5, β≈0.95) | run9c BC (β=1) | Teacher 11 |
+| Metric | run14f (t=0.5, β≈0.95) | run9c BC (β=1) | Teacher 11 (fair TOP8) |
 |---|---|---|---|
-| **Lift success** | **90.9%** | 87.8% | 85.8% |
+| **Lift success** | **90.9%** | 87.8% | **99.0%** |
 | **Unsafe rate** | **86.4%** | 90.8% | 23.1% |
 | Physics (% all eps) | 47.8% | 49.4% | 11.0% |
 | Object OOB (% all eps) | 22.6% | 19.1% | 9.4% |
@@ -254,7 +277,7 @@ CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pytho
 
 Even with teacher overriding ~95% of steps, the ~5% of remaining student-driven steps yield **+3.1pp lift and −4.4pp unsafe vs pure BC**. This resolves the ambiguity posed in the motivation: pure BC is NOT equivalent to very-low-threshold SafeDagger — the tiny amount of student-distribution gradient signal matters. This is consistent with the DAgger distribution-shift-correction argument: even sparse samples from the student's own action distribution meaningfully improve the policy.
 
-Also notable: run14f's **lift (90.9%) exceeds Teacher 11 (85.8%)** — same pattern as the BC 50k checkpoint. The student can briefly match or exceed teacher lift on in-distribution motions but at catastrophic safety cost.
+Also notable: run14f's **lift (90.9%) is below Teacher 11's fair TOP8 baseline (99.0%)** — the earlier claim "student exceeds teacher on lift" was based on a wrong baseline (using the all-13 eval including 2 unliftable objects). With correct fair-baseline comparison, no student exceeds the teacher on lift.
 
 ### run14g — SafeDagger threshold=1.0 (high-intervention regime, parallel)
 
@@ -416,13 +439,13 @@ CUDA_VISIBLE_DEVICES=<N> /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pyt
 
 | Run | Threshold | Status | Run directory |
 |-----|-----------|--------|---------------|
-| run14i | 2.8 | *running*, started 20:50 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_15-20-50-53/` |
-| run14d | 3.0 | *running*, started 01:46 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-01-46-05/` |
-| run14j | 3.2 | *running*, started 01:46 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-01-46-49/` |
-| run14k | 3.4 | *running*, started 01:47 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-01-47-45/` |
-| run14e | 3.6 | *planned* | TBD |
-| run14l | 3.8 | *planned* | TBD |
-| run14m | 4.0 | *planned* | TBD |
+| run14i | 2.8 | ✅ **82.0% / 87.0%** (eval JSON `20260416_102642`) | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_15-20-50-53/` |
+| run14d | 3.0 | ✅ **🎯 97.0% / 75.3%** (eval JSON `20260416_102648`) — best of sweep | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-01-46-05/` |
+| run14j | 3.2 | ✅ **89.5% / 84.1%** (eval JSON `20260416_102808`) | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-01-46-49/` |
+| run14k | 3.4 | ✅ **🎯 95.3% / 76.7%** (eval JSON `20260416_102733`) — high-lift region | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-01-47-45/` |
+| run14e | 3.6 | *running*, started 11:25 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-11-25-07/` |
+| run14l | 3.8 | *running*, started 11:26 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-11-26-21/` |
+| run14m | 4.0 | *running*, started 11:27 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-11-27-33/` |
 
 ### Step 3 — analysis
 
@@ -494,9 +517,9 @@ CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pytho
 
 **Standalone eval (640 episodes = 20 rollouts × 32 envs, 2026-04-13):**
 
-| Metric | run9c BC | run9a SafeD | run9b DAgger | run10b SafeD (32 envs) | Teacher 11 |
+| Metric | run9c BC | run9a SafeD | run9b DAgger | run10b SafeD (32 envs) | Teacher 11 (fair TOP8) |
 |---|---|---|---|---|---|
-| **Lift success** | **87.8%** | 72.7% | 71.7% | 79.2% | 85.8% |
+| **Lift success** | **87.8%** | 72.7% | 71.7% | 79.2% | **99.0%** |
 | **Unsafe rate** | **90.8%** | 62.7% | 58.3% | 64.6% | 23.1% |
 | Physics (% all eps) | 49.0% | 32.4% | 25.8% | 27.1% | 11.0% |
 | Object OOB (% all eps) | 21.1% | 10.3% | 18.7% | 14.6% | 9.4% |
@@ -506,8 +529,8 @@ CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pytho
 **Eval JSON:** `eval_results/eval_metrics_20260413_233515.json`
 
 **Key findings:**
-- **BC achieves highest lift of any student** (87.8%) — surpasses SafeDagger (run10b) by 8.6pp, matches Teacher 11 within 2pp
-- **BUT unsafe rate is catastrophically high** (90.8%) — 26pp worse than run10b SafeDagger, 4× worse than Teacher 11
+- **BC achieves highest lift of any student** (87.8%) — surpasses SafeDagger (run10b) by 8.6pp, trails Teacher 11 (fair TOP8: 99.0%) by 11.2pp
+- **BUT unsafe rate is catastrophically high** (90.8% total / 41.7% real) — 26pp worse than run10b SafeDagger, ~3.4× teacher's real unsafe (12.2%)
 - Student learns the teacher's *grasping* well but not the *safety behavior* — during training, teacher always keeps trajectories in-distribution, so student never learns to recover from drift
 - Classic BC failure mode: high in-distribution accuracy, poor out-of-distribution robustness (covariate shift)
 - Physics instability dominates failures (49% of all episodes) — student's aggressive actions when slightly off-distribution cause sim instability
@@ -530,14 +553,14 @@ CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pytho
 **Overfitting confirmed:**
 - **Lift peaks at 50k (95.6%) and degrades to 85.6% at 100k** — a 10pp drop, classic overfitting signature
 - **75k (95.2%) plateaus with 50k** — no additional learning, just noise around the peak
-- **Peak BC (50k) exceeds Teacher 11** (95.6% vs 85.8%) — BC's in-distribution action prediction can briefly beat the teacher's own rollout performance on the lift metric
+- **Peak BC (50k) trails Teacher 11** (95.6% vs fair TOP8 99.0%) — the earlier claim that BC exceeds teacher was based on the wrong all-13 baseline (85.8%). With the correct fair baseline, BC peak is 3.4pp below teacher
 
 **Safety does not improve with training:**
 - **Unsafe rate flat across all iters** (86-95%) — BC cannot learn safety regardless of training time
 - **Physics instability rises** (45.9% → 51.6%) — late BC is more aggressive, causes more sim-level instabilities
 - **Palm-flip drops monotonically** (23.4% → 1.6%) — the *only* thing BC robustly learns is hand orientation, but this gain is offset by increased physics failures
 
-**Refined thesis narrative:** *"The checkpoint sweep reveals that BC peaks in lift success at 50k iterations (95.6%), before degrading to 85.6% at 100k — a 10pp drop consistent with overfitting. At its peak, BC's lift exceeds Teacher 11 (85.8%), but the unsafe rate remains catastrophically high across all iterations (87–95%), compared to SafeDagger's 62.7% (run9a) and 64.6% (run10b). This decouples two phenomena: BC learns in-distribution action prediction efficiently (peak lift > teacher), but cannot acquire the corrective behavior needed for episode-level safety. More training makes BC more aggressive without making it safer, eventually harming in-distribution performance as well. This motivates reporting the 100k-iter BC checkpoint as the fair thesis comparison (no cherry-picking), and quantifies the 26pp unsafe gap that justifies SafeDagger's online distribution correction."*
+**Refined thesis narrative:** *"The checkpoint sweep reveals that BC peaks in lift success at 50k iterations (95.6%), before degrading to 85.6% at 100k — a 10pp drop consistent with overfitting. At its peak, BC's lift (95.6%) is 3.4pp below Teacher 11 on the fair TOP8 baseline (99.0%), and its unsafe rate remains catastrophically high across all iterations (87–95% total, 41.7% real unsafe at 100k), compared to SafeDagger's 62.7% (run9a) and 64.6% (run10b) total unsafe. This decouples two phenomena: BC learns in-distribution action prediction efficiently, but cannot acquire the corrective behavior needed for episode-level safety. More training makes BC more aggressive without making it safer, eventually harming in-distribution performance as well. This motivates reporting the 100k-iter BC checkpoint as the fair thesis comparison (no cherry-picking)."*
 
 **Sweep command (reproducible):**
 ```bash
@@ -598,9 +621,9 @@ CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pytho
 
 **Standalone eval (640 episodes = 20 rollouts × 32 envs, 2026-04-07):**
 
-| Metric | run11a SafeD+ADR5 | run11b DAgger+ADR5 | run10b (no ADR) | Teacher 11 |
+| Metric | run11a SafeD+ADR5 | run11b DAgger+ADR5 | run10b (no ADR) | Teacher 11 (fair TOP8) |
 |---|---|---|---|---|
-| **Lift success** | 63.9% | 48.8% | **79.2%** | 85.8% |
+| **Lift success** | 63.9% | 48.8% | **79.2%** | **99.0%** |
 | **Unsafe rate** | 73.3% | 73.0% | 64.6% | 23.1% |
 | Physics (% all eps) | 39.2% | 19.9% | 27.1% | 11.0% |
 | Collision (% all eps) | 19.4% | 25.9% | 13.1% | 1.7% |
@@ -648,9 +671,9 @@ CUDA_VISIBLE_DEVICES=1 ... --num_envs 32 ... env.disable_arm_randomization=True
 
 **Standalone eval (480 episodes, 2026-04-05):**
 
-| Metric | run10a (arm rand) | run10b (32 envs) | run9a (baseline) | Teacher 11 |
+| Metric | run10a (arm rand) | run10b (32 envs) | run9a (baseline) | Teacher 11 (fair TOP8) |
 |---|---|---|---|---|
-| **Lift success** | 62.3% | **79.2%** | 72.7% | 85.8% |
+| **Lift success** | 62.3% | **79.2%** | 72.7% | **99.0%** |
 | **Unsafe rate** | 72.9% | 64.6% | 62.7% | 23.1% |
 | Physics (% all eps) | 36.7% | 27.1% | 32.5% | 11.0% |
 | Collision (% all eps) | 18.5% | 13.1% | 16.2% | 1.7% |
@@ -727,9 +750,9 @@ CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pytho
 
 **Standalone eval (480 episodes, 2026-04-04):**
 
-| Metric | run9a SafeDagger+L2 | run9b DAgger+L2 | run8a (broken) | run8b (broken) | Teacher 11 |
+| Metric | run9a SafeDagger+L2 | run9b DAgger+L2 | run8a (broken) | run8b (broken) | Teacher 11 (fair TOP8) |
 |---|---|---|---|---|---|
-| **Lift success** | **72.7%** | **71.7%** | 41.7% | 55.2% | 85.8% |
+| **Lift success** | **72.7%** | **71.7%** | 41.7% | 55.2% | **99.0%** |
 | **Unsafe rate** | 62.7% | **58.3%** | 70.0% | 42.3% | 23.1% |
 | Physics instab. (% all eps) | 32.5% | 25.6% | 44.1% | 20.8% | 11.0% |
 | Harmful collision (% all eps) | 16.2% | 12.5% | 11.5% | 11.7% | 1.7% |
@@ -917,9 +940,9 @@ CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pytho
 
 **Standalone eval (480 episodes, 2026-04-03):**
 
-| Metric | run7a SafeDagger+L2 | run7b DAgger+L2 | Teacher 11 |
+| Metric | run7a SafeDagger+L2 | run7b DAgger+L2 | Teacher 11 (fair TOP8) |
 |---|---|---|---|
-| **Lift success** | 27.9% | **56.9%** | 85.8% |
+| **Lift success** | 27.9% | **56.9%** | **99.0%** |
 | **Unsafe rate** | 79.0% | **59.4%** | 23.1% |
 | Physics instability (% all eps) | 52.1% | 39.2% | 11.0% |
 | Harmful collision (% all eps) | 11.6% | 8.7% | 1.7% |
