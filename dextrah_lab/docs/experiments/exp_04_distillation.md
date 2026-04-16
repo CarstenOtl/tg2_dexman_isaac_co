@@ -221,9 +221,9 @@ Together with existing endpoints this produces an 8-point curve:
 | β≈0.07 | **run14d** | **3.0** | **🎯 97.0% / 75.3%** | ✅ done — **BEST LIFT** |
 | β≈0.05 | **run14j** | **3.2** | **89.5% / 84.1%** | ✅ done (post-peak decline) |
 | β≈0.03 | **run14k** | **3.4** | **🎯 95.3% / 76.7%** | ✅ done — **second high-lift confirmation** |
-| β≈0.02 (?) | **run14e** | **3.6** | — | ⏳ running |
-| β≈0.01 (?) | **run14l** | **3.8** | — | ⏳ running |
-| β≈0.005 (?) | **run14m** | **4.0** | — | ⏳ running |
+| β≈0.02 | **run14e** | **3.6** | **90.6% / 82.0%** | ✅ done (transitioning down from 3.4 peak) |
+| β≈0.01 | **run14l** | **3.8** | **85.9% / 71.6%** | ✅ done (lift drops toward DAgger level) |
+| β≈0.005 (?) | **run14m** | **4.0** | — | ⏳ running (launched 17:40 after 11:27 run was accidentally t=3.4) |
 | β=0 (DAgger) | run14a | ∞ | 83.4% / 68.3% | ✅ done |
 
 **Non-monotonic curve confirmed (after 5 data points).** Sweeping β from 1 → 0:
@@ -382,6 +382,18 @@ In every other run we've measured, palm flipping is a marginal failure mode (1-7
 
 **Worth verifying:** run14h (t=2.6) and run14i (t=2.8) — does palm-flip persist into the 2.5–3.0 range, or is it specifically a t=2.4 quirk?
 
+**Re-eval (2026-04-16, JSON `20260416_183138`) confirms palm-flip anomaly is NOT noise:**
+
+| Metric | Eval 1 (01:14) | Eval 2 (18:31) | Diff |
+|--------|---------------|---------------|------|
+| Lift | 87.3% | 84.5% | -2.8pp |
+| Unsafe | 86.7% | 87.3% | +0.6pp |
+| **Palm flip (% unsafe)** | **37.5%** | **35.8%** | **-1.7pp** |
+
+Palm-flip stays 35%+ of unsafe across both evals. This establishes that t=2.4 learned a specific palm-orientation failure mode, distinct from adjacent thresholds (2.2 physics/collision dominant, 2.6 physics dominant). **Threshold choice produces qualitatively different policies, not just different success rates.**
+
+Also provides a rough eval noise floor: ~3pp lift, ~1pp unsafe between identical re-evals. Differences smaller than this in the sweep cannot be distinguished from eval noise without more seeds.
+
 **Lift curve update:** With t=2.4 added, the lift curve is now oscillating, not monotonic or U-shaped:
 ```
 β:     1.0    0.95   0.8    0.5    0.3    0.2    0
@@ -443,9 +455,10 @@ CUDA_VISIBLE_DEVICES=<N> /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pyt
 | run14d | 3.0 | ✅ **🎯 97.0% / 75.3%** (eval JSON `20260416_102648`) — best of sweep | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-01-46-05/` |
 | run14j | 3.2 | ✅ **89.5% / 84.1%** (eval JSON `20260416_102808`) | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-01-46-49/` |
 | run14k | 3.4 | ✅ **🎯 95.3% / 76.7%** (eval JSON `20260416_102733`) — high-lift region | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-01-47-45/` |
-| run14e | 3.6 | *running*, started 11:25 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-11-25-07/` |
-| run14l | 3.8 | *running*, started 11:26 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-11-26-21/` |
-| run14m | 4.0 | *running*, started 11:27 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-11-27-33/` |
+| run14e | 3.6 | ✅ **90.6% / 82.0%** (eval JSON `20260416_175222`) | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-11-25-07/` |
+| run14l | 3.8 | ✅ **85.9% / 71.6%** (eval JSON `20260416_175236`) — drops toward DAgger | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-11-26-21/` |
+| run14k-seed2 | **3.4** (second seed, originally mislogged as 4.0) | *done*, started 11:27 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-11-27-33/` |
+| run14m | 4.0 | *running*, started 17:40 | `runs/dextrah-fr3-agilehand-safedagger-stereo-transformer_16-17-40-20/` |
 
 ### Step 3 — analysis
 

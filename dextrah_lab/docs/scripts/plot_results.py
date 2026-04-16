@@ -15,12 +15,36 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 
 from plot_style import apply_style, COLORS, save_fig
 
 EXPORTS_DIR = Path(__file__).resolve().parent.parent / "exports"
+
+
+class _FixedOrderScalarFormatter(mticker.ScalarFormatter):
+    """ScalarFormatter locked to a specific order of magnitude (e.g. 10^3)."""
+
+    def __init__(self, order_of_magnitude: int = 3):
+        super().__init__(useOffset=False, useMathText=True)
+        self._forced_order = order_of_magnitude
+
+    def _set_order_of_magnitude(self):
+        self.orderOfMagnitude = self._forced_order
+
+
+def _format_iter_axis(ax, order_of_magnitude: int = 3):
+    """Format x-axis as (value / 10^N) and fold the unit into the xlabel."""
+    fmt = _FixedOrderScalarFormatter(order_of_magnitude=order_of_magnitude)
+    fmt.set_scientific(True)
+    ax.xaxis.set_major_formatter(fmt)
+    ax.xaxis.get_offset_text().set_visible(False)
+    unit = rf"$\times 10^{{{order_of_magnitude}}}$"
+    current = ax.get_xlabel()
+    if current and unit not in current:
+        ax.set_xlabel(f"{current} ({unit})")
 
 # ============================================================================
 # Data from experiment logs (exp_02 through exp_06)
@@ -278,7 +302,7 @@ def plot_beta_decay():
     ax.set_ylabel(r"$\beta_{\mathrm{safe}}$ (teacher intervention rate)")
     ax.set_xlim(-10_000, 400_000)
     ax.set_ylim(0, 1.1)
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+    _format_iter_axis(ax)
     ax.legend(loc="lower left", fontsize=7)
     ax.set_title("SafeDAgger Intervention Rate Decay")
 
@@ -371,7 +395,7 @@ def plot_distillation_lift_success(max_iter: int = 100_000, smooth: int = 500):
     ax.set_ylabel("Lift success (%)")
     ax.set_xlim(0, max_iter)
     ax.set_ylim(0, 100)
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+    _format_iter_axis(ax)
     ax.legend(loc="lower right", fontsize=7)
     ax.set_title("Student Lift Success During Distillation (0–100k)")
 
@@ -411,7 +435,7 @@ def plot_distillation_unsafe_rate(max_iter: int = 100_000, smooth: int = 500):
     ax.set_ylabel("Unsafe rate (%)")
     ax.set_xlim(0, max_iter)
     ax.set_ylim(0, 105)
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+    _format_iter_axis(ax)
     ax.legend(loc="upper right", fontsize=7)
     ax.set_title("Student Unsafe Rate During Distillation (0–100k)")
 
@@ -530,7 +554,7 @@ def plot_per_object_unsafe_over_time(smooth: int = 2000, max_iter: int = 100_000
         ax.set_xlabel("Iteration")
         ax.set_xlim(0, max_iter)
         ax.set_ylim(0, 105)
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        _format_iter_axis(ax)
         ax.set_title(title, fontsize=8)
         ax.grid(True, alpha=0.3)
 
@@ -687,7 +711,7 @@ def plot_per_object_lift_over_time(smooth: int = 2000, max_iter: int = 100_000):
         ax.set_xlabel("Iteration")
         ax.set_xlim(0, max_iter)
         ax.set_ylim(0, 100)
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        _format_iter_axis(ax)
         ax.set_title(title, fontsize=8)
         ax.grid(True, alpha=0.3)
 
@@ -736,7 +760,7 @@ def plot_per_object_lift_head_to_head(max_iter: int = 100_000, ema_alpha: float 
         ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
         ax.set_ylim(0, 100)
         ax.set_xlim(0, max_iter)
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        _format_iter_axis(ax)
         ax.tick_params(labelsize=5)
 
     # Hide unused subplots
@@ -803,7 +827,7 @@ def _plot_distillation_single(metric, title, ylabel, ylim, runs, max_iter,
     ax.set_xlabel(r"Training Iteration ($\times 10^4$)")
     ax.set_xlim(0, max_iter)
     ax.set_ylim(*ylim)
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e4:.0f}"))
+    _format_iter_axis(ax)
     ax.legend(loc="best", fontsize=8)
     fig.tight_layout()
     return fig
@@ -913,7 +937,7 @@ def plot_per_object_lifted_head_to_head_run6(max_iter: int = 100_000, ema_alpha:
         ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
         ax.set_ylim(0, 100)
         ax.set_xlim(0, max_iter)
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        _format_iter_axis(ax)
         ax.tick_params(labelsize=5)
 
     for idx in range(len(OBJECTS), len(axes_flat)):
@@ -955,7 +979,7 @@ def plot_per_object_unsafe_episode_head_to_head_run6(max_iter: int = 100_000, em
         ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
         ax.set_ylim(0, 100)
         ax.set_xlim(0, max_iter)
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        _format_iter_axis(ax)
         ax.tick_params(labelsize=5)
 
     for idx in range(len(OBJECTS), len(axes_flat)):
@@ -1017,7 +1041,7 @@ def plot_per_object_failure_mode_run6(max_iter: int = 100_000, ema_alpha: float 
             ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
             ax.set_ylim(0, 30)
             ax.set_xlim(0, max_iter)
-            ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+            _format_iter_axis(ax)
             ax.tick_params(labelsize=5)
 
         for idx in range(len(OBJECTS), len(axes_flat)):
@@ -1072,7 +1096,7 @@ def plot_distillation_comparison_run7(max_iter: int = 100_000, ema_alpha: float 
     ax.set_xlabel(r"Training Iteration ($\times 10^4$)")
     ax.set_xlim(0, max_iter)
     ax.set_ylim(0, 1.05)
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e4:.0f}"))
+    _format_iter_axis(ax)
     ax.legend(loc="lower right", fontsize=8)
     fig.tight_layout()
     save_fig(fig, "run7_lift_success_normed")
@@ -1114,7 +1138,7 @@ def plot_per_object_lifted_head_to_head_run7(max_iter: int = 100_000, ema_alpha:
         ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
         ax.set_ylim(0, 100)
         ax.set_xlim(0, max_iter)
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        _format_iter_axis(ax)
         ax.tick_params(labelsize=5)
 
     for ax in axes[-1, :]:
@@ -1154,7 +1178,7 @@ def plot_per_object_failure_mode_run7(max_iter: int = 100_000, ema_alpha: float 
             ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
             ax.set_ylim(0, 30)
             ax.set_xlim(0, max_iter)
-            ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+            _format_iter_axis(ax)
             ax.tick_params(labelsize=5)
         for ax in axes[-1, :]:
             ax.set_xlabel("Iteration", fontsize=7)
@@ -1241,7 +1265,7 @@ def plot_run(run_name, runs, objects, eval_files=None,
     ax.set_xlabel(r"Training Iteration ($\times 10^4$)")
     ax.set_xlim(0, max_iter)
     ax.set_ylim(0, 1.05)
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e4:.0f}"))
+    _format_iter_axis(ax)
     ax.legend(loc="lower right", fontsize=8)
     fig.tight_layout()
     save_fig(fig, "lift_success_normed", subdir=subdir)
@@ -1279,7 +1303,7 @@ def plot_run(run_name, runs, objects, eval_files=None,
     ax.set_xlabel(r"Training Iteration ($\times 10^4$)")
     ax.set_xlim(0, max_iter)
     ax.set_ylim(0, 1.0)
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e4:.0f}"))
+    _format_iter_axis(ax)
     ax.legend(loc="best", fontsize=8)
     fig.tight_layout()
     save_fig(fig, "unsafe_episode_rate", subdir=subdir)
@@ -1307,7 +1331,7 @@ def plot_run(run_name, runs, objects, eval_files=None,
         ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
         ax.set_ylim(0, 100)
         ax.set_xlim(0, max_iter)
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        _format_iter_axis(ax)
         ax.tick_params(labelsize=5)
     for idx in range(len(objects), len(axes_flat)):
         axes_flat[idx].set_visible(False)
@@ -1351,7 +1375,7 @@ def plot_run(run_name, runs, objects, eval_files=None,
         ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
         ax.set_ylim(0, 100)
         ax.set_xlim(0, max_iter)
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        _format_iter_axis(ax)
         ax.tick_params(labelsize=5)
     for idx in range(len(objects), len(axes_flat)):
         axes_flat[idx].set_visible(False)
@@ -1390,7 +1414,7 @@ def plot_run(run_name, runs, objects, eval_files=None,
             ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
             ax.set_ylim(0, failure_mode_ylim)
             ax.set_xlim(0, max_iter)
-            ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+            _format_iter_axis(ax)
             ax.tick_params(labelsize=5)
         for idx in range(len(objects), len(axes_flat)):
             axes_flat[idx].set_visible(False)
@@ -1491,7 +1515,7 @@ def plot_run9_single_object_single_reason(
     ax.set_ylim(0, ylim)
     ax.set_xlabel(r"Training Iteration ($\times 10^4$)")
     ax.set_ylabel(f"{REASON_LABELS.get(reason, reason)} rate (%)")
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e4:.0f}"))
+    _format_iter_axis(ax)
     obj_pretty = obj.replace("_", " ")
     reason_pretty = REASON_LABELS.get(reason, reason).lower()
     ax.set_title(f"{obj_pretty}: {reason_pretty} — SafeDAgger vs DAgger", fontsize=8)
@@ -1526,7 +1550,7 @@ def plot_run9_aux_loss_comparison(max_iter: int = 100_000, ema_alpha: float = 0.
     ax.set_xlim(0, max_iter)
     ax.set_xlabel(r"Training Iteration ($\times 10^4$)")
     ax.set_ylabel("Auxiliary loss (object-pose regression)")
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e4:.0f}"))
+    _format_iter_axis(ax)
     ax.set_title("Auxiliary Loss: Object-Pose Regression", fontsize=8)
     ax.legend(loc="upper right", fontsize=8)
     fig.tight_layout()
@@ -1570,7 +1594,7 @@ def plot_safedagger_threshold_beta(max_iter: int = 100_000, ema_alpha: float = 0
     ax.set_ylim(0, 100)
     ax.set_xlabel(r"Training Iteration ($\times 10^4$)")
     ax.set_ylabel(r"Teacher intervention rate $\beta$ (%)")
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e4:.0f}"))
+    _format_iter_axis(ax)
     ax.set_title(r"SafeDAgger Intervention Rate vs. L2 Threshold $\delta$", fontsize=8)
     ax.legend(loc="best", fontsize=8)
     fig.tight_layout()
@@ -1614,7 +1638,7 @@ def plot_run11_unsafe(max_iter: int = 100_000, ema_alpha: float = 0.999):
         ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
         ax.set_ylim(0, 100)
         ax.set_xlim(0, max_iter)
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        _format_iter_axis(ax)
         ax.tick_params(labelsize=5)
     for idx in range(len(objects), len(axes_flat)):
         axes_flat[idx].set_visible(False)
@@ -1652,7 +1676,7 @@ def plot_run11_unsafe(max_iter: int = 100_000, ema_alpha: float = 0.999):
             ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
             ax.set_ylim(0, 60)
             ax.set_xlim(0, max_iter)
-            ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+            _format_iter_axis(ax)
             ax.tick_params(labelsize=5)
         for idx in range(len(objects), len(axes_flat)):
             axes_flat[idx].set_visible(False)
@@ -1845,7 +1869,7 @@ def plot_failure_mode_detail(objects=("basketball_shoe", "teddy_bear"),
 
             ax.set_xlim(0, max_iter)
             ax.set_ylim(0, 30)
-            ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+            _format_iter_axis(ax)
             ax.tick_params(labelsize=6)
             if row == 0:
                 ax.set_title(method, fontsize=9)
@@ -1958,7 +1982,7 @@ def plot_per_object_term_real_head_to_head(max_iter: int = 100_000, ema_alpha: f
         ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
         ax.set_ylim(0, 2)
         ax.set_xlim(0, max_iter)
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        _format_iter_axis(ax)
         ax.tick_params(labelsize=5)
 
     for idx in range(len(OBJECTS), len(axes_flat)):
@@ -2005,7 +2029,7 @@ def plot_per_object_lift_head_to_head_run5(max_iter: int = 100_000, ema_alpha: f
         ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
         ax.set_ylim(0, 100)
         ax.set_xlim(0, max_iter)
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        _format_iter_axis(ax)
         ax.tick_params(labelsize=5)
 
     for idx in range(len(OBJECTS), len(axes_flat)):
@@ -2058,11 +2082,820 @@ def plot_termination_breakdown(max_iter: int = 100_000, smooth: int = 1000):
     ax.set_ylabel("Termination rate (%)")
     ax.set_xlim(0, max_iter)
     ax.set_ylim(0, 50)
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+    _format_iter_axis(ax)
     ax.legend(loc="upper right", fontsize=6)
     ax.set_title("Termination Breakdown: Real Unsafe vs Physics Instability")
 
     save_fig(fig, "termination_breakdown")
+
+
+# ============================================================================
+# run14 — SafeDagger threshold calibration sweep (exp_04)
+# ============================================================================
+
+# (label, threshold, eval_json_filename, category)
+# category: "bc" (β→1, teacher always overrides), "swept" (SafeDagger), "dagger" (β=0)
+RUN14_SWEEP = [
+    ("BC",     None, "student_eval_metrics_20260413_233515.json", "bc"),
+    ("0.5",    0.5,  "student_eval_metrics_20260415_171638.json", "swept"),
+    ("1.0",    1.0,  "student_eval_metrics_20260415_201147.json", "swept"),
+    ("2.0",    2.0,  "student_eval_metrics_20260405_224012.json", "swept"),
+    ("2.2",    2.2,  "student_eval_metrics_20260416_011300.json", "swept"),
+    ("2.4",    2.4,  "student_eval_metrics_20260416_011406.json", "swept"),
+    ("2.6",    2.6,  "student_eval_metrics_20260416_011458.json", "swept"),
+    ("2.8",    2.8,  "student_eval_metrics_20260416_102642.json", "swept"),
+    ("3.0",    3.0,  "student_eval_metrics_20260416_102648.json", "swept"),
+    ("3.2",    3.2,  "student_eval_metrics_20260416_102808.json", "swept"),
+    ("3.4",    3.4,  "student_eval_metrics_20260416_102733.json", "swept"),
+    ("3.6",    3.6,  "student_eval_metrics_20260416_175222.json", "swept"),
+    ("3.8",    3.8,  "student_eval_metrics_20260416_175236.json", "swept"),
+    ("DAgger", None, "student_eval_metrics_20260415_170358.json", "dagger"),
+]
+
+RUN14_SUBDIR = "run14"
+
+
+def _load_run14_data():
+    """Load eval JSONs for all run14 sweep points."""
+    import json
+    eval_dir = EXPORTS_DIR / "eval_results"
+    data = []
+    for label, thr, fname, cat in RUN14_SWEEP:
+        path = eval_dir / fname
+        if not path.exists():
+            print(f"  [run14] missing: {path.name}")
+            continue
+        with open(path) as fh:
+            j = json.load(fh)
+        data.append({"label": label, "threshold": thr,
+                     "category": cat, "json": j})
+    return data
+
+
+def _agg_unsafe(metrics_dict, exclude_physics: bool) -> float:
+    """Aggregate unsafe rate (%) from eval metrics['eval/...'] block."""
+    total = metrics_dict.get("eval/unsafe_episode_rate", 0) * 100
+    if exclude_physics:
+        phys = metrics_dict.get("eval/unsafe_reason_prop", {}).get(
+            "physics_instability", 0) * 100
+        return max(total - phys, 0)
+    return total
+
+
+def _per_obj_unsafe(obj_metrics: dict, exclude_physics: bool) -> float:
+    """Per-object unsafe rate (%) with optional physics exclusion."""
+    total = obj_metrics.get("unsafe_episode_rate", 0) * 100
+    if exclude_physics:
+        phys = obj_metrics.get("unsafe_reason_prop", {}).get(
+            "physics_instability", 0) * 100
+        return max(total - phys, 0)
+    return total
+
+
+def _run14_category_colors(data):
+    """Color each x-tick label by category (BC / swept / DAgger)."""
+    cat_color = {"bc": COLORS["green"], "swept": COLORS["blue"],
+                 "dagger": COLORS["orange"]}
+    return [cat_color[d["category"]] for d in data]
+
+
+def _run14_delta_label(d: dict) -> str:
+    """Pure-delta display label: BC → '0', DAgger → '∞', else threshold."""
+    if d["category"] == "bc":
+        return "0"
+    if d["category"] == "dagger":
+        return r"$\infty$"
+    return d["label"]
+
+
+SAFETY_THRESHOLD_XLABEL = r"Safety Threshold $\delta$"
+
+
+def _run14_apply_xaxis(ax, data, include_teacher: bool = False,
+                       bold_idx=(), fontsize: int = 6):
+    """Shared x-axis setup for run14 plots.
+
+    x-tick labels use pure delta (Teacher | 0 | 0.5 | ... | ∞).
+    include_teacher=True adds a leftmost 'Teacher' column at x=0.
+    Separators are drawn between Teacher/BC/swept/DAgger regions.
+    """
+    offset = 1 if include_teacher else 0
+    labels = []
+    if include_teacher:
+        labels.append("Teacher")
+    labels.extend(_run14_delta_label(d) for d in data)
+    x = np.arange(len(labels))
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=fontsize)
+
+    # Color x-tick labels by category
+    colors = []
+    if include_teacher:
+        colors.append(COLORS["gray"])
+    colors.extend(_run14_category_colors(data))
+    for tick, c in zip(ax.get_xticklabels(), colors):
+        tick.set_color(c)
+
+    # Bold specific x-tick labels (e.g., top-lift thresholds)
+    xticklabels = ax.get_xticklabels()
+    for bi in bold_idx:
+        idx = bi + offset
+        if idx < len(xticklabels):
+            xticklabels[idx].set_fontweight("bold")
+
+    # Vertical separators
+    bc_idx = [i + offset for i, d in enumerate(data) if d["category"] == "bc"]
+    sw_idx = [i + offset for i, d in enumerate(data) if d["category"] == "swept"]
+    da_idx = [i + offset for i, d in enumerate(data) if d["category"] == "dagger"]
+    if include_teacher:
+        ax.axvline(0.5, color="black", linestyle="-",
+                   linewidth=0.8, alpha=0.7)
+    if bc_idx and sw_idx:
+        ax.axvline(max(bc_idx) + 0.5, color="gray",
+                   linestyle="--", linewidth=0.5, alpha=0.6)
+    if da_idx and sw_idx:
+        ax.axvline(min(da_idx) - 0.5, color="gray",
+                   linestyle="--", linewidth=0.5, alpha=0.6)
+
+    ax.set_xlabel(SAFETY_THRESHOLD_XLABEL)
+    return x
+
+
+def plot_run14_primary_sweep(exclude_physics: bool = True):
+    """Aggregate lift & unsafe vs. threshold across the run14 sweep."""
+    data = _load_run14_data()
+    if not data:
+        return
+
+    lifts = [d["json"]["metrics"]["eval/lift_success"] * 100 for d in data]
+    unsafes = [_agg_unsafe(d["json"]["metrics"], exclude_physics) for d in data]
+
+    fig, (ax_l, ax_u) = plt.subplots(1, 2, figsize=(16/2.54, 7/2.54))
+
+    colors_pt = _run14_category_colors(data)
+    bc_idx = [i for i, d in enumerate(data) if d["category"] == "bc"]
+    da_idx = [i for i, d in enumerate(data) if d["category"] == "dagger"]
+    sw_idx = [i for i, d in enumerate(data) if d["category"] == "swept"]
+
+    for ax, ys, ylabel, title in [
+        (ax_l, lifts, "Lift success (%)", "Lift"),
+        (ax_u, unsafes,
+         "Unsafe rate (%)" if exclude_physics else "Unsafe rate — total (%)",
+         "Unsafe" + ("" if exclude_physics else " (incl. physics)")),
+    ]:
+        x = _run14_apply_xaxis(ax, data, include_teacher=False)
+        if sw_idx:
+            ax.plot([x[i] for i in sw_idx], [ys[i] for i in sw_idx],
+                    color=COLORS["blue"], linewidth=1.3, alpha=0.7, zorder=2)
+        for i, y in enumerate(ys):
+            ax.plot(x[i], y, "o", color=colors_pt[i], markersize=5,
+                    markeredgecolor="white", markeredgewidth=0.5, zorder=3)
+            ax.annotate(f"{y:.0f}", (x[i], y), xytext=(0, 5),
+                        textcoords="offset points", ha="center", fontsize=5)
+        if bc_idx:
+            ax.axhline(ys[bc_idx[0]], color=COLORS["green"],
+                       linestyle=":", linewidth=0.6, alpha=0.5)
+        if da_idx:
+            ax.axhline(ys[da_idx[0]], color=COLORS["orange"],
+                       linestyle=":", linewidth=0.6, alpha=0.5)
+        ax.set_ylabel(ylabel)
+        ax.set_ylim(0, max(ys) * 1.15 + 5)
+        ax.set_title(title, fontsize=8)
+
+    fig.suptitle(
+        "Run 14 — Threshold sweep: lift vs. unsafe rate"
+        + ("" if exclude_physics else " (incl. physics)"), fontsize=9)
+    fig.tight_layout()
+
+    fname = ("run14_primary_sweep"
+             if exclude_physics else "run14_primary_sweep_with_physics")
+    save_fig(fig, fname, subdir=RUN14_SUBDIR)
+
+
+TEACHER11_EVAL_JSON = "teacher_eval_metrics_20260414_031655.json"
+
+
+def _load_teacher11_per_object():
+    """Return per-object lift/unsafe for Teacher 11 (2600-ep eval)."""
+    import json
+    path = EXPORTS_DIR / "eval_results" / TEACHER11_EVAL_JSON
+    with open(path) as fh:
+        d = json.load(fh)
+    po = d.get("per_object_metrics", {})
+    out = {}
+    for obj, m in po.items():
+        out[obj] = {
+            "lift_success": m.get("eval/lift_success", 0),
+            "unsafe_episode_rate": m.get("eval/unsafe_episode_rate", 0),
+            "unsafe_reason_pct": m.get("eval/out_of_reach_reason_pct", {}),
+        }
+    return out
+
+
+def _teacher_per_obj_unsafe(teacher_po: dict, obj: str,
+                            exclude_physics: bool) -> float:
+    """Teacher per-object unsafe rate (%), optionally excl. physics.
+
+    Teacher eval stores reasons as PERCENTAGES of unsafe episodes (not of all),
+    so phys_pct_of_all = (unsafe × phys_pct_of_unsafe / 100).
+    """
+    m = teacher_po.get(obj, {})
+    total = m.get("unsafe_episode_rate", 0) * 100
+    if not exclude_physics:
+        return total
+    phys_pct_of_unsafe = m.get("unsafe_reason_pct", {}).get(
+        "physics_instability", 0)
+    phys_pct_of_all = total * phys_pct_of_unsafe / 100.0
+    return max(total - phys_pct_of_all, 0)
+
+
+def _run14_collect_per_object(data, metric: str, exclude_physics: bool = True):
+    """Return (n_thresholds, n_objects) array of per-object values.
+
+    metric: 'lift' or 'unsafe'.
+    """
+    n_t, n_o = len(data), len(OBJECTS_TOP8)
+    mat = np.zeros((n_t, n_o))
+    for j, d in enumerate(data):
+        for i, obj in enumerate(OBJECTS_TOP8):
+            m = d["json"].get("per_object_metrics", {}).get(obj, {})
+            if metric == "lift":
+                mat[j, i] = m.get("lift_success", 0) * 100
+            else:
+                mat[j, i] = _per_obj_unsafe(m, exclude_physics)
+    return mat
+
+
+def _draw_bg_bars(ax, x_positions, values, color=None):
+    """Draw faded background bars at given x positions showing per-x average."""
+    if color is None:
+        color = COLORS["gray"]
+    ax.bar(x_positions, values, width=0.8, color=color,
+           alpha=0.18, edgecolor="none", zorder=1)
+
+
+def plot_run14_per_object_lift_lineplot():
+    """Per-object lift across the threshold sweep, Teacher 11 reference,
+    best-lift thresholds highlighted, with background average bars."""
+    data = _load_run14_data()
+    if not data:
+        return
+    teacher_po = _load_teacher11_per_object()
+
+    fig, ax = plt.subplots(figsize=(16/2.54, 8/2.54))
+    x = _run14_apply_xaxis(ax, data, include_teacher=True)
+
+    student = _run14_collect_per_object(data, "lift")  # (n_thr, 8)
+    means = student.mean(axis=1)
+    teacher_vals = np.array([teacher_po.get(o, {}).get("lift_success", 0) * 100
+                             for o in OBJECTS_TOP8])
+    teacher_mean = teacher_vals.mean()
+
+    # Top-2 thresholds by mean lift
+    best_k = 2
+    best_idx = np.argsort(-means)[:best_k]
+    for bi in best_idx:
+        ax.axvspan(bi + 1 - 0.4, bi + 1 + 0.4,
+                   color=COLORS["green"], alpha=0.12, zorder=0)
+
+    # Background average bars (Teacher + each sweep point)
+    bar_x = np.concatenate([[0], np.arange(1, len(data) + 1)])
+    bar_y = np.concatenate([[teacher_mean], means])
+    _draw_bg_bars(ax, bar_x, bar_y)
+
+    # Per-object lines
+    obj_colors = [plt.cm.tab10(i) for i in range(len(OBJECTS_TOP8))]
+    for i, (obj, color) in enumerate(zip(OBJECTS_TOP8, obj_colors)):
+        line_y = [teacher_vals[i]] + [student[j, i] for j in range(len(data))]
+        ax.plot(x, line_y, "-", color=color, linewidth=0.9, alpha=0.85, zorder=2)
+        ax.plot(x[1:], line_y[1:], "o", color=color, markersize=3,
+                alpha=0.95, zorder=3, label=obj.replace("_", " "))
+        ax.plot(x[0], line_y[0], marker="s", color=color, markersize=5,
+                markeredgecolor="black", markeredgewidth=0.9, zorder=4)
+
+    # Re-apply axis with bold top thresholds
+    _run14_apply_xaxis(ax, data, include_teacher=True, bold_idx=tuple(best_idx))
+
+    ax.set_ylabel("Lift success (%)")
+    ax.set_ylim(0, 105)
+    ax.set_title(
+        "Run 14 — Per-object lift across threshold sweep (vs. Teacher 11)",
+        fontsize=8)
+
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    obj_handles = [Line2D([0], [0], marker="o", linestyle="-",
+                          color=c, markersize=3,
+                          label=o.replace("_", " "))
+                   for o, c in zip(OBJECTS_TOP8, obj_colors)]
+    ref_handles = [
+        Line2D([0], [0], marker="s", linestyle="",
+               color="gray", markeredgecolor="black", markeredgewidth=0.9,
+               markersize=5, label="Teacher 11 (priv.)"),
+        Patch(facecolor=COLORS["gray"], alpha=0.3,
+              label="Avg over 8 objects"),
+        Patch(facecolor=COLORS["green"], alpha=0.25,
+              label=f"Top-{best_k} lift thresholds"),
+    ]
+    leg1 = ax.legend(handles=obj_handles, fontsize=5,
+                     loc="center left", bbox_to_anchor=(1.01, 0.7),
+                     frameon=False, title="Object", title_fontsize=5.5)
+    ax.add_artist(leg1)
+    ax.legend(handles=ref_handles, fontsize=5,
+              loc="center left", bbox_to_anchor=(1.01, 0.15),
+              frameon=False)
+
+    fig.tight_layout()
+    save_fig(fig, "run14_per_object_lift_lineplot", subdir=RUN14_SUBDIR)
+
+    labels_dbg = [_run14_delta_label(d) for d in data]
+    print("  [run14] top lift thresholds (mean across 8 objects):")
+    for bi in best_idx:
+        print(f"    δ={labels_dbg[bi]}  mean_lift={means[bi]:.1f}%")
+
+
+def plot_run14_per_object_unsafe_lineplot(exclude_physics: bool = True):
+    """Per-object unsafe rate vs. threshold — line plot including Teacher 11,
+    with background average bars."""
+    data = _load_run14_data()
+    if not data:
+        return
+    teacher_po = _load_teacher11_per_object()
+
+    fig, ax = plt.subplots(figsize=(16/2.54, 8/2.54))
+    x = _run14_apply_xaxis(ax, data, include_teacher=True)
+
+    student = _run14_collect_per_object(data, "unsafe",
+                                        exclude_physics=exclude_physics)
+    means = student.mean(axis=1)
+    teacher_vals = np.array([_teacher_per_obj_unsafe(teacher_po, o, exclude_physics)
+                             for o in OBJECTS_TOP8])
+    teacher_mean = teacher_vals.mean()
+
+    # Background average bars
+    bar_x = np.concatenate([[0], np.arange(1, len(data) + 1)])
+    bar_y = np.concatenate([[teacher_mean], means])
+    _draw_bg_bars(ax, bar_x, bar_y)
+
+    # Per-object lines
+    obj_colors = [plt.cm.tab10(i) for i in range(len(OBJECTS_TOP8))]
+    for i, (obj, color) in enumerate(zip(OBJECTS_TOP8, obj_colors)):
+        line_y = [teacher_vals[i]] + [student[j, i] for j in range(len(data))]
+        ax.plot(x, line_y, "-", color=color, linewidth=0.9, alpha=0.85, zorder=2)
+        ax.plot(x[1:], line_y[1:], "o", color=color, markersize=3,
+                alpha=0.95, zorder=3, label=obj.replace("_", " "))
+        ax.plot(x[0], line_y[0], marker="s", color=color, markersize=5,
+                markeredgecolor="black", markeredgewidth=0.9, zorder=4)
+
+    ax.set_ylabel("Unsafe rate (%)" if exclude_physics
+                  else "Unsafe rate — total (%)")
+    ax.set_ylim(0, 105)
+    ax.set_title(
+        "Run 14 — Per-object unsafe rate across threshold sweep (vs. Teacher 11)"
+        + ("" if exclude_physics else " (incl. physics)"),
+        fontsize=8)
+
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    obj_handles = [Line2D([0], [0], marker="o", linestyle="-",
+                          color=c, markersize=3,
+                          label=o.replace("_", " "))
+                   for o, c in zip(OBJECTS_TOP8, obj_colors)]
+    ref_handles = [
+        Line2D([0], [0], marker="s", linestyle="",
+               color="gray", markeredgecolor="black", markeredgewidth=0.9,
+               markersize=5, label="Teacher 11 (priv.)"),
+        Patch(facecolor=COLORS["gray"], alpha=0.3,
+              label="Avg over 8 objects"),
+    ]
+    leg1 = ax.legend(handles=obj_handles, fontsize=5,
+                     loc="center left", bbox_to_anchor=(1.01, 0.7),
+                     frameon=False, title="Object", title_fontsize=5.5)
+    ax.add_artist(leg1)
+    ax.legend(handles=ref_handles, fontsize=5,
+              loc="center left", bbox_to_anchor=(1.01, 0.15),
+              frameon=False)
+
+    fig.tight_layout()
+    fname = ("run14_per_object_unsafe_lineplot"
+             if exclude_physics
+             else "run14_per_object_unsafe_lineplot_with_physics")
+    save_fig(fig, fname, subdir=RUN14_SUBDIR)
+
+
+def _plot_run14_per_object_individual(metric: str,
+                                      exclude_physics: bool = True):
+    """Generate one standalone figure per object — lift or unsafe across
+    threshold sweep. Saved to a subfolder for standalone use in report layout.
+    """
+    data = _load_run14_data()
+    if not data:
+        return
+    teacher_po = _load_teacher11_per_object()
+
+    if metric == "lift":
+        student = _run14_collect_per_object(data, "lift")
+        teacher_vals = np.array(
+            [teacher_po.get(o, {}).get("lift_success", 0) * 100
+             for o in OBJECTS_TOP8])
+        ylabel = "Lift success (%)"
+        subdir = f"{RUN14_SUBDIR}/per_object_lift"
+    else:
+        student = _run14_collect_per_object(data, "unsafe",
+                                            exclude_physics=exclude_physics)
+        teacher_vals = np.array(
+            [_teacher_per_obj_unsafe(teacher_po, o, exclude_physics)
+             for o in OBJECTS_TOP8])
+        ylabel = ("Unsafe rate (%)" if exclude_physics
+                  else "Unsafe rate — total (%)")
+        subdir = (f"{RUN14_SUBDIR}/per_object_unsafe" if exclude_physics
+                  else f"{RUN14_SUBDIR}/per_object_unsafe_with_physics")
+
+    means = student.mean(axis=1)
+    best_idx = np.argsort(-means)[:2] if metric == "lift" else ()
+
+    obj_colors = [plt.cm.tab10(i) for i in range(len(OBJECTS_TOP8))]
+
+    for i, obj in enumerate(OBJECTS_TOP8):
+        fig, ax = plt.subplots(figsize=(10/2.54, 6/2.54))
+        x = _run14_apply_xaxis(ax, data, include_teacher=True,
+                               bold_idx=tuple(best_idx), fontsize=6)
+
+        for bi in best_idx:
+            ax.axvspan(bi + 1 - 0.4, bi + 1 + 0.4,
+                       color=COLORS["green"], alpha=0.12, zorder=0)
+
+        color = obj_colors[i]
+        line_y = [teacher_vals[i]] + [student[j, i] for j in range(len(data))]
+        ax.plot(x, line_y, "-", color=color, linewidth=1.1,
+                alpha=0.9, zorder=2)
+        ax.plot(x[1:], line_y[1:], "o", color=color, markersize=3.5,
+                markeredgecolor="white", markeredgewidth=0.4, zorder=3)
+        ax.plot(x[0], line_y[0], marker="s", color=color, markersize=5.5,
+                markeredgecolor="black", markeredgewidth=0.9, zorder=4)
+
+        ax.set_ylabel(ylabel)
+        ax.set_ylim(0, 105)
+        ax.set_title(obj.replace("_", " "), fontsize=9)
+        fig.tight_layout()
+
+        suffix = "_with_physics" if (metric == "unsafe"
+                                     and not exclude_physics) else ""
+        save_fig(fig, f"{obj}{suffix}", subdir=subdir)
+
+
+def plot_run14_per_object_lift_individual():
+    _plot_run14_per_object_individual("lift")
+
+
+def plot_run14_per_object_unsafe_individual(exclude_physics: bool = True):
+    _plot_run14_per_object_individual("unsafe",
+                                      exclude_physics=exclude_physics)
+
+
+def plot_run14_ablation_lift_over_training(
+        max_iter: int = 100_000,
+        smooth_window: int = 100,
+        best_sd_csv: str = "student_run14d_safedagger_t3.0.csv",
+        best_sd_label: str = "SafeDagger (δ=3.0)"):
+    """Episode-level hold-gated lift success over training — BC vs. best
+    SafeDagger vs. DAgger. Uses `train/avg/lift_success`.
+    """
+    runs = [
+        ("BC",             "student_run9c_bc_teacher11.csv",     32, COLORS["green"]),
+        (best_sd_label,    best_sd_csv,                          32, COLORS["blue"]),
+        ("DAgger",         "student_run14a_dagger_32envs.csv",   32, COLORS["orange"]),
+    ]
+
+    fig, ax = plt.subplots(figsize=(14/2.54, 10.5/2.54))
+
+    for label, csv, n_envs, color in runs:
+        df = _load_distillation_metric(
+            csv, "train/avg/lift_success", n_envs,
+            max_iter=max_iter, smooth_window=smooth_window)
+        if df.empty:
+            print(f"  [ablation lift] skipped {csv}")
+            continue
+        ax.plot(df["iteration"], df["value_smooth"] * 100,
+                color=color, linewidth=1.2, alpha=0.95, label=label)
+
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Lift success (%)")
+    ax.set_xlim(0, max_iter)
+    ax.set_ylim(0, 100)
+    _format_iter_axis(ax)
+    ax.set_title(
+        "Hold-gated lift success during training — BC vs. SafeDagger vs. DAgger",
+        fontsize=8)
+    ax.legend(loc="lower right", fontsize=7)
+    fig.tight_layout()
+    save_fig(fig, "run14_ablation_lift_over_training",
+             subdir=f"{RUN14_SUBDIR}/ablation")
+
+
+def plot_run14_ablation_unsafe_over_training(
+        max_iter: int = 100_000,
+        smooth_window: int = 100,
+        exclude_physics: bool = True,
+        best_sd_csv: str = "student_run14d_safedagger_t3.0.csv",
+        best_sd_label: str = "SafeDagger (δ=3.0)"):
+    """Episode-level unsafe rate over training — BC vs. best SafeDagger vs. DAgger.
+
+    Uses `train/avg/unsafe_episode_rate`. If `exclude_physics=True`, subtracts
+    `train/avg/unsafe_reason_prop/physics_instability` (fraction of all
+    episodes). Smoothed with a rolling mean.
+    """
+    runs = [
+        ("BC",             "student_run9c_bc_teacher11.csv",     32, COLORS["green"]),
+        (best_sd_label,    best_sd_csv,                          32, COLORS["blue"]),
+        ("DAgger",         "student_run14a_dagger_32envs.csv",   32, COLORS["orange"]),
+    ]
+
+    fig, ax = plt.subplots(figsize=(14/2.54, 10.5/2.54))
+
+    for label, csv, n_envs, color in runs:
+        total = _load_distillation_metric(
+            csv, "train/avg/unsafe_episode_rate", n_envs,
+            max_iter=max_iter, smooth_window=smooth_window)
+        if total.empty:
+            print(f"  [ablation unsafe] skipped {csv}")
+            continue
+        y = total["value_smooth"].values * 100
+        if exclude_physics:
+            phys = _load_distillation_metric(
+                csv, "train/avg/unsafe_reason_prop/physics_instability",
+                n_envs, max_iter=max_iter, smooth_window=smooth_window)
+            if not phys.empty:
+                # align on iteration (both series share the same step grid)
+                phys_vals = phys["value_smooth"].values * 100
+                n = min(len(y), len(phys_vals))
+                y = np.clip(y[:n] - phys_vals[:n], 0, None)
+                iters = total["iteration"].values[:n]
+            else:
+                iters = total["iteration"].values
+        else:
+            iters = total["iteration"].values
+        ax.plot(iters, y, color=color, linewidth=1.2, alpha=0.95,
+                label=label)
+
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Unsafe rate (%)" if exclude_physics
+                  else "Unsafe rate — total (%)")
+    ax.set_xlim(0, max_iter)
+    ax.set_ylim(0, 100)
+    _format_iter_axis(ax)
+    ax.set_title(
+        "Unsafe episode rate during training — BC vs. SafeDagger vs. DAgger"
+        + ("" if exclude_physics else " (incl. physics)"), fontsize=8)
+    ax.legend(loc="upper right", fontsize=7)
+    fig.tight_layout()
+
+    fname = ("run14_ablation_unsafe_over_training"
+             if exclude_physics
+             else "run14_ablation_unsafe_over_training_with_physics")
+    save_fig(fig, fname, subdir=f"{RUN14_SUBDIR}/ablation")
+
+
+def plot_run14_ablation_unsafe(exclude_physics: bool = True,
+                               best_sd_label: str = "3.0"):
+    """Aggregate unsafe-rate comparison: BC vs. best SafeDagger vs. DAgger.
+
+    Second-ablation-study figure: 3 bars showing unsafe episode rate
+    (excl. physics by default; `exclude_physics=False` for appendix variant).
+    Teacher 11 drawn as a dashed reference line.
+    """
+    data = _load_run14_data()
+    if not data:
+        return
+
+    # Pick the three methods of interest
+    by_label = {d["label"]: d for d in data}
+    bc = by_label.get("BC")
+    sd = by_label.get(best_sd_label)
+    da = by_label.get("DAgger")
+    if bc is None or sd is None or da is None:
+        print("  [run14 ablation] missing BC/SD/DAgger run")
+        return
+
+    teacher_po = _load_teacher11_per_object()
+    teacher_unsafe = np.mean([
+        _teacher_per_obj_unsafe(teacher_po, o, exclude_physics)
+        for o in OBJECTS_TOP8
+    ])
+
+    entries = [
+        ("BC",                     bc, COLORS["green"]),
+        (f"SafeDagger (δ={best_sd_label})", sd, COLORS["blue"]),
+        ("DAgger",                 da, COLORS["orange"]),
+    ]
+
+    labels = [e[0] for e in entries]
+    values = [_agg_unsafe(e[1]["json"]["metrics"], exclude_physics)
+              for e in entries]
+    colors = [e[2] for e in entries]
+
+    fig, ax = plt.subplots(figsize=(10/2.54, 6/2.54))
+    x = np.arange(len(entries))
+    bars = ax.bar(x, values, width=0.6, color=colors,
+                  edgecolor="white", linewidth=0.8)
+    for bar, v in zip(bars, values):
+        ax.text(bar.get_x() + bar.get_width() / 2, v + 1.5,
+                f"{v:.1f}%", ha="center", va="bottom", fontsize=7)
+
+    ax.axhline(teacher_unsafe, color=COLORS["gray"], linestyle="--",
+               linewidth=0.9, alpha=0.9)
+    ax.text(len(entries) - 0.5, teacher_unsafe + 1.2,
+            f"Teacher 11 ({teacher_unsafe:.1f}%)",
+            fontsize=6, color=COLORS["gray"], ha="right", va="bottom")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=7)
+    ax.set_ylabel("Unsafe rate (%)" if exclude_physics
+                  else "Unsafe rate — total (%)")
+    ax.set_ylim(0, max(max(values), teacher_unsafe) * 1.25)
+    ax.set_title(
+        "Unsafe episode rate — BC vs. SafeDagger vs. DAgger"
+        + ("" if exclude_physics else " (incl. physics)"), fontsize=8)
+    fig.tight_layout()
+
+    fname = ("run14_ablation_unsafe"
+             if exclude_physics
+             else "run14_ablation_unsafe_with_physics")
+    save_fig(fig, fname, subdir=f"{RUN14_SUBDIR}/ablation")
+
+
+RUN14_BETA_RUNS = [
+    # (threshold, csv_name, num_envs)
+    (0.5, "student_run14f_safedagger_t0.5.csv",  32),
+    (1.0, "student_run14g_safedagger_t1.0.csv",  32),
+    (2.0, "student_run10b_safedagger_32envs.csv", 32),
+    (2.2, "student_run14b_safedagger_t2.2.csv",  32),
+    (2.4, "student_run14c_safedagger_t2.4.csv",  32),
+    (2.6, "student_run14h_safedagger_t2.6.csv",  32),
+    (2.8, "student_run14i_safedagger_t2.8.csv",  32),
+    (3.0, "student_run14d_safedagger_t3.0.csv",  32),
+    (3.2, "student_run14j_safedagger_t3.2.csv",  32),
+    (3.4, "student_run14k_safedagger_t3.4.csv",  32),
+    (3.6, "student_run14e_safedagger_t3.6.csv",  32),
+    (3.8, "student_run14l_safedagger_t3.8.csv",  32),
+]
+
+
+def plot_run14_beta_sweep(max_iter: int = 100_000, smooth_window: int = 2000):
+    """Intervention rate β(t) across the full SafeDagger threshold sweep.
+
+    Low-δ runs (teacher intervenes often) → β stays near 1.
+    High-δ runs (teacher rarely intervenes) → β decays quickly toward 0.
+    BC (β=1) and DAgger (β=0) drawn as dashed reference lines.
+    """
+    thrs = np.array([t for t, _, _ in RUN14_BETA_RUNS])
+    norm = mpl.colors.Normalize(vmin=thrs.min(), vmax=thrs.max())
+    cmap = plt.cm.viridis
+
+    fig, ax = plt.subplots(figsize=(14/2.54, 10.5/2.54))
+
+    # BC and DAgger reference lines (above/below the data area)
+    ax.axhline(1.0, color=COLORS["green"], linestyle="--",
+               linewidth=1.0, alpha=0.9, zorder=5)
+    ax.text(max_iter * 0.98, 1.02, "BC",
+            fontsize=7, color=COLORS["green"],
+            va="bottom", ha="right", zorder=6)
+    ax.axhline(0.0, color=COLORS["orange"], linestyle="--",
+               linewidth=1.0, alpha=0.9, zorder=5)
+    ax.text(max_iter * 0.98, -0.02, "DAgger",
+            fontsize=7, color=COLORS["orange"],
+            va="top", ha="right", zorder=6)
+
+    for thr, csv_name, n_envs in RUN14_BETA_RUNS:
+        df = _load_distillation_metric(csv_name, "beta", n_envs,
+                                       max_iter=max_iter,
+                                       smooth_window=smooth_window)
+        if df.empty:
+            print(f"  [run14 β] skipped missing {csv_name}")
+            continue
+        color = cmap(norm(thr))
+        ax.plot(df["iteration"], df["value_smooth"],
+                color=color, linewidth=1.0, alpha=0.95, zorder=3)
+
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel(r"Intervention rate ($\beta$)")
+    ax.set_xlim(0, max_iter)
+    ax.set_ylim(-0.08, 1.08)
+    _format_iter_axis(ax)
+    ax.set_title("SafeDagger intervention rate across threshold sweep",
+                 fontsize=8)
+
+    # Colorbar for threshold mapping
+    sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, shrink=0.85, pad=0.02)
+    cbar.set_label(r"Safety Threshold $\delta$", fontsize=7)
+    cbar.ax.tick_params(labelsize=6)
+    cbar.set_ticks(thrs)
+
+    fig.tight_layout()
+    save_fig(fig, "run14_beta_sweep",
+             subdir=f"{RUN14_SUBDIR}/calibration")
+
+
+def plot_run14_dagger_l2_calibration(max_iter: int = 100_000,
+                                     mean_window: int = 100,
+                                     p70_window: int = 500):
+    """DAgger (run14a) L2 loss over training — basis for the SafeDagger
+    threshold sweep range.
+
+    Moving mean uses a short window (noisy, shows training dynamics); p70 uses
+    a longer window (smoother reference for calibration).
+    """
+    df = _load_distillation_metric(
+        "student_run14a_dagger_32envs.csv", "l2_loss_mean",
+        num_envs=32, max_iter=max_iter, smooth_window=mean_window)
+    if df.empty:
+        return
+
+    iters = df["iteration"].values
+    raw = df["value"].values
+    smooth = df["value_smooth"].values  # already w=mean_window
+
+    # Rolling p70 over a larger window for a smoother calibration reference
+    s = pd.Series(raw, index=iters)
+    roll_p70 = s.rolling(p70_window, min_periods=1,
+                         center=True).quantile(0.70).values
+
+    fig, ax = plt.subplots(figsize=(14/2.54, 10.5/2.54))
+
+    # Calibration range band
+    ax.axhspan(2.0, 4.0, color=COLORS["green"], alpha=0.08, zorder=0,
+               label="Calibration range (2.0 – 4.0)")
+
+    # Swept thresholds — light horizontal dotted lines
+    sweep_thrs = [0.5, 1.0, 2.0, 2.2, 2.4, 2.6, 2.8, 3.0, 3.2, 3.4]
+    for thr in sweep_thrs:
+        ax.axhline(thr, color="gray", linestyle=":",
+                   linewidth=0.5, alpha=0.5, zorder=1)
+
+    # Moving mean — lighter reference underneath
+    ax.plot(iters, smooth, color=COLORS["blue"], linewidth=0.7,
+            alpha=0.55,
+            label=f"Moving mean (w={mean_window})", zorder=2)
+
+    # Rolling p70 — pronounced foreground line
+    ax.plot(iters, roll_p70, color=COLORS["red"], linewidth=1.6,
+            alpha=1.0,
+            label=f"Rolling p70 (w={p70_window})", zorder=4)
+
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("L2 loss")
+    ax.set_xlim(0, max_iter)
+    ax.set_ylim(0, 8)
+    _format_iter_axis(ax)
+    ax.set_title("DAgger L2 over training", fontsize=8)
+    ax.legend(fontsize=5, loc="upper right")
+    fig.tight_layout()
+    save_fig(fig, "run14a_l2_calibration",
+             subdir=f"{RUN14_SUBDIR}/calibration")
+
+
+def plot_run14_per_object_unsafe_heatmap(exclude_physics: bool = True):
+    """Per-object unsafe rate vs. threshold — heatmap (objects × thresholds)."""
+    data = _load_run14_data()
+    if not data:
+        return
+
+    matrix = _run14_collect_per_object(data, "unsafe",
+                                       exclude_physics=exclude_physics).T
+    # matrix shape: (n_objects, n_thresholds)
+
+    fig, ax = plt.subplots(figsize=(16/2.54, 7/2.54))
+    im = ax.imshow(matrix, cmap="Reds", aspect="auto",
+                   vmin=0, vmax=100, interpolation="nearest")
+
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            v = matrix[i, j]
+            c = "white" if v > 55 else "black"
+            ax.text(j, i, f"{v:.0f}", ha="center", va="center",
+                    fontsize=5, color=c)
+
+    _run14_apply_xaxis(ax, data, include_teacher=False)
+    ax.set_yticks(np.arange(len(OBJECTS_TOP8)))
+    ax.set_yticklabels([o.replace("_", " ") for o in OBJECTS_TOP8], fontsize=6)
+
+    cbar = fig.colorbar(im, ax=ax, shrink=0.85, pad=0.02)
+    cbar.set_label("Unsafe rate (%)" if exclude_physics
+                   else "Unsafe rate — total (%)", fontsize=7)
+    cbar.ax.tick_params(labelsize=6)
+
+    ax.set_title(
+        "Run 14 — Per-object unsafe rate"
+        + ("" if exclude_physics else " (incl. physics)"),
+        fontsize=8)
+    fig.tight_layout()
+
+    fname = ("run14_per_object_unsafe_heatmap"
+             if exclude_physics
+             else "run14_per_object_unsafe_heatmap_with_physics")
+    save_fig(fig, fname, subdir=RUN14_SUBDIR)
 
 
 # ============================================================================
@@ -2115,6 +2948,17 @@ def main():
             plot_run9_single_object_single_reason(obj=_obj, reason=_reason)
     plot_run("run10", DISTILLATION_RUNS_10, OBJECTS_TOP8, eval_files=RUN10_EVAL_FILES)
     plot_run11_unsafe()
+    # Run 14 — threshold calibration sweep
+    plot_run14_primary_sweep(exclude_physics=True)
+    plot_run14_primary_sweep(exclude_physics=False)
+    plot_run14_per_object_unsafe_lineplot(exclude_physics=True)
+    plot_run14_per_object_unsafe_lineplot(exclude_physics=False)
+    plot_run14_per_object_lift_lineplot()
+    plot_run14_per_object_lift_individual()
+    plot_run14_per_object_unsafe_individual(exclude_physics=True)
+    plot_run14_per_object_unsafe_individual(exclude_physics=False)
+    plot_run14_per_object_unsafe_heatmap(exclude_physics=True)
+    plot_run14_per_object_unsafe_heatmap(exclude_physics=False)
     print("Done.")
 
     if args.show:
