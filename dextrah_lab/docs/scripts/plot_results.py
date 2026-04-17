@@ -607,7 +607,7 @@ def plot_per_object_unsafe_real(eval_dir: Path = None):
         ax.set_xticklabels([o.replace("_", "\n") for o in OBJECTS],
                            fontsize=4, rotation=45, ha="right")
         ax.set_ylim(0, 105)
-        ax.legend(fontsize=5, loc="upper right")
+        ax.legend(fontsize=7, loc="upper right")
         ax.set_title(title, fontsize=7)
 
     fig.tight_layout()
@@ -775,7 +775,7 @@ def plot_per_object_lift_head_to_head(max_iter: int = 100_000, ema_alpha: float 
         ax.set_ylabel("Lift (%)", fontsize=7)
 
     # Single legend from first subplot
-    axes_flat[0].legend(fontsize=5, loc="lower right")
+    axes_flat[0].legend(fontsize=7, loc="lower right")
     fig.suptitle("Per-Object Lift Success: SafeDAgger vs DAgger (0–100k)", fontsize=9)
     fig.tight_layout()
 
@@ -947,7 +947,7 @@ def plot_per_object_lifted_head_to_head_run6(max_iter: int = 100_000, ema_alpha:
             ax.set_xlabel("Iteration", fontsize=7)
     for ax in axes[:, 0]:
         ax.set_ylabel("Lifted (%)", fontsize=7)
-    axes_flat[0].legend(fontsize=5, loc="lower right")
+    axes_flat[0].legend(fontsize=7, loc="lower right")
     fig.suptitle("Per-Object Lift (above table): SafeDAgger vs DAgger (Run 6)", fontsize=9)
     fig.tight_layout()
     save_fig(fig, "run6_per_object_lifted_head_to_head")
@@ -989,7 +989,7 @@ def plot_per_object_unsafe_episode_head_to_head_run6(max_iter: int = 100_000, em
             ax.set_xlabel("Iteration", fontsize=7)
     for ax in axes[:, 0]:
         ax.set_ylabel("Unsafe (%)", fontsize=7)
-    axes_flat[0].legend(fontsize=5, loc="upper right")
+    axes_flat[0].legend(fontsize=7, loc="upper right")
     fig.suptitle("Per-Object Unsafe Episode Rate: SafeDAgger vs DAgger (Run 6)", fontsize=9)
     fig.tight_layout()
     save_fig(fig, "run6_per_object_unsafe_episode_head_to_head")
@@ -1051,7 +1051,7 @@ def plot_per_object_failure_mode_run6(max_iter: int = 100_000, ema_alpha: float 
                 ax.set_xlabel("Iteration", fontsize=7)
         for ax in axes[:, 0]:
             ax.set_ylabel("Rate (%)", fontsize=7)
-        axes_flat[0].legend(fontsize=4, loc="upper right")
+        axes_flat[0].legend(fontsize=7, loc="upper right")
         tag = "safedagger" if "SafeD" in method else "dagger"
         fig.suptitle(f"Per-Object Failure Modes — {method} (Run 6)", fontsize=9)
         fig.tight_layout()
@@ -1145,7 +1145,7 @@ def plot_per_object_lifted_head_to_head_run7(max_iter: int = 100_000, ema_alpha:
         ax.set_xlabel("Iteration", fontsize=7)
     for ax in axes[:, 0]:
         ax.set_ylabel("Lifted (%)", fontsize=7)
-    axes_flat[0].legend(fontsize=5, loc="lower right")
+    axes_flat[0].legend(fontsize=7, loc="lower right")
     fig.suptitle("Per-Object Lift (above table): SafeDAgger vs DAgger (Run 7, top8)", fontsize=9)
     fig.tight_layout()
     save_fig(fig, "run7_per_object_lifted_head_to_head")
@@ -1184,7 +1184,7 @@ def plot_per_object_failure_mode_run7(max_iter: int = 100_000, ema_alpha: float 
             ax.set_xlabel("Iteration", fontsize=7)
         for ax in axes[:, 0]:
             ax.set_ylabel("Rate (%)", fontsize=7)
-        axes_flat[0].legend(fontsize=4, loc="upper right")
+        axes_flat[0].legend(fontsize=7, loc="upper right")
         tag = "safedagger" if "SafeD" in method else "dagger"
         fig.suptitle(f"Per-Object Failure Modes — {method} (Run 7, top8)", fontsize=9)
         fig.tight_layout()
@@ -1340,7 +1340,7 @@ def plot_run(run_name, runs, objects, eval_files=None,
             ax.set_xlabel("Iteration", fontsize=7)
     for ax in axes[:, 0]:
         ax.set_ylabel("Lifted (%)", fontsize=7)
-    axes_flat[0].legend(fontsize=5, loc="lower right")
+    axes_flat[0].legend(fontsize=7, loc="lower right")
     method_list = " vs ".join(m for _, _, m, _ in runs)
     fig.suptitle(f"Per-Object Lift (above table): {method_list}", fontsize=9)
     fig.tight_layout()
@@ -1384,7 +1384,7 @@ def plot_run(run_name, runs, objects, eval_files=None,
             ax.set_xlabel("Iteration", fontsize=7)
     for ax in axes[:, 0]:
         ax.set_ylabel("Real unsafe (%)", fontsize=7)
-    axes_flat[0].legend(fontsize=5, loc="upper right")
+    axes_flat[0].legend(fontsize=7, loc="upper right")
     method_list = " vs ".join(m for _, _, m, _ in runs)
     fig.suptitle(f"Per-Object Real Unsafe Rate (excl. physics): {method_list}", fontsize=9)
     fig.tight_layout()
@@ -1423,7 +1423,7 @@ def plot_run(run_name, runs, objects, eval_files=None,
                 ax.set_xlabel("Iteration", fontsize=7)
         for ax in axes[:, 0]:
             ax.set_ylabel("Rate (%)", fontsize=7)
-        axes_flat[0].legend(fontsize=4, loc="upper right")
+        axes_flat[0].legend(fontsize=7, loc="upper right")
         if "SafeD" in method:
             tag = "safedagger"
         elif "BC" in method:
@@ -1647,7 +1647,7 @@ def plot_run11_unsafe(max_iter: int = 100_000, ema_alpha: float = 0.999):
             ax.set_xlabel("Iteration", fontsize=7)
     for ax in axes[:, 0]:
         ax.set_ylabel("Real unsafe (%)", fontsize=7)
-    axes_flat[0].legend(fontsize=5, loc="upper right")
+    axes_flat[0].legend(fontsize=7, loc="upper right")
     fig.suptitle("Per-Object Real Unsafe Rate (excl. physics): SafeDAgger vs DAgger", fontsize=9)
     fig.tight_layout()
     save_fig(fig, "per_object_unsafe_episode_head_to_head", subdir=subdir)
@@ -1685,7 +1685,7 @@ def plot_run11_unsafe(max_iter: int = 100_000, ema_alpha: float = 0.999):
                 ax.set_xlabel("Iteration", fontsize=7)
         for ax in axes[:, 0]:
             ax.set_ylabel("Rate (%)", fontsize=7)
-        axes_flat[0].legend(fontsize=4, loc="upper right")
+        axes_flat[0].legend(fontsize=7, loc="upper right")
         if "SafeD" in method:
             tag = "safedagger"
         elif "BC" in method:
@@ -1731,7 +1731,7 @@ def plot_run10b_vs_run11_comparison(eval_dir: Path = None):
     ax.set_xticklabels([o.replace("_", " ") for o in OBJECTS_TOP8],
                        fontsize=5, rotation=45, ha="right")
     ax.set_ylim(0, 105)
-    ax.legend(fontsize=6, loc="upper right")
+    ax.legend(fontsize=7, loc="upper right")
     ax.set_title("Per-Object Lift Success: Best (run10b) vs ADR 5 ablation (run11a/b)", fontsize=8)
     fig.tight_layout()
     save_fig(fig, "run10b_vs_run11_per_object_lift", subdir="comparisons")
@@ -1783,7 +1783,7 @@ def plot_physics_vs_real_unsafe_breakdown(eval_dir: Path = None):
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=7)
     ax.set_ylim(0, 105)
-    ax.legend(fontsize=6, loc="upper right")
+    ax.legend(fontsize=7, loc="upper right")
     ax.set_title("Unsafe Breakdown: Physics vs Real (eval)", fontsize=9)
     fig.tight_layout()
     save_fig(fig, "physics_vs_real_unsafe_breakdown", subdir="comparisons")
@@ -1878,7 +1878,7 @@ def plot_failure_mode_detail(objects=("basketball_shoe", "teddy_bear"),
             if row == n_rows - 1:
                 ax.set_xlabel("Iteration", fontsize=7)
 
-    axes[0, 0].legend(fontsize=5, loc="upper right")
+    axes[0, 0].legend(fontsize=7, loc="upper right")
     fig.suptitle("Failure Mode Analysis: SafeDAgger vs DAgger (Run 6)", fontsize=9, y=1.02)
     fig.tight_layout()
     save_fig(fig, "run6_failure_mode_detail")
@@ -1994,7 +1994,7 @@ def plot_per_object_term_real_head_to_head(max_iter: int = 100_000, ema_alpha: f
     for ax in axes[:, 0]:
         ax.set_ylabel("Unsafe (%)", fontsize=7)
 
-    axes_flat[0].legend(fontsize=5, loc="upper right")
+    axes_flat[0].legend(fontsize=7, loc="upper right")
     fig.suptitle("Per-Object Real Unsafe Rate (per-step): SafeDAgger vs DAgger (Run 5)", fontsize=9)
     fig.tight_layout()
 
@@ -2041,7 +2041,7 @@ def plot_per_object_lift_head_to_head_run5(max_iter: int = 100_000, ema_alpha: f
     for ax in axes[:, 0]:
         ax.set_ylabel("Lift (%)", fontsize=7)
 
-    axes_flat[0].legend(fontsize=5, loc="lower right")
+    axes_flat[0].legend(fontsize=7, loc="lower right")
     fig.suptitle("Per-Object Lift Success: SafeDAgger vs DAgger (Run 5)", fontsize=9)
     fig.tight_layout()
 
@@ -2831,7 +2831,7 @@ def plot_run14_dagger_l2_calibration(max_iter: int = 100_000,
                label="Calibration range (2.0 – 4.0)")
 
     # Swept thresholds — light horizontal dotted lines
-    sweep_thrs = [0.5, 1.0, 2.0, 2.2, 2.4, 2.6, 2.8, 3.0, 3.2, 3.4]
+    sweep_thrs = [0.5, 1.0, 2.0, 2.2, 2.4, 2.6, 2.8, 3.0, 3.2, 3.4, 3.6, 3.8, 4.0]
     for thr in sweep_thrs:
         ax.axhline(thr, color="gray", linestyle=":",
                    linewidth=0.5, alpha=0.5, zorder=1)
@@ -2852,7 +2852,7 @@ def plot_run14_dagger_l2_calibration(max_iter: int = 100_000,
     ax.set_ylim(0, 8)
     _format_iter_axis(ax)
     ax.set_title("DAgger L2 over training", fontsize=8)
-    ax.legend(fontsize=5, loc="upper right")
+    ax.legend(fontsize=7, loc="upper right")
     fig.tight_layout()
     save_fig(fig, "run14a_l2_calibration",
              subdir=f"{RUN14_SUBDIR}/calibration")
