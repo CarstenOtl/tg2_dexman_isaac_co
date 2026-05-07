@@ -706,6 +706,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "32env": {"eye": (-12.0, 0.0, 3.0), "lookat": (2.0, 0.0, 0.0)},
         "8env": {"eye": (-5.0, 0.0, 2.0), "lookat": (1.0, 0.0, 0.3)},
         "1env": {"eye": (-1.5, 0.0, 1.0), "lookat": (0.5, 0.0, 0.4)},
+        # HD preset for single-env video recording — front-on, slightly elevated
+        "hd": {"eye": (-2.5, 0.09, 1.05), "lookat": (-0.4, 0.09, 0.4)},
     }
 
     # scene

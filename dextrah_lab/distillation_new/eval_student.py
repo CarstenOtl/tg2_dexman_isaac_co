@@ -26,6 +26,7 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Evaluate a student policy checkpoint.")
 parser.add_argument("--video", action="store_true", default=False, help="Record video (MP4) of the entire evaluation.")
 parser.add_argument("--video_length", type=int, default=0, help="Max video length in steps (0 = entire eval).")
+parser.add_argument("--save_stereo_video", action="store_true", default=False, help="Save stereo camera RGB feeds as separate MP4s.")
 parser.add_argument("--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations.")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, required=True, help="Task name.")
@@ -243,6 +244,10 @@ class StudentEvaluator:
         self.student_model = self.network.build(self.model_config).to(self.device)
         self.load_checkpoint(checkpoint_path)
 
+        self._record_stereo = False
+        self._stereo_left_frames = []
+        self._stereo_right_frames = []
+
         self.is_rnn = self.student_model.is_rnn()
         self.is_aux = bool(
             hasattr(self.student_model, "a2c_network")
@@ -307,7 +312,9 @@ class StudentEvaluator:
             else:
                 hidden_states = [s for s in res_dict["rnn_states"]]
         distr = torch.distributions.Normal(mus, sigmas, validate_args=False)
-        selected_action = distr.sample().squeeze()
+        selected_action = distr.sample()
+        if selected_action.dim() > 2:
+            selected_action = selected_action.squeeze(0)
         selected_action = torch.clamp(selected_action, -1.0, 1.0)
         return selected_action.detach(), hidden_states
 
@@ -423,6 +430,12 @@ class StudentEvaluator:
                 while steps < max_steps and not dones.all():
                     actions, hidden_states = self._get_student_actions_eval(obs, prev_actions, hidden_states)
                     obs, reward, out_of_reach, timed_out, info = eval_env.step(actions)
+                    # Capture stereo camera frames for video
+                    if getattr(self, "_record_stereo", False):
+                        left_rgb = eval_ov_env._tiled_camera_left.data.output["rgb"][0, :, :, :3].cpu().numpy().astype(np.uint8)
+                        right_rgb = eval_ov_env._tiled_camera_right.data.output["rgb"][0, :, :, :3].cpu().numpy().astype(np.uint8)
+                        self._stereo_left_frames.append(left_rgb)
+                        self._stereo_right_frames.append(right_rgb)
                     dones = out_of_reach | timed_out
                     reason_idx = classify_out_of_reach_reasons(
                         ov_env=eval_ov_env,
@@ -569,6 +582,21 @@ class StudentEvaluator:
 
         lift_success_out = float(np.mean(success_rates))
         unsafe_rate_out = float(np.mean(unsafe_rates))
+
+        # Save stereo camera videos if recorded
+        if self._record_stereo and len(self._stereo_left_frames) > 0:
+            import imageio
+            stereo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "videos", "eval_student")
+            os.makedirs(stereo_dir, exist_ok=True)
+            fps = int(1.0 / (eval_ov_env.step_dt))
+            left_path = os.path.join(stereo_dir, "stereo_left.mp4")
+            right_path = os.path.join(stereo_dir, "stereo_right.mp4")
+            imageio.mimwrite(left_path, self._stereo_left_frames, fps=fps)
+            imageio.mimwrite(right_path, self._stereo_right_frames, fps=fps)
+            print(f"[INFO] Stereo videos saved: {left_path}, {right_path} ({len(self._stereo_left_frames)} frames, {fps} fps)")
+            self._stereo_left_frames.clear()
+            self._stereo_right_frames.clear()
+
         print(
             f"[INFO] Eval complete in {time.time() - eval_start_t:.1f}s: "
             f"episodes={total_eval_episodes}, lift_success={lift_success_out:.4f}, unsafe_rate={unsafe_rate_out:.4f}",
@@ -619,7 +647,7 @@ def main(env_cfg, agent_cfg: dict):
         stage_t = time.time()
         env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
         if args_cli.video:
-            video_dir = os.path.join(os.path.dirname(os.path.abspath(args_cli.checkpoint)), "videos", "eval_student")
+            video_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "videos", "eval_student")
             video_kwargs = {
                 "video_folder": video_dir,
                 "step_trigger": lambda step: step == 0,
@@ -672,6 +700,9 @@ def main(env_cfg, agent_cfg: dict):
             eval_max_steps=eval_max_steps,
             eval_lift_hold_s=eval_lift_hold_s,
         )
+        if args_cli.save_stereo_video and hasattr(env.unwrapped, "_tiled_camera_left"):
+            evaluator._record_stereo = True
+            print("[INFO] Stereo camera video recording enabled.")
 
         (
             lift_success,
