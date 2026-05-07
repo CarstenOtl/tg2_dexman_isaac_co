@@ -388,15 +388,22 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     # - The camera offsets below are used with `convention="ros"` in TiledCameraCfg.
     # - The UI "Orientation X/Y/Z" values are Euler XYZ in the UI camera frame, and
     #   they do NOT map 1:1 to the config quaternions.
-    # ANYWAY:
-    # The result we want is for the camera looking to the right and a little down at the table so the object will always be seen.
-    camera_pos_left = tf[:3, 3].tolist()
-    # camera_rot_left = [0.6887834, -0.7242703, -0.0299371, -0.0106609]
-    camera_rot_left = [ 0.51567701, -0.52073085,  0.53658829,  0.41831759]
-    # TODO: update these for your actual stereo right camera calibration
-    # Convert to native Python floats to avoid OmegaConf errors
-    camera_right_pos = [float(tf[0, 3] - 0.06169578743), float(tf[1, 3] - 0.00260621), float(tf[2, 3] + 0.0003994)]
-    camera_right_rot = [0.51567701, -0.52073085, 0.53658829, 0.41831759]  # placeholder, same as left
+    # OVERRIDE (2026-05-07): the calibrated tf above puts the camera at z=0.637, y=-0.689 with
+    # only ~7 deg pitch — optical axis missed the table by 1.9 m and the front half of the spawn
+    # region (y < +0.13) was below the visible cone. Raised z 0.64→0.85 and moved back y
+    # -0.69→-0.95, tilted ~22.9 deg down (aimed at lift midpoint -0.55, +0.10, +0.40). Bottom
+    # of frame now reaches y≈-0.28 at table top (covers full spawn y=[-0.30, +0.50] within
+    # object_pos_noise=0.03); top of frame keeps headroom for objects lifted up to ~50 cm above
+    # the table at the back of spawn. Re-derive from real calibration once the lab mount moves.
+    camera_pos_left = [-0.7236, -0.95, 0.85]
+    camera_rot_left = [0.439152, -0.571103, 0.607096, 0.335293]
+    # Stereo baseline preserved from calibrated tf
+    camera_right_pos = [
+        float(camera_pos_left[0] - 0.06169578743),
+        float(camera_pos_left[1] - 0.00260621),
+        float(camera_pos_left[2] + 0.0003994),
+    ]
+    camera_right_rot = list(camera_rot_left)
     del tf # this is hacky but it needs to be done because omega conf doesn't support np.ndarray as a primitive
     camera_rand_rot_range = 3
     camera_rand_pos_range = 0.03
