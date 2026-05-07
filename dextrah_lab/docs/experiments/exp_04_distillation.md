@@ -426,7 +426,27 @@ CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/pytho
 
 **Commands:** Same as run5a/5b.
 
-**Results:** *pending*
+**Standalone eval (480 episodes, 2026-04-03):**
+
+| Metric | run7a SafeDagger+L2 | run7b DAgger+L2 | Teacher 11 |
+|---|---|---|---|
+| **Lift success** | 27.9% | **56.9%** | 85.8% |
+| **Unsafe rate** | 79.0% | **59.4%** | 23.1% |
+| Physics instability (% all eps) | 52.1% | 39.2% | 11.0% |
+| Harmful collision (% all eps) | 11.6% | 8.7% | 1.7% |
+| Object out of bound (% all eps) | 14.9% | 11.2% | 9.4% |
+| Palm flipped (% all eps) | 0.3% | 0.2% | 0.6% |
+
+**Eval JSONs:**
+- run7a: `eval_results/eval_metrics_20260403_192337.json`
+- run7b: `eval_results/eval_metrics_20260403_192212.json`
+
+**Key findings:**
+- DAgger (L2 loss) outperforms SafeDagger: 56.9% vs 27.9% lift — consistent with all prior runs
+- SafeDagger with threshold=3.0 still underperforms — threshold is not the main issue
+- First true apples-to-apples comparison (both L2 loss) confirms DAgger is the better method
+- visdex_top8 (8 objects) didn't improve over visdex_selected (13 objects) for DAgger (56.9% vs 52.1% run4b)
+- Physics instability remains dominant failure mode for both
 
 ### SafeDagger beta analysis — why beta stays at ~75% vs upstream's ~20%
 

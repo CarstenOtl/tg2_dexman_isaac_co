@@ -91,11 +91,12 @@ def apply_style(font_size: int = 10, fig_width_cm: float = 14.0):
     })
 
 
-def save_fig(fig, name: str, formats=("pdf", "png")):
-    """Save figure to Report/figures/plots/ in the specified formats."""
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+def save_fig(fig, name: str, subdir: str = None, formats=("pdf", "png")):
+    """Save figure to Report/figures/plots/[subdir/] in the specified formats."""
+    out_dir = FIGURES_DIR / subdir if subdir else FIGURES_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
     for fmt in formats:
-        path = FIGURES_DIR / f"{name}.{fmt}"
+        path = out_dir / f"{name}.{fmt}"
         fig.savefig(path)
         print(f"  Saved: {path}")
     plt.close(fig)

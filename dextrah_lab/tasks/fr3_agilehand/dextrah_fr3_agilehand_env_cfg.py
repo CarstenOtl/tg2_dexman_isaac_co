@@ -229,6 +229,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     # 0 = use actual num_unique_objects. Set to teacher's object count (e.g. 13) if distilling
     # with a subset of objects.
     teacher_onehot_size: int = 0
+    # Directory of objects the teacher was trained on. Used during distillation to map
+    # object names to correct one-hot indices. If None, assumes same objects as current.
+    teacher_objects_dir: str = ""
 
     state_space = 0
     observation_space = 0

@@ -26,7 +26,7 @@ parser.add_argument("--play_policy", type=bool, default=False, help="Play a dist
 parser.add_argument("--data_aug", action="store_true", default=False, help="Whether to use data augmentation for student")
 parser.add_argument("--mono", action="store_true", default=False, help="Use monocular instead of stereo (default: stereo)")
 parser.add_argument("--no_transformer", action="store_true", default=False, help="Disable transformer student (default: transformer)")
-parser.add_argument("--vanilla_dagger", action="store_true", default=False, help="Use vanilla DAgger (KL loss, no unsafe override) instead of SafeDAgger")
+parser.add_argument("--vanilla_dagger", action="store_true", default=False, help="Use vanilla DAgger (no unsafe override) instead of SafeDAgger. Both use weighted L2 loss.")
 parser.add_argument("--bc", action="store_true", default=False, help="Pure behavior cloning: teacher always steps the env, student only learns the mapping.")
 parser.add_argument("--unsafe_l2_threshold", type=float, default=2.0, help="L2 threshold for SafeDagger teacher intervention (default: 2.0)")
 
@@ -157,7 +157,7 @@ def main(env_cfg, agent_cfg: dict):
             "ckpt": teacher_ckpt,
             "obs_type": "expert_policy",
         },
-        "imitation_loss_type": "kl" if args_cli.vanilla_dagger else "l2",
+        "imitation_loss_type": "l2",  # weighted L2 for both SafeDagger and DAgger (DextrAH-RGB paper)
         "play_policy": args_cli.play_policy,
         "disable_unsafe_override": args_cli.vanilla_dagger or args_cli.bc,
         "behavior_cloning": args_cli.bc,

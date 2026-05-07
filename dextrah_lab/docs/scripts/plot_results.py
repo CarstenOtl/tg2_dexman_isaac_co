@@ -842,6 +842,798 @@ DISTILLATION_RUNS_5 = [
      "DAgger", COLORS["orange"]),
 ]
 
+DISTILLATION_RUNS_6 = [
+    ("student_run6a_safedagger_l2_teacher11.csv", 24,
+     "SafeDAgger", COLORS["blue"]),
+    ("student_run6b_dagger_l2_teacher11.csv", 24,
+     "DAgger", COLORS["orange"]),
+]
+
+DISTILLATION_RUNS_7 = [
+    ("student_run7a_safedagger_l2_teacher11.csv", 24,
+     "SafeDAgger", COLORS["blue"]),
+    ("student_run7b_dagger_l2_teacher11.csv", 24,
+     "DAgger", COLORS["orange"]),
+]
+
+OBJECTS_TOP8 = [
+    "basketball_shoe", "closed_fist", "elephant_toy", "mario",
+    "milk_pot", "teddy_bear", "toy_bagger", "tutle_candle_holder",
+]
+
+
+def plot_distillation_comparison_run6(max_iter: int = 100_000, ema_alpha: float = 0.999):
+    """Three separate plots for run6a/6b: scaled L2 threshold + episode-level metrics."""
+    runs = DISTILLATION_RUNS_6
+
+    # 1. Lift success normalized to teacher ceiling
+    fig = _plot_distillation_single(
+        "in_success_region", "Student Policy Lift Success (Run 6)",
+        "Lift Success (normed to teacher)", (0, 1.05), runs, max_iter, ema_alpha,
+        normalize_by=TEACHER_11_LIFT)
+    save_fig(fig, "run6_lift_success_normed")
+
+    # 2. Intervention rate beta
+    fig = _plot_distillation_single(
+        "beta", "Intervention Rate Beta (Run 6)",
+        r"$\beta$ (teacher intervention rate)", (0, 1.05), runs, max_iter, ema_alpha,
+        beta_dagger_zero=True)
+    save_fig(fig, "run6_intervention_rate")
+
+    # 3. Episode-level unsafe rate (AverageMeter)
+    fig = _plot_distillation_single(
+        "train/avg/unsafe_episode_rate", "Unsafe Episode Rate (Run 6)",
+        "Unsafe episode rate", (0, 1.0), runs, max_iter, ema_alpha)
+    save_fig(fig, "run6_unsafe_episode_rate")
+
+
+def plot_per_object_lifted_head_to_head_run6(max_iter: int = 100_000, ema_alpha: float = 0.999):
+    """Per-object lifted (above table) head-to-head for run6."""
+    n_cols = 4
+    n_rows = (len(OBJECTS) + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(18/2.54, n_rows * 4/2.54),
+                             sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+
+    for idx, obj in enumerate(OBJECTS):
+        ax = axes_flat[idx]
+        for csv_name, n_envs, method, color in DISTILLATION_RUNS_6:
+            df = _load_distillation_metric(
+                csv_name, f"per_object_lifted/{obj}", n_envs,
+                max_iter=max_iter, smooth_window=1)
+            if df.empty:
+                continue
+            raw = df["value"].values * 100
+            smoothed = _ema(raw, alpha=ema_alpha)
+            iters = df["iteration"].values
+            step = max(1, len(iters) // 500)
+            ax.plot(iters[::step], smoothed[::step], color=color,
+                    linewidth=1.2, alpha=0.9, label=method)
+
+        ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
+        ax.set_ylim(0, 100)
+        ax.set_xlim(0, max_iter)
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        ax.tick_params(labelsize=5)
+
+    for idx in range(len(OBJECTS), len(axes_flat)):
+        axes_flat[idx].set_visible(False)
+    for ax in axes[-1, :]:
+        if ax.get_visible():
+            ax.set_xlabel("Iteration", fontsize=7)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("Lifted (%)", fontsize=7)
+    axes_flat[0].legend(fontsize=5, loc="lower right")
+    fig.suptitle("Per-Object Lift (above table): SafeDAgger vs DAgger (Run 6)", fontsize=9)
+    fig.tight_layout()
+    save_fig(fig, "run6_per_object_lifted_head_to_head")
+
+
+def plot_per_object_unsafe_episode_head_to_head_run6(max_iter: int = 100_000, ema_alpha: float = 0.999):
+    """Per-object episode-level unsafe rate head-to-head for run6."""
+    n_cols = 4
+    n_rows = (len(OBJECTS) + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(18/2.54, n_rows * 4/2.54),
+                             sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+
+    for idx, obj in enumerate(OBJECTS):
+        ax = axes_flat[idx]
+        for csv_name, n_envs, method, color in DISTILLATION_RUNS_6:
+            df = _load_distillation_metric(
+                csv_name, f"train/{obj}/unsafe_episode_rate", n_envs,
+                max_iter=max_iter, smooth_window=1)
+            if df.empty:
+                continue
+            raw = df["value"].values * 100
+            smoothed = _ema(raw, alpha=ema_alpha)
+            iters = df["iteration"].values
+            step = max(1, len(iters) // 500)
+            ax.plot(iters[::step], smoothed[::step], color=color,
+                    linewidth=1.2, alpha=0.9, label=method)
+
+        ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
+        ax.set_ylim(0, 100)
+        ax.set_xlim(0, max_iter)
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        ax.tick_params(labelsize=5)
+
+    for idx in range(len(OBJECTS), len(axes_flat)):
+        axes_flat[idx].set_visible(False)
+    for ax in axes[-1, :]:
+        if ax.get_visible():
+            ax.set_xlabel("Iteration", fontsize=7)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("Unsafe (%)", fontsize=7)
+    axes_flat[0].legend(fontsize=5, loc="upper right")
+    fig.suptitle("Per-Object Unsafe Episode Rate: SafeDAgger vs DAgger (Run 6)", fontsize=9)
+    fig.tight_layout()
+    save_fig(fig, "run6_per_object_unsafe_episode_head_to_head")
+
+
+UNSAFE_REASONS = ["object_out_of_bound", "harmful_collision", "palm_flipped", "physics_instability"]
+REASON_COLORS = {
+    "object_out_of_bound": COLORS["orange"],
+    "harmful_collision": COLORS["red"],
+    "palm_flipped": COLORS["purple"],
+    "physics_instability": COLORS["gray"],
+}
+REASON_LABELS = {
+    "object_out_of_bound": "Object OOB",
+    "harmful_collision": "Collision",
+    "palm_flipped": "Palm flip",
+    "physics_instability": "Physics",
+}
+
+
+def plot_per_object_failure_mode_run6(max_iter: int = 100_000, ema_alpha: float = 0.999):
+    """Per-object failure mode breakdown over training for run6a (SafeDagger) and run6b (DAgger).
+    One subplot per object, stacked reason lines.
+    """
+    for csv_name, n_envs, method, _ in DISTILLATION_RUNS_6:
+        n_cols = 4
+        n_rows = (len(OBJECTS) + n_cols - 1) // n_cols
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(18/2.54, n_rows * 4/2.54),
+                                 sharex=True, sharey=True)
+        axes_flat = axes.flatten()
+
+        for idx, obj in enumerate(OBJECTS):
+            ax = axes_flat[idx]
+            for reason in UNSAFE_REASONS:
+                metric = f"train/{obj}/unsafe_reason_prop/{reason}"
+                df = _load_distillation_metric(
+                    csv_name, metric, n_envs,
+                    max_iter=max_iter, smooth_window=1)
+                if df.empty:
+                    continue
+                raw = df["value"].values * 100
+                smoothed = _ema(raw, alpha=ema_alpha)
+                iters = df["iteration"].values
+                step = max(1, len(iters) // 500)
+                ax.plot(iters[::step], smoothed[::step],
+                        color=REASON_COLORS[reason], linewidth=1.0, alpha=0.9,
+                        label=REASON_LABELS[reason])
+
+            ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
+            ax.set_ylim(0, 30)
+            ax.set_xlim(0, max_iter)
+            ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+            ax.tick_params(labelsize=5)
+
+        for idx in range(len(OBJECTS), len(axes_flat)):
+            axes_flat[idx].set_visible(False)
+        for ax in axes[-1, :]:
+            if ax.get_visible():
+                ax.set_xlabel("Iteration", fontsize=7)
+        for ax in axes[:, 0]:
+            ax.set_ylabel("Rate (%)", fontsize=7)
+        axes_flat[0].legend(fontsize=4, loc="upper right")
+        tag = "safedagger" if "SafeD" in method else "dagger"
+        fig.suptitle(f"Per-Object Failure Modes — {method} (Run 6)", fontsize=9)
+        fig.tight_layout()
+        save_fig(fig, f"run6_per_object_failure_modes_{tag}")
+
+
+def _compute_global_lifted(run_csv: str, n_envs: int, objects: list,
+                            max_iter: int = None, ema_alpha: float = 0.999):
+    """Compute global lifted rate by averaging per-object lifted metrics."""
+    dfs = []
+    for obj in objects:
+        df = _load_distillation_metric(run_csv, f"per_object_lifted/{obj}", n_envs,
+                                       max_iter=max_iter, smooth_window=1)
+        if not df.empty:
+            dfs.append(df[["iteration", "value"]].rename(columns={"value": obj}))
+    if not dfs:
+        return None, None
+    merged = dfs[0]
+    for d in dfs[1:]:
+        merged = pd.merge_asof(merged, d, on="iteration", tolerance=2)
+    obj_cols = [c for c in merged.columns if c != "iteration"]
+    merged["avg_lifted"] = merged[obj_cols].mean(axis=1)
+    smoothed = _ema(merged["avg_lifted"].values, alpha=ema_alpha)
+    return merged["iteration"].values, smoothed
+
+
+def plot_distillation_comparison_run7(max_iter: int = 100_000, ema_alpha: float = 0.999):
+    """Three separate plots for run7a/7b: corrected threshold + visdex_top8."""
+    runs = DISTILLATION_RUNS_7
+
+    # 1. Lift success using per_object_lifted (above table, less strict)
+    fig, ax = plt.subplots()
+    for csv_name, n_envs, label, color in runs:
+        iters, smoothed = _compute_global_lifted(
+            csv_name, n_envs, OBJECTS_TOP8, max_iter=max_iter, ema_alpha=ema_alpha)
+        if iters is not None:
+            step = max(1, len(iters) // 500)
+            ax.plot(iters[::step], smoothed[::step] / TEACHER_11_LIFT,
+                    color=color, linewidth=1.5, alpha=0.95, label=label)
+    ax.set_title("Student Policy Lift Success (Run 7)")
+    ax.set_ylabel("Lift Success (normed to teacher)")
+    ax.set_xlabel(r"Training Iteration ($\times 10^4$)")
+    ax.set_xlim(0, max_iter)
+    ax.set_ylim(0, 1.05)
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e4:.0f}"))
+    ax.legend(loc="lower right", fontsize=8)
+    fig.tight_layout()
+    save_fig(fig, "run7_lift_success_normed")
+
+    fig = _plot_distillation_single(
+        "beta", "Intervention Rate Beta (Run 7)",
+        r"$\beta$ (teacher intervention rate)", (0, 1.05), runs, max_iter, ema_alpha,
+        beta_dagger_zero=True)
+    save_fig(fig, "run7_intervention_rate")
+
+    fig = _plot_distillation_single(
+        "train/avg/unsafe_episode_rate", "Unsafe Episode Rate (Run 7)",
+        "Unsafe episode rate", (0, 1.0), runs, max_iter, ema_alpha)
+    save_fig(fig, "run7_unsafe_episode_rate")
+
+
+def plot_per_object_lifted_head_to_head_run7(max_iter: int = 100_000, ema_alpha: float = 0.999):
+    """Per-object lifted head-to-head for run7 (visdex_top8)."""
+    n_cols = 4
+    n_rows = 2
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(18/2.54, n_rows * 4/2.54),
+                             sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+
+    for idx, obj in enumerate(OBJECTS_TOP8):
+        ax = axes_flat[idx]
+        for csv_name, n_envs, method, color in DISTILLATION_RUNS_7:
+            df = _load_distillation_metric(
+                csv_name, f"per_object_lifted/{obj}", n_envs,
+                max_iter=max_iter, smooth_window=1)
+            if df.empty:
+                continue
+            raw = df["value"].values * 100
+            smoothed = _ema(raw, alpha=ema_alpha)
+            iters = df["iteration"].values
+            step = max(1, len(iters) // 500)
+            ax.plot(iters[::step], smoothed[::step], color=color,
+                    linewidth=1.2, alpha=0.9, label=method)
+        ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
+        ax.set_ylim(0, 100)
+        ax.set_xlim(0, max_iter)
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        ax.tick_params(labelsize=5)
+
+    for ax in axes[-1, :]:
+        ax.set_xlabel("Iteration", fontsize=7)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("Lifted (%)", fontsize=7)
+    axes_flat[0].legend(fontsize=5, loc="lower right")
+    fig.suptitle("Per-Object Lift (above table): SafeDAgger vs DAgger (Run 7, top8)", fontsize=9)
+    fig.tight_layout()
+    save_fig(fig, "run7_per_object_lifted_head_to_head")
+
+
+def plot_per_object_failure_mode_run7(max_iter: int = 100_000, ema_alpha: float = 0.999):
+    """Per-object failure modes for run7 (visdex_top8)."""
+    for csv_name, n_envs, method, _ in DISTILLATION_RUNS_7:
+        n_cols = 4
+        n_rows = 2
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(18/2.54, n_rows * 4/2.54),
+                                 sharex=True, sharey=True)
+        axes_flat = axes.flatten()
+        for idx, obj in enumerate(OBJECTS_TOP8):
+            ax = axes_flat[idx]
+            for reason in UNSAFE_REASONS:
+                metric = f"train/{obj}/unsafe_reason_prop/{reason}"
+                df = _load_distillation_metric(
+                    csv_name, metric, n_envs,
+                    max_iter=max_iter, smooth_window=1)
+                if df.empty:
+                    continue
+                raw = df["value"].values * 100
+                smoothed = _ema(raw, alpha=ema_alpha)
+                iters = df["iteration"].values
+                step = max(1, len(iters) // 500)
+                ax.plot(iters[::step], smoothed[::step],
+                        color=REASON_COLORS[reason], linewidth=1.0, alpha=0.9,
+                        label=REASON_LABELS[reason])
+            ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
+            ax.set_ylim(0, 30)
+            ax.set_xlim(0, max_iter)
+            ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+            ax.tick_params(labelsize=5)
+        for ax in axes[-1, :]:
+            ax.set_xlabel("Iteration", fontsize=7)
+        for ax in axes[:, 0]:
+            ax.set_ylabel("Rate (%)", fontsize=7)
+        axes_flat[0].legend(fontsize=4, loc="upper right")
+        tag = "safedagger" if "SafeD" in method else "dagger"
+        fig.suptitle(f"Per-Object Failure Modes — {method} (Run 7, top8)", fontsize=9)
+        fig.tight_layout()
+        save_fig(fig, f"run7_per_object_failure_modes_{tag}")
+
+
+DISTILLATION_RUNS_8 = [
+    ("student_run8a_safedagger_l2_teacher11.csv", 24,
+     "SafeDAgger", COLORS["blue"]),
+    ("student_run8b_dagger_l2_teacher11.csv", 24,
+     "DAgger", COLORS["orange"]),
+]
+
+RUN8_EVAL_FILES = {
+    "SafeDAgger (run8a)": "eval_metrics_20260404_130619.json",
+    "DAgger (run8b)": "eval_metrics_20260404_130532.json",
+}
+
+DISTILLATION_RUNS_9 = [
+    ("student_run9a_safedagger_l2_teacher11.csv", 24,
+     "SafeDAgger", COLORS["blue"]),
+    ("student_run9b_dagger_l2_teacher11.csv", 24,
+     "DAgger", COLORS["orange"]),
+]
+
+RUN9_EVAL_FILES = {
+    "SafeDAgger (run9a)": "eval_metrics_20260404_201637.json",
+    "DAgger (run9b)": "eval_metrics_20260404_201628.json",
+}
+
+DISTILLATION_RUNS_10 = [
+    ("student_run10a_safedagger_arm_rand.csv", 24,
+     "SafeD + arm rand", COLORS["blue"]),
+    ("student_run10b_safedagger_32envs.csv", 32,
+     "SafeD + 32 envs", COLORS["green"]),
+    ("student_run9a_safedagger_l2_teacher11.csv", 24,
+     "SafeD baseline (run9a)", COLORS["gray"]),
+]
+
+RUN10_EVAL_FILES = {
+    "arm rand (run10a)": "eval_metrics_20260405_224028.json",
+    "32 envs (run10b)": "eval_metrics_20260405_224012.json",
+}
+
+DISTILLATION_RUNS_11 = [
+    ("student_run11a_safedagger_adr5.csv", 32,
+     "SafeDAgger + ADR5", COLORS["blue"]),
+    ("student_run11b_dagger_adr5.csv", 32,
+     "DAgger + ADR5", COLORS["orange"]),
+]
+
+RUN11_EVAL_FILES = {
+    "SafeDAgger (run11a)": "eval_metrics_20260407_084953.json",
+    "DAgger (run11b)": "eval_metrics_20260407_084926.json",
+}
+
+
+def plot_run(run_name, runs, objects, eval_files=None,
+             max_iter=100_000, ema_alpha=0.999):
+    """Generate all plots for a given run into a subdirectory."""
+    subdir = run_name
+    eval_dir = EXPORTS_DIR.parent.parent / "distillation_new" / "eval_results"
+
+    # 1. Lift success normed (using per_object_lifted)
+    fig, ax = plt.subplots()
+    for csv_name, n_envs, label, color in runs:
+        iters, smoothed = _compute_global_lifted(
+            csv_name, n_envs, objects, max_iter=max_iter, ema_alpha=ema_alpha)
+        if iters is not None:
+            step = max(1, len(iters) // 500)
+            ax.plot(iters[::step], smoothed[::step] / TEACHER_11_LIFT,
+                    color=color, linewidth=1.5, alpha=0.95, label=label)
+    ax.set_title("Student Policy Lift Success")
+    ax.set_ylabel("Lift Success (normed to teacher)")
+    ax.set_xlabel(r"Training Iteration ($\times 10^4$)")
+    ax.set_xlim(0, max_iter)
+    ax.set_ylim(0, 1.05)
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e4:.0f}"))
+    ax.legend(loc="lower right", fontsize=8)
+    fig.tight_layout()
+    save_fig(fig, "lift_success_normed", subdir=subdir)
+
+    # 2. Intervention rate beta
+    fig = _plot_distillation_single(
+        "beta", "Intervention Rate Beta",
+        r"$\beta$ (teacher intervention rate)", (0, 1.05), runs, max_iter, ema_alpha,
+        beta_dagger_zero=True)
+    save_fig(fig, "intervention_rate", subdir=subdir)
+
+    # 3. Unsafe episode rate (episode-level, excluding physics instabilities)
+    fig, ax = plt.subplots()
+    for csv_name, n_envs, label, color in runs:
+        is_dagger = "vanilla" in csv_name
+        df_total = _load_distillation_metric(csv_name, "train/avg/unsafe_episode_rate", n_envs,
+                                              max_iter=max_iter, smooth_window=1)
+        df_phys = _load_distillation_metric(csv_name, "train/avg/unsafe_reason_prop/physics_instability", n_envs,
+                                             max_iter=max_iter, smooth_window=1)
+        if df_total.empty:
+            continue
+        total_raw = df_total["value"].values
+        if not df_phys.empty and len(df_phys) == len(df_total):
+            phys_raw = df_phys["value"].values
+            real_raw = np.clip(total_raw - phys_raw, 0, 1)
+        else:
+            real_raw = total_raw
+        smoothed = _ema(real_raw, alpha=ema_alpha)
+        iters = df_total["iteration"].values
+        step = max(1, len(iters) // 500)
+        ax.plot(iters[::step], smoothed[::step], color=color,
+                linewidth=1.5, alpha=0.95, label=label)
+    ax.set_title("Real Unsafe Episode Rate (excl. physics)")
+    ax.set_ylabel("Unsafe episode rate")
+    ax.set_xlabel(r"Training Iteration ($\times 10^4$)")
+    ax.set_xlim(0, max_iter)
+    ax.set_ylim(0, 1.0)
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e4:.0f}"))
+    ax.legend(loc="best", fontsize=8)
+    fig.tight_layout()
+    save_fig(fig, "unsafe_episode_rate", subdir=subdir)
+
+    # 4. Per-object lifted head-to-head
+    n_cols = 4
+    n_rows = (len(objects) + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(18/2.54, n_rows * 4/2.54),
+                             sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+    for idx, obj in enumerate(objects):
+        ax = axes_flat[idx]
+        for csv_name, n_envs, method, color in runs:
+            df = _load_distillation_metric(
+                csv_name, f"per_object_lifted/{obj}", n_envs,
+                max_iter=max_iter, smooth_window=1)
+            if df.empty:
+                continue
+            raw = df["value"].values * 100
+            smoothed_v = _ema(raw, alpha=ema_alpha)
+            iters = df["iteration"].values
+            step = max(1, len(iters) // 500)
+            ax.plot(iters[::step], smoothed_v[::step], color=color,
+                    linewidth=1.2, alpha=0.9, label=method)
+        ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
+        ax.set_ylim(0, 100)
+        ax.set_xlim(0, max_iter)
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        ax.tick_params(labelsize=5)
+    for idx in range(len(objects), len(axes_flat)):
+        axes_flat[idx].set_visible(False)
+    for ax in axes[-1, :]:
+        if ax.get_visible():
+            ax.set_xlabel("Iteration", fontsize=7)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("Lifted (%)", fontsize=7)
+    axes_flat[0].legend(fontsize=5, loc="lower right")
+    fig.suptitle("Per-Object Lift (above table): SafeDAgger vs DAgger", fontsize=9)
+    fig.tight_layout()
+    save_fig(fig, "per_object_lifted_head_to_head", subdir=subdir)
+
+    # 5. Per-object unsafe episode rate head-to-head (excluding physics instabilities)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(18/2.54, n_rows * 4/2.54),
+                             sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+    for idx, obj in enumerate(objects):
+        ax = axes_flat[idx]
+        for csv_name, n_envs, method, color in runs:
+            df_total = _load_distillation_metric(
+                csv_name, f"train/{obj}/unsafe_episode_rate", n_envs,
+                max_iter=max_iter, smooth_window=1)
+            df_phys = _load_distillation_metric(
+                csv_name, f"train/{obj}/unsafe_reason_prop/physics_instability", n_envs,
+                max_iter=max_iter, smooth_window=1)
+            if df_total.empty:
+                continue
+            total_raw = df_total["value"].values * 100
+            if not df_phys.empty and len(df_phys) == len(df_total):
+                phys_raw = df_phys["value"].values * 100
+                real_raw = np.clip(total_raw - phys_raw, 0, 100)
+            else:
+                real_raw = total_raw
+            smoothed_v = _ema(real_raw, alpha=ema_alpha)
+            iters = df_total["iteration"].values
+            step = max(1, len(iters) // 500)
+            ax.plot(iters[::step], smoothed_v[::step], color=color,
+                    linewidth=1.2, alpha=0.9, label=method)
+        ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
+        ax.set_ylim(0, 100)
+        ax.set_xlim(0, max_iter)
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+        ax.tick_params(labelsize=5)
+    for idx in range(len(objects), len(axes_flat)):
+        axes_flat[idx].set_visible(False)
+    for ax in axes[-1, :]:
+        if ax.get_visible():
+            ax.set_xlabel("Iteration", fontsize=7)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("Real unsafe (%)", fontsize=7)
+    axes_flat[0].legend(fontsize=5, loc="upper right")
+    fig.suptitle("Per-Object Real Unsafe Rate (excl. physics): SafeDAgger vs DAgger", fontsize=9)
+    fig.tight_layout()
+    save_fig(fig, "per_object_unsafe_episode_head_to_head", subdir=subdir)
+
+    # 6. Per-object failure modes (one plot per method)
+    for csv_name, n_envs, method, _ in runs:
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(18/2.54, n_rows * 4/2.54),
+                                 sharex=True, sharey=True)
+        axes_flat = axes.flatten()
+        for idx, obj in enumerate(objects):
+            ax = axes_flat[idx]
+            for reason in UNSAFE_REASONS:
+                metric = f"train/{obj}/unsafe_reason_prop/{reason}"
+                df = _load_distillation_metric(
+                    csv_name, metric, n_envs,
+                    max_iter=max_iter, smooth_window=1)
+                if df.empty:
+                    continue
+                raw = df["value"].values * 100
+                smoothed_v = _ema(raw, alpha=ema_alpha)
+                iters = df["iteration"].values
+                step = max(1, len(iters) // 500)
+                ax.plot(iters[::step], smoothed_v[::step],
+                        color=REASON_COLORS[reason], linewidth=1.0, alpha=0.9,
+                        label=REASON_LABELS[reason])
+            ax.set_title(obj.replace("_", " "), fontsize=6, pad=2)
+            ax.set_ylim(0, 30)
+            ax.set_xlim(0, max_iter)
+            ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+            ax.tick_params(labelsize=5)
+        for idx in range(len(objects), len(axes_flat)):
+            axes_flat[idx].set_visible(False)
+        for ax in axes[-1, :]:
+            if ax.get_visible():
+                ax.set_xlabel("Iteration", fontsize=7)
+        for ax in axes[:, 0]:
+            ax.set_ylabel("Rate (%)", fontsize=7)
+        axes_flat[0].legend(fontsize=4, loc="upper right")
+        tag = "safedagger" if "SafeD" in method else "dagger"
+        fig.suptitle(f"Per-Object Failure Modes — {method}", fontsize=9)
+        fig.tight_layout()
+        save_fig(fig, f"per_object_failure_modes_{tag}", subdir=subdir)
+
+    # 7. Eval per-object bar charts (if eval files provided)
+    if eval_files:
+        import json
+
+        # Helper to get per-object real unsafe (excluding physics instability)
+        def _get_real_unsafe(per_obj_data, obj):
+            m = per_obj_data.get(obj, {})
+            total = m.get("unsafe_episode_rate", 0)
+            reasons = m.get("unsafe_reason_prop", {})
+            phys = reasons.get("physics_instability", 0)
+            return total - phys  # reason_prop is fraction of all episodes
+
+        for metric_key, ylabel, title, fname, use_real_unsafe in [
+            ("lift_success", "Lift success (%)", "Per-Object Lift Success — Eval", "per_object_lift_eval", False),
+            ("unsafe_episode_rate", "Real unsafe rate (%)", "Per-Object Real Unsafe Rate — Eval (excl. physics)", "per_object_unsafe_eval", True),
+        ]:
+            fig, ax = plt.subplots(figsize=(14/2.54, 7/2.54))
+            x = np.arange(len(objects))
+            w = 0.35
+            colors_list = [COLORS["blue"], COLORS["orange"]]
+            for i, (label, eval_fname) in enumerate(eval_files.items()):
+                path = eval_dir / eval_fname
+                if not path.exists():
+                    continue
+                with open(path) as fh:
+                    data = json.load(fh)
+                per_obj = data.get("per_object_metrics", {})
+                if use_real_unsafe:
+                    vals = [_get_real_unsafe(per_obj, obj) * 100 for obj in objects]
+                else:
+                    vals = [per_obj.get(obj, {}).get(metric_key, 0) * 100 for obj in objects]
+                bars = ax.bar(x + (i - 0.5) * w, vals, w, label=label,
+                              color=colors_list[i], edgecolor="white", linewidth=0.5)
+                for bar, val in zip(bars, vals):
+                    if val > 0:
+                        ax.text(bar.get_x() + bar.get_width()/2, val + 1.5,
+                                f"{val:.0f}", ha="center", va="bottom", fontsize=4)
+            ax.set_ylabel(ylabel)
+            ax.set_xticks(x)
+            ax.set_xticklabels([o.replace("_", " ") for o in objects],
+                               fontsize=5, rotation=45, ha="right")
+            ax.set_ylim(0, 105)
+            ax.legend(fontsize=7)
+            ax.set_title(title, fontsize=8)
+            fig.tight_layout()
+            save_fig(fig, fname, subdir=subdir)
+
+
+def plot_run10b_vs_run11_comparison(eval_dir: Path = None):
+    """Side-by-side per-object lift comparison: run10b (no ADR) vs run11a (SafeD ADR5) vs run11b (DAgger ADR5)."""
+    import json
+    if eval_dir is None:
+        eval_dir = EXPORTS_DIR.parent.parent / "distillation_new" / "eval_results"
+
+    runs = [
+        ("run10b SafeD (no ADR)", "eval_metrics_20260405_224012.json", COLORS["green"]),
+        ("run11a SafeD + ADR5", "eval_metrics_20260407_084953.json", COLORS["blue"]),
+        ("run11b DAgger + ADR5", "eval_metrics_20260407_084926.json", COLORS["orange"]),
+    ]
+
+    fig, ax = plt.subplots(figsize=(14/2.54, 7/2.54))
+    x = np.arange(len(OBJECTS_TOP8))
+    w = 0.27
+
+    for i, (label, fname, color) in enumerate(runs):
+        with open(eval_dir / fname) as fh:
+            d = json.load(fh)
+        per_obj = d.get("per_object_metrics", {})
+        vals = [per_obj.get(obj, {}).get("lift_success", 0) * 100 for obj in OBJECTS_TOP8]
+        offset = (i - 1) * w
+        bars = ax.bar(x + offset, vals, w, label=label, color=color,
+                      edgecolor="white", linewidth=0.4)
+        for bar, val in zip(bars, vals):
+            if val > 0:
+                ax.text(bar.get_x() + bar.get_width()/2, val + 1.5,
+                        f"{val:.0f}", ha="center", va="bottom", fontsize=4)
+
+    ax.set_ylabel("Lift success (%)")
+    ax.set_xticks(x)
+    ax.set_xticklabels([o.replace("_", " ") for o in OBJECTS_TOP8],
+                       fontsize=5, rotation=45, ha="right")
+    ax.set_ylim(0, 105)
+    ax.legend(fontsize=6, loc="upper right")
+    ax.set_title("Per-Object Lift Success: Best (run10b) vs ADR 5 ablation (run11a/b)", fontsize=8)
+    fig.tight_layout()
+    save_fig(fig, "run10b_vs_run11_per_object_lift", subdir="comparisons")
+
+
+def plot_physics_vs_real_unsafe_breakdown(eval_dir: Path = None):
+    """Stacked bar showing physics vs real unsafe contribution for run10b/11a/11b."""
+    import json
+    if eval_dir is None:
+        eval_dir = EXPORTS_DIR.parent.parent / "distillation_new" / "eval_results"
+
+    runs = [
+        ("run10b SafeD\n(no ADR)", "eval_metrics_20260405_224012.json"),
+        ("run11a SafeD\n+ ADR5", "eval_metrics_20260407_084953.json"),
+        ("run11b DAgger\n+ ADR5", "eval_metrics_20260407_084926.json"),
+    ]
+
+    labels, real_vals, phys_vals, lift_vals = [], [], [], []
+    for label, fname in runs:
+        with open(eval_dir / fname) as fh:
+            d = json.load(fh)
+        m = d["metrics"]
+        uer = m["eval/unsafe_episode_rate"]
+        reasons = m.get("eval/out_of_reach_reason_pct", {})
+        phys_pct_of_unsafe = reasons.get("physics_instability", 0) / 100
+        phys = uer * phys_pct_of_unsafe
+        real = uer - phys
+        labels.append(label)
+        real_vals.append(real * 100)
+        phys_vals.append(phys * 100)
+        lift_vals.append(m["eval/lift_success"] * 100)
+
+    fig, ax = plt.subplots(figsize=(12/2.54, 7/2.54))
+    x = np.arange(len(labels))
+    w = 0.35
+
+    # Stacked unsafe bars
+    b1 = ax.bar(x - w/2, real_vals, w, label="Real unsafe", color=COLORS["red"], alpha=0.85)
+    b2 = ax.bar(x - w/2, phys_vals, w, bottom=real_vals, label="Physics instab.",
+                color=COLORS["gray"], alpha=0.7)
+    # Lift bars
+    b3 = ax.bar(x + w/2, lift_vals, w, label="Lift success", color=COLORS["green"], alpha=0.85)
+
+    for i, (r, p, l) in enumerate(zip(real_vals, phys_vals, lift_vals)):
+        ax.text(x[i] - w/2, r + p + 1, f"{r+p:.0f}", ha="center", fontsize=6)
+        ax.text(x[i] + w/2, l + 1, f"{l:.0f}", ha="center", fontsize=6)
+
+    ax.set_ylabel("Rate (%)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=7)
+    ax.set_ylim(0, 105)
+    ax.legend(fontsize=6, loc="upper right")
+    ax.set_title("Unsafe Breakdown: Physics vs Real (eval)", fontsize=9)
+    fig.tight_layout()
+    save_fig(fig, "physics_vs_real_unsafe_breakdown", subdir="comparisons")
+
+
+def plot_object_stability_across_runs(eval_dir: Path = None):
+    """Per-object lift across all major runs to show object-level stability/sensitivity."""
+    import json
+    if eval_dir is None:
+        eval_dir = EXPORTS_DIR.parent.parent / "distillation_new" / "eval_results"
+
+    runs = [
+        ("run9a SafeD", "eval_metrics_20260404_201637.json"),
+        ("run9b DAgger", "eval_metrics_20260404_201628.json"),
+        ("run10b SafeD 32env", "eval_metrics_20260405_224012.json"),
+        ("run11a SafeD ADR5", "eval_metrics_20260407_084953.json"),
+        ("run11b DAgger ADR5", "eval_metrics_20260407_084926.json"),
+    ]
+
+    obj_data = {obj: [] for obj in OBJECTS_TOP8}
+    for label, fname in runs:
+        with open(eval_dir / fname) as fh:
+            d = json.load(fh)
+        per_obj = d.get("per_object_metrics", {})
+        for obj in OBJECTS_TOP8:
+            obj_data[obj].append(per_obj.get(obj, {}).get("lift_success", 0) * 100)
+
+    # Compute stability score = std deviation across runs (lower = more stable)
+    obj_stability = {obj: (np.mean(vals), np.std(vals)) for obj, vals in obj_data.items()}
+    sorted_objs = sorted(obj_stability.items(), key=lambda x: x[1][1])  # sort by std
+
+    fig, ax = plt.subplots(figsize=(14/2.54, 7/2.54))
+    x = np.arange(len(sorted_objs))
+    means = [s[1][0] for s in sorted_objs]
+    stds = [s[1][1] for s in sorted_objs]
+    names = [s[0].replace("_", " ") for s in sorted_objs]
+
+    bars = ax.bar(x, means, yerr=stds, capsize=3, color=COLORS["blue"], alpha=0.7,
+                  edgecolor="white", linewidth=0.5, error_kw={"linewidth": 0.8})
+    for bar, m, s in zip(bars, means, stds):
+        ax.text(bar.get_x() + bar.get_width()/2, m + s + 1.5,
+                f"σ={s:.0f}", ha="center", fontsize=5)
+
+    ax.set_ylabel("Lift success (%)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, fontsize=6, rotation=45, ha="right")
+    ax.set_ylim(0, 110)
+    ax.set_title("Per-Object Stability Across Runs (sorted by std, lowest=most stable)", fontsize=8)
+    fig.tight_layout()
+    save_fig(fig, "object_stability_across_runs", subdir="comparisons")
+
+
+def plot_failure_mode_detail(objects=("basketball_shoe", "teddy_bear"),
+                            max_iter: int = 100_000, ema_alpha: float = 0.999):
+    """Detailed failure mode plot for selected objects — SafeDagger vs DAgger side by side.
+    Each row is one object, columns are SafeDagger and DAgger.
+    """
+    n_rows = len(objects)
+    fig, axes = plt.subplots(n_rows, 2, figsize=(14/2.54, n_rows * 5/2.54),
+                             sharex=True, sharey=True)
+    if n_rows == 1:
+        axes = axes.reshape(1, -1)
+
+    for row, obj in enumerate(objects):
+        for col, (csv_name, n_envs, method, _) in enumerate(DISTILLATION_RUNS_6):
+            ax = axes[row, col]
+            for reason in UNSAFE_REASONS:
+                metric = f"train/{obj}/unsafe_reason_prop/{reason}"
+                df = _load_distillation_metric(
+                    csv_name, metric, n_envs,
+                    max_iter=max_iter, smooth_window=1)
+                if df.empty:
+                    continue
+                raw = df["value"].values * 100
+                smoothed = _ema(raw, alpha=ema_alpha)
+                iters = df["iteration"].values
+                step = max(1, len(iters) // 500)
+                ax.fill_between(iters[::step], 0, smoothed[::step],
+                                color=REASON_COLORS[reason], alpha=0.15)
+                ax.plot(iters[::step], smoothed[::step],
+                        color=REASON_COLORS[reason], linewidth=1.2, alpha=0.9,
+                        label=REASON_LABELS[reason] if row == 0 else None)
+
+            ax.set_xlim(0, max_iter)
+            ax.set_ylim(0, 30)
+            ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+            ax.tick_params(labelsize=6)
+            if row == 0:
+                ax.set_title(method, fontsize=9)
+            if col == 0:
+                ax.set_ylabel(obj.replace("_", " ") + "\nRate (%)", fontsize=7)
+            if row == n_rows - 1:
+                ax.set_xlabel("Iteration", fontsize=7)
+
+    axes[0, 0].legend(fontsize=5, loc="upper right")
+    fig.suptitle("Failure Mode Analysis: SafeDAgger vs DAgger (Run 6)", fontsize=9, y=1.02)
+    fig.tight_layout()
+    save_fig(fig, "run6_failure_mode_detail")
+
 
 def plot_distillation_comparison_run5(max_iter: int = 100_000, ema_alpha: float = 0.999):
     """Three separate plots for run5a/5b with real termination data."""
@@ -1078,10 +1870,20 @@ def main():
     plot_per_object_unsafe_real_per_run()
     plot_distillation_comparison()
     plot_distillation_comparison_run5()
+    plot_distillation_comparison_run6()
+    plot_per_object_lifted_head_to_head_run6()
+    plot_per_object_unsafe_episode_head_to_head_run6()
+    plot_per_object_failure_mode_run6()
     plot_per_object_eval_run5()
     plot_per_object_term_real_head_to_head()
     plot_per_object_lift_head_to_head_run5()
     plot_termination_breakdown()
+    # Per-run organized plots
+    plot_run("run6", DISTILLATION_RUNS_6, OBJECTS)
+    plot_run("run7", DISTILLATION_RUNS_7, OBJECTS_TOP8)
+    plot_run("run8", DISTILLATION_RUNS_8, OBJECTS_TOP8, eval_files=RUN8_EVAL_FILES)
+    plot_run("run9", DISTILLATION_RUNS_9, OBJECTS_TOP8, eval_files=RUN9_EVAL_FILES)
+    plot_run("run10", DISTILLATION_RUNS_10, OBJECTS_TOP8, eval_files=RUN10_EVAL_FILES)
     print("Done.")
 
     if args.show:
