@@ -1101,3 +1101,34 @@ CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python
 - Thumb still visibly buckling in livestream → even slower thumb (0.25 rad/s) or stiffer thumb_mcp_pitch actuator (stiffness 10 → 25) becomes next lever
 
 **Result:** *(to be filled in)*
+
+#### Update — run3i actuator split reverted (2026-05-11)
+
+**Run dir of failed attempt:** `logs/rl_games/dextrah_tekken_lstm/05-11_18-14-16/`
+
+After restarting training with the run3i changes (thumb actuator split into separate `thumb_mcp_pitch` / `thumb_mcp_yaw` / `thumb_pip` groups at 0.5 rad/s, finger groups at 1.0 rad/s, raised curl cap, thumb init at 3°), the env immediately hit **vel_explosion terminations at every reset**:
+
+- `episode_lengths/iter` = **2.241** (vs normal hundreds — episodes dying after ~2 steps)
+- `joint_velocity_penalty/iter` = **-12.541** (vs max -0.017 historically — finger joint velocities exploding to ~30+ rad/s despite the 0.5/1.0 cap)
+- `lift_reward = contact_reward = good_grasp_reward = object_contact_count = 0` (hand never reaches the object before termination)
+
+**Root cause hypothesis:** splitting the joint regex `revolute_.*_mcp_pitch` into multiple actuator groups (one matching thumb, one matching other fingers) causes IsaacLab actuator-vs-USD limit resolution to break down — PhysX falls back to USD-baked velocity limits OR fails to enforce the Python-side velocity_limit_sim correctly, producing immediate constraint violations at reset.
+
+**Action: reverted the split.** Restored the unified actuator groups:
+- `mcp_pitch`: regex `revolute_.*_mcp_pitch` (all 5 mcp_pitch joints), velocity_limit_sim=1.0
+- `mcp_yaw`: regex `revolute_.*_mcp_yaw`, velocity_limit_sim=1.0
+- `pip`: regex `revolute_.*_pip`, velocity_limit_sim=1.0
+
+The thumb now shares the same 1.0 rad/s limit as the other fingers' non-rotation joints (thumb_rot stays at 0.2618 rad/s via its dedicated `thumb_rot` actuator group, which works because it has only one joint and no split).
+
+**All other run3i changes retained:**
+- `contact_mask = good_grasp_mask` gate (env.py:2243)
+- thumb_mcp_pitch + thumb_pip init at 3°
+- `finger_curl_reg` ADR (-1.5, -3.0)
+- `finger_curl_reg_min` cap -6.0
+- `lift_weight` ADR (60, 30)
+- `thumb_rot_init` EventTerm still removed
+
+**Lesson** (also captured in CLAUDE.md): avoid splitting a joint regex across multiple actuator groups in IsaacLab. Tune velocity_limit_sim at the unified-group level instead. If thumb-specific velocity is needed in the future, the only safe approach is to add a separate single-joint actuator (like `thumb_rot` already is) rather than splitting an existing regex.
+
+**Result:** *(to be filled in once livestream confirms episodes are running normally and lift behavior is observable)*

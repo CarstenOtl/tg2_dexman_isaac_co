@@ -100,54 +100,26 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
             stiffness=60.0,             # 20→60: 3× stiffer for better tracking
             damping=2.0,
         ),
-        # Non-thumb fingers (index / middle / ring / pinky)
-        "finger_mcp_pitch": ImplicitActuatorCfg(
-            joint_names_expr=[r"revolute_(index|middle|ring|pinky)_mcp_pitch"],
+        "mcp_pitch": ImplicitActuatorCfg(
+            joint_names_expr=[r"revolute_.*_mcp_pitch"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=1.0,   # 2026-05-11: 8 → 1.0 rad/s (~57 deg/s). Previous 8 rad/s (~460 deg/s) was unsafe and let contact forces fling joints backward.
+            velocity_limit_sim=1.0,   # 2026-05-11: 8 → 1.0 rad/s (~57 deg/s). Previous 8 rad/s (~460 deg/s) was unsafe and let contact forces fling joints backward in a single 60Hz step (up to 7.6°), causing thumb buckling on approach. NOTE: thumb actuator split was tried at 0.5 rad/s but caused immediate vel_explosion terminations at reset (constraint conflict between IsaacLab actuator config and USD-baked joint limits when split into multiple groups). Reverted to a single unified group covering all 5 mcp_pitch joints.
             stiffness=10.0,
-            damping=6.0,
+            damping=6.0,              # 3→6: more damping, smoother contact
         ),
-        "finger_mcp_yaw": ImplicitActuatorCfg(
-            joint_names_expr=[r"revolute_(index|middle|ring|pinky)_mcp_yaw"],
+        "mcp_yaw": ImplicitActuatorCfg(
+            joint_names_expr=[r"revolute_.*_mcp_yaw"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=1.0,
+            velocity_limit_sim=1.0,   # 2026-05-11: 8 → 1.0 rad/s (matched to mcp_pitch above).
             stiffness=10.0,
-            damping=6.0,
+            damping=6.0,              # 3→6
         ),
-        "finger_pip": ImplicitActuatorCfg(
-            joint_names_expr=[r"revolute_(index|middle|ring|pinky)_pip"],
+        "pip": ImplicitActuatorCfg(
+            joint_names_expr=[r"revolute_.*_pip"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=1.0,
+            velocity_limit_sim=1.0,   # 2026-05-11: 8 → 1.0 rad/s (matched to mcp_pitch above).
             stiffness=10.0,
-            damping=6.0,
-        ),
-        # Thumb-specific (thumb_rot already split above with its own hardware-realistic velocity).
-        # 2026-05-11: split out from the general mcp/pip groups so thumb's non-rot joints can be
-        # slowed independently. Half the other fingers' velocity (0.5 vs 1.0 rad/s ≈ 28 deg/s)
-        # to make it physically impossible to buckle thumb_mcp_pitch in a single 60Hz step
-        # (~0.5° per step max). Combined with the existing weak mcp_pitch stiffness=10, this
-        # forces the policy to plan its thumb approach rather than relying on fast recovery.
-        "thumb_mcp_pitch": ImplicitActuatorCfg(
-            joint_names_expr=["revolute_thumb_mcp_pitch"],
-            effort_limit_sim=2.0,
-            velocity_limit_sim=0.5,   # ~28 deg/s, half of other fingers
-            stiffness=10.0,
-            damping=6.0,
-        ),
-        "thumb_mcp_yaw": ImplicitActuatorCfg(
-            joint_names_expr=["revolute_thumb_mcp_yaw"],
-            effort_limit_sim=2.0,
-            velocity_limit_sim=0.5,
-            stiffness=10.0,
-            damping=6.0,
-        ),
-        "thumb_pip": ImplicitActuatorCfg(
-            joint_names_expr=["revolute_thumb_pip"],
-            effort_limit_sim=2.0,
-            velocity_limit_sim=0.5,
-            stiffness=10.0,
-            damping=6.0,
+            damping=6.0,              # 3→6
         ),
         #
         # "franka_tekken_actuators": ImplicitActuatorCfg(
