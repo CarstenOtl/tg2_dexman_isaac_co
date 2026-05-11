@@ -278,6 +278,9 @@ class SafeDagger:
         self.game_lengths = torch_ext.AverageMeter(1, self.games_to_track).to(self.device)
         self.game_unsafe_terminated = torch_ext.AverageMeter(1, self.games_to_track).to(self.device)
         self.game_lift_success = torch_ext.AverageMeter(1, self.games_to_track).to(self.device)
+        # Hold-gated GSR (matches eval_student.py / report eq. 4.2): object above lift
+        # threshold + contact, sustained for Nhold consecutive steps.
+        self.game_hold_lift_success = torch_ext.AverageMeter(1, self.games_to_track).to(self.device)
         self.game_unsafe_reason = {
             name: torch_ext.AverageMeter(1, self.games_to_track).to(self.device)
             for name in self.unsafe_reason_names
@@ -290,6 +293,10 @@ class SafeDagger:
             for name in self.metric_object_names
         }
         self.game_lift_success_by_object = {
+            name: torch_ext.AverageMeter(1, self.games_to_track).to(self.device)
+            for name in self.metric_object_names
+        }
+        self.game_hold_lift_success_by_object = {
             name: torch_ext.AverageMeter(1, self.games_to_track).to(self.device)
             for name in self.metric_object_names
         }
@@ -306,6 +313,26 @@ class SafeDagger:
             (self.num_envs,), -1, dtype=torch.long, device=self.device
         )
         self.current_episode_lifted = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # Per-env state for hold-gated GSR (matches eval_student.py)
+        self.current_lift_hold_counts = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.current_episode_hold_lifted = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # Hold-gate threshold: 0.5 s default (report: Nhold=30 at 60 Hz).
+        eval_hold_s = float(getattr(self.ov_env.cfg, "eval_lift_hold_s", 0.5))
+        if self._debug_step_dt > 0.0:
+            self.lift_hold_steps = max(1, int(math.ceil(eval_hold_s / self._debug_step_dt)))
+        else:
+            self.lift_hold_steps = 30
+        # Cache lift-height threshold (object z must exceed this to count as lifted).
+        table_center_z = self.ov_env.cfg.table_cfg.init_state.pos[2]
+        table_size_z = getattr(self.ov_env.cfg, "table_size_z", 0.03)
+        table_top_z = table_center_z + 0.5 * table_size_z
+        self._lift_height_thresh = table_top_z + getattr(self.ov_env.cfg, "object_height_thresh", 0.0)
+        print(
+            f"[INFO] Hold-gated GSR: hold_steps={self.lift_hold_steps} "
+            f"(~{eval_hold_s:.3f}s target, dt={self._debug_step_dt:.5f}s), "
+            f"lift_height_thresh={self._lift_height_thresh:.4f}",
+            flush=True,
+        )
         self.viz_imgs = False
         if self.viz_imgs:
             self.fig, (self.ax1, self.ax2) = plt.subplots(1, 2, figsize=(10, 5))
@@ -651,6 +678,25 @@ class SafeDagger:
             # Track if object was lifted at any point during this episode
             if hasattr(self.ov_env, "lift_success"):
                 self.current_episode_lifted = self.current_episode_lifted | self.ov_env.lift_success
+            # Hold-gated GSR: per-step height + contact, consecutive hold counter.
+            step_lifted = self.ov_env.object_pos[:, 2] > self._lift_height_thresh
+            if hasattr(self.ov_env, "good_grasp_mask") and self.ov_env.good_grasp_mask is not None:
+                step_contact = self.ov_env.good_grasp_mask.to(device=self.device, dtype=torch.bool)
+            elif hasattr(self.ov_env, "object_contact_counts") and self.ov_env.object_contact_counts is not None:
+                step_contact = self.ov_env.object_contact_counts.to(device=self.device) > 0.0
+            else:
+                step_contact = torch.ones_like(step_lifted, dtype=torch.bool)
+            step_lifted = step_lifted & step_contact
+            active_envs = ~self.dones if hasattr(self, "dones") else torch.ones_like(step_lifted)
+            self.current_lift_hold_counts = torch.where(
+                active_envs & step_lifted,
+                self.current_lift_hold_counts + 1,
+                torch.where(active_envs, torch.zeros_like(self.current_lift_hold_counts), self.current_lift_hold_counts),
+            )
+            self.current_episode_hold_lifted = (
+                self.current_episode_hold_lifted
+                | (self.current_lift_hold_counts >= self.lift_hold_steps)
+            )
             classified = reason_idx >= 0
             new_reason_mask = (self.current_unsafe_reason_idx < 0) & out_of_reach & classified
             self.current_unsafe_reason_idx[new_reason_mask] = reason_idx[new_reason_mask]
@@ -692,6 +738,7 @@ class SafeDagger:
             # Episode-level unsafe + lift tracking (matching upstream AverageMeter pattern)
             self.game_unsafe_terminated.update(self.current_unsafe_terminated[done_indices].float())
             self.game_lift_success.update(self.current_episode_lifted[done_indices].float())
+            self.game_hold_lift_success.update(self.current_episode_hold_lifted[done_indices].float())
             if len(done_indices) > 0:
                 done_env_ids = done_indices.squeeze(-1) if done_indices.ndim > 1 else done_indices
                 done_reason_idx = self.current_unsafe_reason_idx[done_env_ids].clone()
@@ -712,6 +759,9 @@ class SafeDagger:
                         self.game_lift_success_by_object[obj_name].update(
                             self.current_episode_lifted[obj_done_ids].float()
                         )
+                        self.game_hold_lift_success_by_object[obj_name].update(
+                            self.current_episode_hold_lifted[obj_done_ids].float()
+                        )
                         obj_reason_idx = done_reason_idx[obj_mask]
                         for reason_name, reason_i in self.unsafe_reason_to_idx.items():
                             self.game_unsafe_reason_by_object[obj_name][reason_name].update(
@@ -722,6 +772,8 @@ class SafeDagger:
             self.current_lengths = self.current_lengths * not_dones
             self.current_unsafe_terminated = self.current_unsafe_terminated & self.dones.logical_not()
             self.current_episode_lifted = self.current_episode_lifted & self.dones.logical_not()
+            self.current_episode_hold_lifted = self.current_episode_hold_lifted & self.dones.logical_not()
+            self.current_lift_hold_counts[done_indices] = 0
             self.current_unsafe_reason_idx[done_indices] = -1
             self.actions_teacher[done_indices] *= 0.
             if len(done_indices) > 0:
@@ -825,6 +877,13 @@ class SafeDagger:
                         self.writer.add_scalar(
                             "train/avg/lift_success", lift_episode_rate, self.frame
                         )
+                    if self.game_hold_lift_success.current_size > 0:
+                        hold_gsr = float(
+                            np.asarray(self.game_hold_lift_success.get_mean()).reshape(-1)[0]
+                        )
+                        self.writer.add_scalar(
+                            "train/GSR", hold_gsr, self.frame
+                        )
                     for name in self.unsafe_reason_names:
                         reason_rate = float(
                             np.asarray(self.game_unsafe_reason[name].get_mean()).reshape(-1)[0]
@@ -849,6 +908,14 @@ class SafeDagger:
                                 )
                                 self.writer.add_scalar(
                                     f"train/{obj_name}/lift_success", obj_lift, self.frame
+                                )
+                            obj_hold_meter = self.game_hold_lift_success_by_object[obj_name]
+                            if obj_hold_meter.current_size > 0:
+                                obj_hold = float(
+                                    np.asarray(obj_hold_meter.get_mean()).reshape(-1)[0]
+                                )
+                                self.writer.add_scalar(
+                                    f"train/{obj_name}/GSR", obj_hold, self.frame
                                 )
                             for reason_name in self.unsafe_reason_names:
                                 reason_meter = self.game_unsafe_reason_by_object[obj_name][reason_name]

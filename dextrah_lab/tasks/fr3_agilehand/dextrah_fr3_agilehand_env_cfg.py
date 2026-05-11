@@ -110,16 +110,16 @@ class EventCfg:
         },
     )
 
-    # Thumb rotation init randomization: -20° to 0° (default is -0.3491, offset 0 to +0.3491)
-    thumb_rot_init = EventTerm(
-        func=mdp.reset_joints_by_offset,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=["revolute_thumb_rot"]),
-            "position_range": (0.0, 0.3491),
-            "velocity_range": (0.0, 0.0),
-        },
-    )
+    # NOTE: thumb_rot_init EventTerm removed 2026-05-11 — was randomizing thumb_rot
+    # offset 0.0→0.3491 rad on every reset (final range -20° to 0°). With recent
+    # observation that the thumb collides with object during approach despite the
+    # -20° init position being honored, the random offset toward 0° may be hurting
+    # rather than helping (policy can't develop a consistent approach if thumb
+    # starts in different positions each episode). With this removed, thumb_rot
+    # always starts at the init_state value (-0.3491 rad = -20°, joint min). If
+    # diversity in thumb_rot at reset turns out to be needed, re-introduce as
+    # an ADR-curriculum'd term ramping (0.0, 0.0) → (0.0, 0.3491) instead of
+    # full random from step 0.
 
     # Arm joint init randomization: ±0.2 rad (~11.5°) from default pose at every reset.
     # Forces the policy to learn approach from varied arm configurations from the start.
@@ -229,9 +229,6 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     # 0 = use actual num_unique_objects. Set to teacher's object count (e.g. 13) if distilling
     # with a subset of objects.
     teacher_onehot_size: int = 0
-    # Directory of objects the teacher was trained on. Used during distillation to map
-    # object names to correct one-hot indices. If None, assumes same objects as current.
-    teacher_objects_dir: str = ""
 
     state_space = 0
     observation_space = 0
@@ -272,9 +269,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                 "fr3_joint6":  2.9671,  #  170.0 degrees
                 "fr3_joint7":  0.0000,  #  0.0 degrees
                 "revolute_thumb_rot": -0.3491,  # -20 deg (joint min is -30 deg)
-                "revolute_thumb_mcp_pitch": 0.0,
+                "revolute_thumb_mcp_pitch": 0.0524,  # 2026-05-11: 0.0 → 0.0524 (3°). Init at joint min (0°) caused PD oscillation against the hard stop when policy commanded "stay open." Small offset gives the joint wiggle room. Also moves the curled_q target to 3° so the regularizer rewards mild curl (achievable) instead of 0° (limit-bound).
                 "revolute_thumb_mcp_yaw": 0.0,
-                "revolute_thumb_pip": 0.0,
+                "revolute_thumb_pip": 0.0524,  # 2026-05-11: 0.0 → 0.0524 (3°). Same reason as thumb_mcp_pitch.
                 "revolute_index_mcp_pitch": 0.1,
                 "revolute_index_mcp_yaw": 0.0,
                 "revolute_index_pip": 0.0,
@@ -749,14 +746,14 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_object_contact_weight = 3.0   # 8→4→3: contact still dominating lift
     good_grasp_weight = 3.0            # 6→3: halved
     finger_curl_reg_weight = -0.2    # reduced to allow ADR to widen; was -0.5
-    finger_curl_reg_min = -3.0 # max penalty for finger curl
+    finger_curl_reg_min = -6.0 # 2026-05-11: -8 → -6. Started at -3 (run3h saturated), raised to -8 but that over-penalized — policy over-corrected by pinning thumb at joint min, causing PD instability against the limit. -6 lets the penalty bite (2× the original -3 cap) without driving the policy into the unstable "pin against joint min" pose.
     finger_curl_reg_max = 0.0 # min penalty for finger curl
 
     #phase 3: lifting
     object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
-    success_bonus_weight = 20.0  # bumped from 10: stronger incentive to close last few cm to goal
-    lift_sharpness = 4.0 #default 8.5; 2→4: steeper lift saturation so goal reward dominates once object is off table
+    success_bonus_weight = 10.0  # flat bonus per step when object is in goal region
+    lift_sharpness = 2.0 #default 8.5; 5→2: much flatter gradient so policy discovers lifting from table height
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
@@ -843,25 +840,25 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "restitution_range": (0.8, 1.0)
         },
         "arm_joint_stiffness_and_damping": {
-            "stiffness_distribution_params": (0.7, 1.5),
-            "damping_distribution_params": (0.7, 1.5),
+            "stiffness_distribution_params": (0.5, 2.),
+            "damping_distribution_params": (0.5, 2.),
         },
-        # Finger gains: tightened min from 0.5→0.7 to reduce grasp fragility at higher ADR
+        # Finger gains: matched to kuka_allegro/tg2_inspirehand proven sim2real ranges
         "finger_mcp_pitch_gains": {
-            "stiffness_distribution_params": (0.7, 2.),
-            "damping_distribution_params": (0.7, 2.),
+            "stiffness_distribution_params": (0.5, 2.),
+            "damping_distribution_params": (0.5, 2.),
         },
         "finger_mcp_yaw_gains": {
-            "stiffness_distribution_params": (0.7, 2.),
-            "damping_distribution_params": (0.7, 2.),
+            "stiffness_distribution_params": (0.5, 2.),
+            "damping_distribution_params": (0.5, 2.),
         },
         "finger_pip_gains": {
-            "stiffness_distribution_params": (0.7, 2.),
-            "damping_distribution_params": (0.7, 2.),
+            "stiffness_distribution_params": (0.5, 2.),
+            "damping_distribution_params": (0.5, 2.),
         },
         "thumb_rot_gains": {
-            "stiffness_distribution_params": (0.7, 2.),
-            "damping_distribution_params": (0.7, 2.),
+            "stiffness_distribution_params": (0.5, 2.),
+            "damping_distribution_params": (0.5, 2.),
         },
         "robot_joint_friction": {
             "friction_distribution_params": (0., 5.),
@@ -910,7 +907,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "robot_spawn": {
             # TODO: Re-enable joint position noise after verifying open hand behavior
             # Original value was (0., 0.35) which adds ±20° randomization at reset
-            "joint_pos_noise": (0., 0.35),  # matched to kuka_allegro; EventTerm adds ±0.2 rad on top
+            "joint_pos_noise": (0., 0.8),  
             "joint_vel_noise": (0., 1.),
         },
         "robot_state_noise": {
@@ -922,8 +919,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "reward_weights": {
             "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
-            "lift_weight": (40., 30.),  # slower decay so lift signal stays strong while goal sharpness ramps up
-            "finger_curl_reg": (-0.3, -0.8),  # reduced: previous (-0.5,-1.2) penalized grasps too aggressively at higher ADR
+            "lift_weight": (60., 30.),  # 2026-05-11: bumped from (40,20) — stronger lift signal so policy invested in successful grasps gets more reward than buckled-thumb shaped-reward exploit
+            "finger_curl_reg": (-1.5, -3.0),  # 2026-05-11: bumped from (-0.8,-1.8) — even stronger curl penalty after run3g still showed thumb buckling visually; trying to make buckled-thumb pose explicitly unprofitable
         },
         "pd_targets": {
             "velocity_target_factor": (1., 0.)

@@ -571,3 +571,533 @@ CUDA_VISIBLE_DEVICES=1 python train.py --headless --task=dextrah_fr3_agilehand -
 - **Flatline `lift_weight` (40, 40)** — remove the decay that's degrading lifting
 - **Lower `success_for_adr` to 0.3** — let policy advance through ADR 13 with current performance
 - **Resume from ep 2500 with `starting_adr_increments=14`** — skip the wall (caveat: LSTM hidden state lost on resume)
+
+### Teacher v2 evaluated on visdex_top8 (2026-05-07)
+
+First eval of Teacher v2 (run2g, policy 12, trained on visdex_selected = 13 objects) on `multi_objects/visdex_top8` — the same 8-object subset used as student environment in exp_04 distillation. Goal: get a teacher number directly comparable to student visdex_top8 lift rates without relying on post-hoc per-object subsetting.
+
+**Surface bug found and fixed during this eval:** the `teacher_objects_dir` index-remap mechanism (introduced in main commit `0dc3362` to fix one-hot identity scrambling for distillation runs) was gated to `self.cfg.distillation` only. Teacher eval runs with `distillation=False`, so the gate skipped the remap and 7/8 objects got wrong one-hot indices, producing **26.9% lift / 35.0% unsafe** before the fix.
+
+Generalized the gate (env.py line 672, dropped `and self.cfg.distillation`) and added `--teacher_onehot_size` and `--teacher_objects_dir` flags to `eval_teacher.py` to match the distillation runner's interface.
+
+**Sanity check after fix** — env logged the expected visdex_selected-aligned mapping:
+```
+basketball_shoe→0, closed_fist→2, elephant_toy→3, mario→5,
+milk_pot→6, teddy_bear→8, toy_bagger→9, tutle_candle_holder→12
+```
+(8-object subset, alphabetical visdex_selected positions, *not* sequential 0-7.)
+
+**Eval command:**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 python eval_teacher.py \
+  --task dextrah_fr3_agilehand --headless \
+  --checkpoint stored_policies/fr3_agilehand/12_teacher_v2_hw_realistic_adr13_04-06_12-49-15/nn/dextrah_tekken_lstm.pth \
+  --objects_dir multi_objects/visdex_top8 \
+  --teacher_onehot_size 13 \
+  --teacher_objects_dir multi_objects/visdex_selected \
+  --num_envs 32 --eval_episodes 10 \
+  --file_name_head teacher_v2_visdex_top8_FIXED
+```
+
+**Result (320 episodes, ADR 0):**
+
+| Metric | Teacher v2 visdex_top8 | Teacher v2 visdex_selected (run2g baseline) | Teacher 11 visdex_top8 (main repo, post-hoc) |
+|---|---|---|---|
+| Lift success | **59.4%** | 79.1% | 99.0% |
+| Unsafe rate | 46.6% | 25.3% | 22.4% |
+| object_out_of_bound (% of unsafe) | 64.4% | — | — |
+| physics_instability (% of unsafe) | 22.1% | — | — |
+| harmful_collision (% of unsafe) | 10.7% | — | — |
+| palm_flipped (% of unsafe) | 2.7% | — | — |
+
+**JSON:** `dextrah_lab/rl_games/logs/eval_tb_20260507_211757/teacher_v2_visdex_top8_FIXED_20260507_212113.json`
+
+**Apples-to-apples with Teacher 11.** The `multi_objects/visdex_top8` directory contents are bit-identical between this test repo and the main repo (`diff -rq` empty), so the 59.4% Teacher v2 number is directly comparable to the 99.0% Teacher 11 visdex_top8 baseline computed on main. **Teacher v2 is ~40pp behind Teacher 11** on the same 8 objects.
+
+**Interpretation:** Teacher v2 drops ~20pp on visdex_top8 vs its native 13-object set (79.1% → 59.4%) — the hardware-realistic ADR 13 training generalizes worse on this subset than the easier-curriculum Teacher 11 (which actually peaks on top8 because the 13-set average was dragged down by two unliftable objects, train/chicken_head_in_car). Failure mode is dominated by `object_out_of_bound` (64.4% of unsafe episodes), suggesting the policy commits to lift trajectories that fling the object off the table on harder objects.
+
+### Teacher v2 retrain attempt — replay run2a after state drift (2026-05-08)
+
+**Branch:** `fr3_agilehand_teacher_v2`
+**Run dir:** `logs/rl_games/dextrah_tekken_lstm/05-08_00-18-43/` (failed run, kept for forensics)
+
+**Motivation:** During the visdex_top8 eval work on 2026-05-07, the original Teacher v2 (run2g, policy 12) measured **52.2% lift** on visdex_selected — a 27pp drop from the Apr 7 baseline of 79.1%. After eliminating env_cfg, env.py, eval_teacher.py, and dextrah_lab code as differences (all bit-identical), the only remaining variable was system state: IsaacLab was upgraded `v2.2.1 → v2.3.0` on 2026-05-06 (different env's needs), then reverted to v2.2.1 on 2026-05-07 with a `./isaaclab.sh -i` reinstall. The Apr 7 79.1% was on pre-toggle IsaacLab; today's measurements are on post-reinstall IsaacLab. Decided to retrain Teacher v2 from scratch under the (currently-installed) IsaacLab v2.2.1 to get a deployable teacher for hardware testing.
+
+**First retrain attempt (05-08_00-18-43, failed):**
+Used the committed env_cfg.py state at HEAD (which reflects run2g's *committed* values: lift_sharpness=4.0, success_bonus_weight=20, finger gain ADR (0.7,2.0), arm gain ADR (0.7,1.5), joint_pos_noise (0,0.35), lift_weight (40,30), finger_curl_reg (-0.3,-0.8)). Ran 1024 envs, single GPU, headless, seed 42, 18k epochs.
+
+**Result:** Training never learned to lift. `lift_success` peaked at 0.008 around epoch 470, then collapsed to ~0 for the entire remaining 17k epochs. `num_adr_increases` stayed at 0 for the full run. Compared to run2g at the same step:
+
+| Epoch | This run lift | run2g lift | This run ADR | run2g ADR |
+|---|---|---|---|---|
+| 100 | 0.000 | 0.014 | 0 | 0 |
+| 500 | 0.002 | 0.160 | 0 | 0 |
+| 1000 | 0.001 | **0.571** | 0 | 0 |
+| 6000 | 0.000 | 0.433 | 0 | 13 |
+| 18000 | 0.000 | 0.269 | 0 | 13 |
+
+Shaped rewards were non-zero (`lift_reward≈5`, `contact≈6`) — the policy interacts with objects but never completes a sustained lift. Stuck local optimum.
+
+**Diagnosis:** Discovered that the *committed* env_cfg state never matched what was actually used during run2a → run2g training. The env_cfg.py at commit `4fe7cb7` (Apr 7 13:53, "Teacher v2 runs 2a-2g") was committed *after* runs 2a-2g already finished training; the user accumulated uncommitted edits across the run2a→run2g iterations and committed them all at the end. Specifically:
+- The committed state has run2g's *cumulative* settings (the iterative sequence's endpoint)
+- Each individual run (2a, 2b, ..., 2g) used a different intermediate working-tree state
+- run2a's actual training state = commit `32a8924` (Apr 3) — the only state that was both committed AND matched a documented successful run
+
+This is why retraining against committed HEAD doesn't reproduce any documented run.
+
+**Decision:** Replay run2a using its documented committed state (`32a8924`) — it reached ADR 13 with 78.3% lift / 21.6% unsafe (per exp_03 run2a entry above), which is a deployable teacher for hardware. run2a's settings were:
+- `lift_sharpness=2.0`, `success_bonus_weight=10.0`, `finger_curl_reg_weight=-0.2` (base term weights)
+- ADR ranges: `joint_pos_noise=(0., 0.8)`, `arm_joint_stiffness_and_damping=(0.5, 2.)`, `finger gains=(0.5, 2.)`, `lift_weight=(40., 20.)`, `finger_curl_reg=(-0.5, -1.2)`
+- All hardware-realistic actuator limits and `arm_joint_init` EventTerm intact (these were always in 32a8924)
+
+**Revert command:**
+```bash
+git checkout 32a8924 -- dextrah_lab/tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py
+```
+
+**Verified:** asset files (`FR3_tekkenadof_left.usd`, `fr3_tekken_left.py`) unchanged between 32a8924 and HEAD; env.py only adds the no-op `teacher_objects_dir` mechanism.
+
+**Retrain command:**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Success criteria:**
+- `lift_success` crosses 0.1 by ep ~370 (run2g's pattern; run2a expected similar)
+- `num_adr_increases` starts climbing from ep ~2000
+- Reaches ADR 13 around ep ~6500, with lift ~78%
+- Best-reward checkpoint (`dextrah_tekken_lstm.pth`) becomes the deployable Teacher v2 replacement for policy 12
+
+**Important caveat going forward:** The 79.1% historical baseline for Teacher v2 (policy 12 .pth) is no longer reproducible from current state — system-state drift between Apr 6 training and today's evals shifts measurement by ~25pp. Any new comparisons should use today's reproducible numbers (52.2% on visdex_selected with current code/IsaacLab). After this retrain succeeds, the new policy will replace policy 12 as the canonical Teacher v2.
+
+#### Update — seed=42 retrain on run2a env_cfg also failed (2026-05-08)
+
+**Run dir:** `logs/rl_games/dextrah_tekken_lstm/05-08_12-05-22/` (failed)
+
+After reverting env_cfg.py to commit `32a8924` (run2a's documented committed state), retrained from scratch with same train command as run2a (1024 envs, single GPU, seed=42, IsaacLab v2.2.1). Training failed identically to last night's attempt — `lift_success` never crossed 0.003 through 2700+ epochs.
+
+**Side-by-side vs run2a (Apr 3) at matched epochs:**
+
+| Epoch | Today (run2a env_cfg, seed=42) | run2a (Apr 3) |
+|---|---|---|
+| 100 | 0.000 lift | 0.014 lift |
+| 500 | 0.000 lift | 0.160 lift |
+| 1000 | 0.000 lift | **0.571 lift** |
+| 2000 | 0.000 lift | 0.547 lift, ADR 2 |
+
+Identical "touch-but-don't-lift" basin: `lift_reward≈14`, `contact≈3.5`, `object_to_goal≈3.4` — policy interacts with the object and elevates it slightly (enough for the shaped lift reward to saturate at sharpness=2.0) but never reaches the 15cm `object_height_thresh` for binary lift_success.
+
+**Conclusion:** env_cfg is definitively NOT the cause. The exact same env_cfg that worked in April fails today. Remaining suspects: IsaacLab v2.2.1 reinstall today (subtly different file state vs April's v2.2.1), GPU floating-point non-determinism, or other system-level state drift since April.
+
+#### seed=1 attempt (2026-05-08, in progress)
+
+**Run dir:** `logs/rl_games/dextrah_tekken_lstm/05-08_13-39-55/`
+**GPU:** CUDA_VISIBLE_DEVICES=2
+
+Same train command as the failed seed=42 retrain, only `--seed 1` and capped `max_epochs=2000` (~30 min). If a different seed escapes the touch-don't-lift basin, the failure was seed-specific GPU-non-determinism. If seed=1 also fails, environment drift is structural and we accept policy 12 (the existing Teacher v2 .pth) at 52-55% lift as the canonical Teacher v2 for hardware testing.
+
+**Decision rule:**
+- `lift_success > 0.1` by ep ~500 → seed=1 found a working basin, let it run longer to reproduce ADR 13
+- Still flat at ep 500 → try seed=7 or accept policy 12 as-is
+
+```bash
+CUDA_VISIBLE_DEVICES=2 python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 1 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=2000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+#### seed=1 result and final decision (2026-05-08)
+
+**Run dir:** `logs/rl_games/dextrah_tekken_lstm/05-08_13-39-55/` (seed=1, run2a env_cfg, ~600 iters)
+
+**Result:** Identical failure to seed=42. Same touch-don't-lift basin:
+- `lift_reward` ramps to ~12-13 by iter 400 (object elevated slightly, lift-shape reward saturates flat)
+- `lift_success` stays at ~0 (max spike ~1e-3, no episode crosses 15 cm threshold)
+- `num_adr_increases` stuck at 0
+- TensorBoard plots show monotonic plateau, not learning
+
+**Three failed retraining attempts in a row** (all with the same touch-don't-lift basin):
+
+| Run dir | Env_cfg state | Seed | Outcome |
+|---|---|---|---|
+| `05-08_00-18-43` | run2g (committed HEAD) | 42 | ADR 0, lift_success=0 through 18k epochs |
+| `05-08_12-05-22` | **run2a (32a8924)** | 42 | ADR 0, lift_success=0 through 2.7k epochs |
+| `05-08_13-39-55` | run2a (32a8924) | 1 | ADR 0, lift_success≈1e-3 through ~600 iters |
+
+This is **structural, not random variance** (six consecutive successes in April, three consecutive failures today). Some system-level state has shifted since April that we cannot pinpoint with the diagnostics available. Verified-identical things between April and now:
+- `env_cfg.py` content (reverted bit-identical to 32a8924)
+- `env.py` content (only no-op `teacher_objects_dir` mechanism added; finger spawn-noise zeroing intact since 32a8924)
+- Asset USDs and `fr3_tekken_left.py` (unchanged blob hashes)
+- IsaacLab git ref (`v2.2.1`, `git status` clean, `__pycache__` cleared)
+- `dextrah_test` conda env packages (Mar 25 mtime, identical pip freeze except numpy patch)
+
+**Plausible mechanism (not testable cheaply):** Teacher v2 was trained at hardware-realistic actuator limits (15 deg/s thumb velocity, 12-87 Nm arm efforts) — sitting near the edge of what's physically possible to lift in sim. A subtle physics-engine numerical change (driver, CUDA toolkit, omni.physx state) invisible to Teacher 11's evaluation could push Teacher v2 across the "can't initiate lift" threshold both in eval (52.2% vs 79.1%) and in training (no learning at all from random init). Teacher 11 has actuator margin and is unaffected.
+
+### Final decision: policy 12 is the canonical Teacher v2 (2026-05-08)
+
+`stored_policies/fr3_agilehand/12_teacher_v2_hw_realistic_adr13_04-06_12-49-15/nn/dextrah_tekken_lstm.pth` is the deployable Teacher v2 for hardware testing.
+
+**Reproducible measurements with current system state:**
+- visdex_selected, hold-gated 0.5s: **55.0% lift / 40.8% unsafe** (640 ep)
+- visdex_top8, hold-gated 0.5s: **59.4% lift / 46.6% unsafe** (320 ep)
+- visdex_selected, instantaneous: **65.6% lift / 37.7% unsafe**
+
+**Historical Apr 7 measurement (no longer reproducible):** 79.1% / 25.3%. This was on pre-system-drift state and shouldn't be referenced in comparisons going forward.
+
+**For hardware testing:** policy 12 is ADR-13-trained with the hardware-realistic curriculum (15 deg/s thumb velocity, 12-87 Nm arm efforts) — exactly the constraint regime intended for sim2real transfer. The lower sim numbers reflect that this teacher operates at the edge of feasibility under realistic actuator constraints, which is what you want when transferring to a robot with the same constraints.
+
+**Cleanup actions:**
+- Failed run dirs preserved for forensics: `05-08_00-18-43/`, `05-08_12-05-22/`, `05-08_13-39-55/`
+- env_cfg.py left at 32a8924 state (run2a settings) for future Teacher v2 retraining attempts after system state is investigated
+- `pre_reset_recovery` git tag from 2026-05-07 reset experiment can be deleted once cleanup confirmed
+
+#### Clean-state replay attempt — full revert to commit 32a8924 (2026-05-08)
+
+**Why:** Three failed retraining attempts today on the post-merge HEAD (with various env_cfg states + seeds) all fell into the same touch-don't-lift basin. To rule out any working-tree contamination as the cause, did a full `git checkout 32a8924` putting EVERY dextrah_lab file (env.py, env_cfg.py, eval scripts, distillation scripts, ALL of it) into the exact state from Apr 3 20:16 — the run2a starting commit. This is the most aggressive possible repo-state revert.
+
+**Pre-revert preservation:**
+- Safety branch: `may08-pre-revert-snapshot-20260508_172739` (HEAD `8968c61`, all today's commits)
+- File backup: `/tmp/dextrah_test_backup_20260508_172739/` (modified files + BC checkpoint .pth)
+
+**State after `git checkout 32a8924`:**
+- HEAD: `32a8924` Teacher v2: hardware-realistic actuator limits, reduced curriculum, arm init randomization (Apr 3 20:16)
+- Detached HEAD (no branch)
+- `lift_sharpness=2.0`, `success_bonus_weight=10.0` (run2a values)
+- All dextrah_lab files at Apr-3 commit state (no working-tree modifications)
+- All `__pycache__` cleared in test repo and IsaacLab
+- IsaacLab still on `v2.2.1` tag, git status clean
+
+**Train command (1024 envs, dextrah_test env, single GPU):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Expected (per run2a in April):**
+- ADR climbs to 13 in ~4-7k epochs
+- ep 6500 lift ~78%, unsafe ~22%
+
+**Decision rule:**
+- `lift_success > 0.1` by ep ~370 → previous failures were caused by working-tree contamination we couldn't pinpoint; this run will reach ADR 13 like run2a in April. New `dextrah_tekken_lstm.pth` becomes the canonical Teacher v2.
+- `lift_success` still flat at ep ~500 → regression is below the dextrah_lab repo level (IsaacLab internals, system libs, drivers, hardware). Definitively accept policy 12 as the canonical Teacher v2 for hardware testing.
+
+**Result:** *(to be filled in after training)*
+
+**Restore today's investigation work after training finishes:**
+```bash
+git checkout may08-pre-revert-snapshot-20260508_172739
+git stash pop
+```
+
+**Update — clean-state replay (32a8924, 1024 envs, seed=42) ALSO failed (2026-05-08 evening):**
+- `lift_success` flat at ~0 throughout, with minor 1e-3 scale spikes (consistent with sparse per-object gradients pattern)
+- Same touch-don't-lift basin as previous attempts
+- Confirms the regression is below the dextrah_lab repo level — even at the bit-identical Apr 3 commit state, training fails
+
+**The "minor spikes" pattern** matches CLAUDE.md's documented "16 envs in livestream mode" failure mode: with 13 objects across 1024 envs that's ~78 envs/object — should be enough on paper, but the spike-flatline pattern suggests gradient noise is dominating signal in some way today.
+
+#### Replay attempt with 2048 envs (2026-05-08 evening)
+
+**Hypothesis:** run2a's exp_03 entry notes "Config: 2048 envs (vs documented 1024), single GPU" — the original successful run actually used 2048 envs, NOT 1024. With 2048 envs / 13 objects = ~157 envs/object, double the gradient density of 1024. Earlier today's failed attempts all used 1024. Maybe the spike pattern is the symptom of insufficient per-object density and 2048 is the threshold that makes lifting discoverable.
+
+**Train command (2048 envs, single GPU, scaled minibatch):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 2048 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=8192 \
+  agent.params.config.central_value_config.minibatch_size=8192 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+`minibatch_size` doubled from 4096 → 8192 to match the doubled num_envs (per CLAUDE.md multi-GPU template scaling).
+
+**VRAM:** 2048 envs on a 24GB 4090 should land ~18-20GB. Tight but should fit. If OOM, reduce minibatch back to 4096.
+
+**Decision rule:**
+- `lift_success > 0.1` by ep ~370 → was per-object density issue all along; 2048 envs reproduces run2a
+- Still flat at ep ~500 → density was not the root cause; system-level regression confirmed; accept policy 12
+
+**Result:** *(to be filled in)*
+
+**Update — 2048-env replay also failed:** `lift_success` stayed flat with the same minor-spikes-around-zero pattern. Per-object density (2048/13 = 157 envs/obj) was not the differentiator either.
+
+### Final decision (post-2048-env attempt)
+
+**Total failed retraining attempts: 4.**
+| Run | num_envs | Seed | env_cfg | Result |
+|---|---|---|---|---|
+| `05-08_00-18-43` | 1024 | 42 | run2g committed | flat lift, ADR 0 |
+| `05-08_12-05-22` | 1024 | 42 | run2a reverted | flat lift, ADR 0 |
+| `05-08_13-39-55` | 1024 | 1 | run2a reverted | flat lift, ADR 0 |
+| `05-08_clean_state` | 1024 | 42 | 32a8924 full checkout | flat lift, ADR 0 |
+| `05-08_2048env` | **2048** | 42 | 32a8924 full checkout | flat lift, ADR 0 |
+
+Five distinct attempts, varying env_cfg state, seed, env count, and working-tree cleanliness — all fail in the identical touch-don't-lift basin. The regression is structural and below the dextrah_lab repo level. Without root-causing the system-level shift (driver/CUDA/IsaacLab internals between April and now), retraining Teacher v2 from scratch is not viable on this machine in its current state.
+
+**Canonical Teacher v2 for hardware testing: policy 12** at
+`stored_policies/fr3_agilehand/12_teacher_v2_hw_realistic_adr13_04-06_12-49-15/nn/dextrah_tekken_lstm.pth`
+
+Reproducible eval today (IsaacLab v2.2.1, dextrah_test env):
+- visdex_selected, hold-gated 0.5s: **55.0% lift / 40.8% unsafe**
+- visdex_top8, hold-gated 0.5s: **59.4% lift / 46.6% unsafe**
+- visdex_selected, instantaneous: 65.6% lift
+
+The Apr 7 79.1% historical baseline is from pre-system-drift state and is no longer reproducible. Use 55% / 59.4% as the canonical Teacher v2 numbers going forward.
+
+**Hardware deployment is the path forward.** Policy 12 was trained with hardware-realistic actuator limits (15 deg/s thumb, 12-87 Nm efforts), which is exactly the constraint regime intended for sim2real transfer. Lower sim numbers reflect the edge-of-feasibility operating point — testing on actual hardware is now the experiment that answers whether the approach works.
+
+---
+
+## Run 3 — Teacher v2 retraining attempts (2026-05-08 → 2026-05-11)
+
+**Context:** During visdex_top8 eval work on 2026-05-07, discovered the stored Teacher v2 policy 12 measured 52.2% lift on visdex_selected — a 27pp drop from the Apr 7 79.1% baseline. After eliminating env_cfg, env.py, eval_teacher.py, IsaacLab tag, conda env packages, USDs, and asset files as differences (all bit-identical or LFS-content-identical to April), decided to retrain Teacher v2 from scratch to get a deployable teacher that's known-good in the current system state.
+
+All run3x attempts share: IsaacLab v2.2.1 (reinstalled 2026-05-07), `dextrah_test` conda env, single GPU, max_epochs=100000, seed=42 (unless noted), wandb_activate=False, env.success_for_adr=0.4, env.objects_dir=multi_objects/visdex_selected.
+
+### run3a — committed HEAD env_cfg (run2g state) (2026-05-08)
+
+**Run dir:** `logs/rl_games/dextrah_tekken_lstm/05-08_00-18-43/`
+**Config:** 1024 envs, env_cfg at HEAD commit `8968c61` (post-merge): lift_sharpness=4, success_bonus_weight=20, finger gain ADR (0.7, 2.0), arm gain ADR (0.7, 1.5), joint_pos_noise (0, 0.35).
+
+**Result:** Trained 18,000 epochs. `lift_success` peaked at 0.008 around ep 470, then collapsed to ~0 for the entire remaining 17.5k epochs. `num_adr_increases` stuck at 0. Shaped `lift_reward` saturated at ~12-14 (object elevated slightly, never above 15cm threshold). Same "touch-don't-lift" basin throughout.
+
+### run3b — revert env_cfg to run2a state (32a8924) (2026-05-08)
+
+**Run dir:** `logs/rl_games/dextrah_tekken_lstm/05-08_12-05-22/`
+**Config:** 1024 envs, env_cfg reverted via `git checkout 32a8924 -- env_cfg.py`: lift_sharpness=2, success_bonus_weight=10, finger gain ADR (0.5, 2.0), arm gain ADR (0.5, 2.0), joint_pos_noise (0, 0.8), lift_weight (40, 20), finger_curl_reg (-0.5, -1.2).
+
+**Result:** Identical failure to run3a. ~2,700 epochs, `lift_success` never crossed 0.003.
+
+**Conclusion:** Reward weight differences between run2a (committed) and run2g (subsequent uncommitted edits) are not the cause.
+
+### run3c — different seed (seed=1) (2026-05-08)
+
+**Run dir:** `logs/rl_games/dextrah_tekken_lstm/05-08_13-39-55/`
+**Config:** Same as run3b but `--seed 1`, GPU 2, max_epochs=2000.
+
+**Result:** Same flat lift pattern, max ~0.001 lift through ~600 iters.
+
+**Conclusion:** Failure not seed-specific GPU non-determinism. Rules out random variance.
+
+### run3d — full clean-state checkout to 32a8924 (2026-05-08)
+
+**Run dir:** included in run3e (consolidated)
+**Config:** `git checkout 32a8924` (detached HEAD) — every dextrah_lab file at Apr 3 state, working tree clean, IsaacLab and dextrah_lab `__pycache__` cleared, 1024 envs.
+
+**Result:** Same flat pattern through training.
+
+**Conclusion:** Rules out any working-tree contamination from today's edits.
+
+### run3e — 2048 envs matching run2a's actual config (2026-05-08 → 2026-05-11)
+
+**Run dir:** `logs/rl_games/dextrah_tekken_lstm/05-08_19-35-53/`
+**Config:** Identical to run3d but `--num_envs 2048`, `minibatch_size=8192`, `central_value.minibatch_size=8192`. This matches exp_03 run2a's actual config (the entry notes "2048 envs (vs documented 1024)"), addressing the hypothesis that per-object gradient density (157 envs/obj vs 78) was the missing factor.
+
+**Result:** Left running 3 days, reached ~33,700 epochs. `lift_success` max was **0.004 at ep 81**, never crossed 0.01 for the entire run. `lift_reward` saturated at ~14, `num_adr_increases` stuck at 0 throughout. Side-by-side vs run2g at matched epochs:
+
+| Epoch | This run lift | run2g lift |
+|---|---|---|
+| 100 | 0.000 | 0.014 |
+| 500 | 0.000 | 0.160 |
+| 1000 | 0.000 | **0.571** |
+| 6000 | 0.000 | 0.433 |
+
+**Conclusion:** Per-object density is not the cause. Five distinct attempts in a row (varying env_cfg state, seed, env count, working-tree cleanliness, run length) all fail in the identical touch-don't-lift basin — the regression is structural and below the dextrah_lab repo level.
+
+### Visual inspection (2026-05-11)
+
+Replayed run3e's ep 33,500 checkpoint via `play_test.py --livestream 2` for direct observation. **Observed failure mode**: during approach phase, the object physically knocks the thumb's MCP pitch joint backward and the thumb buckles inward, hindering grasp formation. Identical to the symptom documented in `exp_01_thumb_rot_curriculum.md` (2026-03-23):
+> "the object physically knocks the thumb's MCP pitch joint backwards (joint collapses toward 0 / open position). Once the thumb is forced open by the object, the hand can no longer form a grasp and the episode fails."
+
+That exp_01 issue was supposedly solved with: thumb_rot init at -0.3491 rad (-20°), `thumb_rot_init` EventTerm randomization, `thumb_mcp_pitch` init at 0.0, and raised `mcp_pitch` actuator stiffness to 10.0. **Verified all four fixes ARE in current env_cfg and asset config** (bit-identical to 32a8924). USDs LFS-content-identical to April (closed_fist.usd SHA256 matches LFS pointer). Despite all the documented fixes being in place, the symptom is back — pointing at a system-level physics change (IsaacLab internal, omni.physx, CUDA, etc.) that we cannot bisect.
+
+### run3f — remove `thumb_rot_init` EventTerm (2026-05-11)
+
+**Hypothesis:** The random thumb_rot offset (-20° to 0° every reset) may be preventing the policy from developing a consistent approach geometry under current physics. With deterministic -20° init, approach trajectory is fixed and learnable.
+
+**Change:** Removed `thumb_rot_init` EventTerm entirely from env_cfg.py (line 113 area). `revolute_thumb_rot` now always starts at -0.3491 rad (-20°, joint min).
+
+**Result:** Per user observation — "didn't work too well." Same touch-don't-lift pattern, no improvement in lift_success.
+
+**Conclusion:** Random thumb_rot offset is not the differentiating factor.
+
+### Contact-gating root-cause finding (2026-05-11)
+
+After run3f's failure, investigated the lift_reward formula itself:
+```python
+contact_mask = (contact_count > 0.0).to(contact_count.dtype)
+lift_reward = lift_weight * exp(-lift_sharpness * object_vertical_error) * contact_mask
+object_to_goal_reward = object_to_goal_weight * exp(...) * contact_mask
+```
+
+**Critical finding:** `contact_count` is the *sum* of all per-sensor contact registrations (palm, all four distal phalanxes, thumb tip). `contact_mask` fires when ANY one of those reports contact. The thumb sensor (`Thumb_Distal_Phalanx`) is a single rigid body — its contact sensor reports contact regardless of whether the inner or outer surface touches the object.
+
+**This means**: when the policy buckles the thumb backward during approach (the symptom seen in livestream), the *outer* surface of the buckled thumb scrapes the object → `contact_count++` → `contact_mask=1` → `lift_reward` gates open. The policy can farm shaped lift reward by repeatedly bumping the object with the buckled thumb, with no need to actually grasp. This is a **degenerate local optimum that the gate makes available** — and the policy converges on it instantly because it's strictly easier than learning to grasp.
+
+The reward function already receives a stricter alternative — `good_grasp_mask = (finger_count ≥ 2) & thumb_contact` — but it's only used as a standalone `good_grasp_reward` term, not as the gate for `lift_reward`.
+
+**Hypothesis for why this exploit didn't dominate in April**: subtle contact-physics changes (between Apr's IsaacLab v2.2.1 and today's reinstalled v2.2.1) shifted where contact forces register on the buckled thumb. In April, the buckled-thumb-scrape may have been less reliable; today it's reliable enough that the policy converges on the exploit. This is consistent with eval shifts too (52% vs 79% lift on the same .pth), since the deployed policy similarly suffers from contact-physics differences.
+
+### run3g — close the contact-gating exploit + amplify correct signals (2026-05-11, starting)
+
+**Changes (this commit/working-tree state):**
+
+1. **`contact_mask = good_grasp_mask.to(contact_count.dtype)`** in `compute_rewards()` (env.py:2243). lift_reward and object_to_goal_reward now only fire when the policy has thumb contact AND ≥1 other finger in contact. The buckled-thumb-scrape exploit no longer opens the gate.
+
+2. **`lift_weight` ADR `(40., 20.)` → `(60., 30.)`** (env_cfg.py:922). +50% stronger lift signal. Once the policy DOES achieve a proper grasp, lift reward is dominant enough to compete with shaped exploration rewards.
+
+3. **`finger_curl_reg` ADR `(-0.5, -1.2)` → `(-0.8, -1.8)`** (env_cfg.py:923). +60% stronger curl penalty. Discourages the buckled thumb pose at the source, in addition to closing its reward exploit.
+
+**Why these three together:** The structural fix (1) closes the degenerate local optimum the policy has been falling into. (2) and (3) shift the reward landscape so that the proper-grasp behavior is the steeper gradient, making it the path of least resistance for early exploration.
+
+**Train command:**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 2048 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=8192 \
+  agent.params.config.central_value_config.minibatch_size=8192 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Expected behavior if working:**
+- `lift_reward/iter` should stay near 0 for first ~200-500 epochs (no exploit to farm; good_grasp_mask is rarely True at random init)
+- `good_grasp_reward/iter` and `object_contact_count` climb as policy learns proper grasp
+- `lift_success/iter` (binary at 15cm threshold) should first cross 0.1 by ep ~500-1000 if proper-grasp signal works
+- Successful trajectory: by ep ~6,500 should reach ADR 13 like the original run2a, with `lift_success` ~50-70%
+
+**Decision rule:**
+- `lift_success > 0.1` by ep ~1,000 → exploit-closure worked; let it run to ADR 13 plateau
+- `lift_reward` and `good_grasp_reward` both stay flat through ep 5,000 → gate too strict (no learning signal). Loosen: gate by `(contact_count >= 2)` instead of `good_grasp_mask`, OR add `(thumb_contact_alone)` gate (thumb contact required but not multi-finger)
+- `lift_reward` climbs but `lift_success` stays flat → grasp signal works but lift still fails. Try: hand spawn closer to object via fr3_joint init changes
+
+**Fallback options if run3g fails:**
+- run3h: gate on `(contact_count >= 2)` (more permissive than good_grasp_mask but stricter than `>0`)
+- run3i: hand spawn closer to object (adjust fr3_joint2 / fr3_joint4 init positions to bring palm ~10cm closer on average)
+- run3j: thumb mcp_pitch actuator stiffness 10.0 → 20.0 in fr3_tekken_left.py (mechanically resist buckling at the actuator level)
+
+### run3h — slower finger actuators + bumped curl penalty (2026-05-11)
+
+**Run dir:** `logs/rl_games/dextrah_tekken_lstm/05-11_17-19-52/`
+
+**Hypothesis:** Run3g's `good_grasp_mask` gate closed the buckled-thumb-scrape reward exploit, but `lift_success` still stayed at 0 through ep 700+. Visual replay showed the thumb still buckling inward despite the gate. Suspect the buckling itself is a contact-physics phenomenon — joints flung backward by object contact forces faster than the PD spring can resist. With `mcp_pitch` velocity_limit_sim=8 rad/s (~458 deg/s, ~30× hardware-realistic), a single bad timestep at 60 Hz allows up to 7.6° of joint motion — enough to drive the thumb_mcp_pitch from open (0°) to fully buckled.
+
+**Changes from run3g:**
+1. **mcp_pitch/yaw/pip velocity_limit_sim: 8.0 → 1.0 rad/s** (~57 deg/s, per-step motion cap 0.96°). Closes sim2real gap (real hardware ~30-60 deg/s) AND prevents single-step buckling — contact forces can only nudge a joint ~1° per step before the PD controller has time to react.
+2. **`finger_curl_reg` ADR: (-0.8, -1.8) → (-1.5, -3.0)**. Further amplifies curl penalty since visual replay showed buckling persisted at the previous level.
+
+**Result:** Through ep 327. `lift_success` flat at 0 throughout. `lift_reward` saturated at 16.4 (down from run3g's 17.9), `good_grasp_reward` 2.08 (down from 2.3), `object_contact_count` 2.66 (down from 3.07). `finger_curl_reg=−2.84` — **saturating at the existing −3.0 cap**. Slower fingers reduced over-aggressive multi-finger contact but did not stop the policy from finding the buckled-thumb pose.
+
+**Visual replay (ep 322 area):** thumb still curling inward, but less aggressively than run3g — slower fingers reduce the speed of buckling but the policy still drives the joints there. Confirms two things: (a) the velocity cap helped (less violent buckling), but (b) the curl penalty isn't strong enough — the policy still finds the buckled pose profitable.
+
+### run3i — raise curl penalty cap + slow thumb non-rot joints further (2026-05-11)
+
+**Hypothesis:**
+1. The current `finger_curl_reg` is clamped at -3.0 (`finger_curl_reg_min`), and run3h already saturated it. Raising the cap lets the bumped ADR weight (-1.5, -3.0) actually push the penalty further negative when the deviation is large (the L2 distance from `curled_q` is dominated by the thumb because curled_q has thumb_mcp_pitch=0 / open while other fingers target slight curl=0.1).
+2. The thumb's non-rotation joints (`thumb_mcp_pitch`, `thumb_mcp_yaw`, `thumb_pip`) share the general finger actuator group — same 1.0 rad/s velocity limit as other fingers. To make buckling physically impossible at the source, slow the thumb-specific joints to half (0.5 rad/s ~ 28 deg/s, ~0.48°/step).
+
+**Changes from run3h:**
+
+| Setting | run3h | **run3i** | Why |
+|---|---|---|---|
+| `finger_curl_reg_min` (env_cfg.py:749) | -3.0 | **-8.0** | Raise the penalty cap so the bumped ADR weight can actually bite (run3h saturated at -3.0) |
+| `thumb_mcp_pitch` velocity_limit_sim (fr3_tekken_left.py) | shared 1.0 rad/s | **0.5 rad/s** | Half-speed for thumb-specific buckling-prone joint |
+| `thumb_mcp_yaw` velocity_limit_sim | shared 1.0 rad/s | **0.5 rad/s** | Match for consistency |
+| `thumb_pip` velocity_limit_sim | shared 1.0 rad/s | **0.5 rad/s** | Match for consistency |
+| Other fingers' velocity_limit_sim | 1.0 rad/s | 1.0 rad/s (unchanged) | Kept so non-thumb fingers can still close in reasonable time |
+
+Implementation: split the regex `revolute_.*_mcp_pitch` (etc.) into two actuator groups — `finger_mcp_pitch` for `revolute_(index|middle|ring|pinky)_mcp_pitch` at 1.0 rad/s, and `thumb_mcp_pitch` for `revolute_thumb_mcp_pitch` at 0.5 rad/s. Same for mcp_yaw and pip. The EventTerms (`finger_mcp_pitch_gains` etc.) still use the original regex `revolute_.*_mcp_pitch` so their gain-randomization covers all 5 joints uniformly.
+
+**Velocity profile after run3i:**
+
+| Joint group | velocity_limit_sim | ~deg/s | Per-step motion @60Hz |
+|---|---|---|---|
+| FR3 arm (all 7) | 2.175 rad/s | 125 | 2.07° |
+| thumb_rot | 0.2618 rad/s | 15 | 0.25° |
+| **thumb_mcp_pitch / yaw / pip** (new) | **0.5 rad/s** | **28** | **0.48°** |
+| Other fingers (mcp_pitch / yaw / pip) | 1.0 rad/s | 57 | 0.96° |
+
+**Train command:**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 2048 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=8192 \
+  agent.params.config.central_value_config.minibatch_size=8192 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `finger_curl_reg/iter` goes more negative than -3.0 (e.g., -5 to -7 range) → cap raise is working as intended; check if `lift_success` follows
+- `lift_success > 0.1` by ep ~1000 → thumb buckling was indeed the root cause; let it run to ADR 13 plateau
+- `lift_success` still flat at ep 1000 with `finger_curl_reg` saturating at the new -8.0 cap → curl penalty can't outweigh the policy's discovered local optimum; need a structural fix (hand spawn closer to object, OR larger thumb_mcp_pitch stiffness so it physically can't be deflected)
+- Thumb still visibly buckling in livestream → even slower thumb (0.25 rad/s) or stiffer thumb_mcp_pitch actuator (stiffness 10 → 25) becomes next lever
+
+**Result:** *(to be filled in)*

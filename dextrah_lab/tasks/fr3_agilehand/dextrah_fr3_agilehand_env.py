@@ -665,11 +665,12 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.object_names = list(sub_dirs)
         self.num_unique_objects = len(self.object_names)
 
-        # When distilling with a subset of objects, the one-hot indices must match
-        # the teacher's original object ordering. Build a mapping from the teacher's
-        # full training set (teacher_objects_dir) to get correct indices.
+        # When using a subset of objects, the one-hot indices must match the
+        # teacher's original object ordering. Applies to both distillation and
+        # teacher eval on a subset (e.g. eval_teacher.py with visdex_top8 against
+        # a teacher trained on visdex_selected).
         teacher_objects_dir = getattr(self.cfg, "teacher_objects_dir", "")
-        if teacher_objects_dir and len(teacher_objects_dir) > 0 and self.cfg.distillation:
+        if teacher_objects_dir and len(teacher_objects_dir) > 0:
             teacher_path = scene_objects_usd_path + teacher_objects_dir + "/USD"
             teacher_obj_names = sorted([
                 d for d in os.listdir(teacher_path)
@@ -2233,8 +2234,13 @@ def compute_rewards(
     hand_action_scale: float,
 ):
 
-    # Binary mask: only award lift/goal progress after hand-object contact.
-    contact_mask = (contact_count > 0.0).to(contact_count.dtype)
+    # Binary mask: only award lift/goal progress when a PROPER GRASP is established
+    # (thumb + at least one other finger in contact). 2026-05-11: was previously
+    # `(contact_count > 0.0)` which fired on ANY single contact — including the
+    # outer surface of a buckled thumb, letting the policy farm shaped lift reward
+    # without actually grasping. good_grasp_mask requires thumb participation +
+    # multi-finger contact, much harder to fake with a degenerate pose.
+    contact_mask = good_grasp_mask.to(contact_count.dtype)
 
     # Reward for moving fingertip and palm points closer to object centroid point
     hand_to_object_reward = hand_to_object_weight * torch.exp(-hand_to_object_sharpness * hand_to_object_pos_error)

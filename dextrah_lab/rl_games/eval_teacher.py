@@ -97,6 +97,27 @@ parser.add_argument(
     default=None,
     help="Override max_pose_angle (e.g. 45.0). Required for Kuka-Allegro.",
 )
+parser.add_argument(
+    "--teacher_onehot_size",
+    type=int,
+    default=0,
+    help=(
+        "Override teacher one-hot obs size to match a checkpoint trained on a different "
+        "object count than --objects_dir provides (e.g. teacher trained on 13 objects, "
+        "evaluating on visdex_top8). 0 = use num_unique_objects."
+    ),
+)
+parser.add_argument(
+    "--teacher_objects_dir",
+    type=str,
+    default=None,
+    help=(
+        "Teacher's full training object directory (e.g. multi_objects/visdex_selected). "
+        "Required when --objects_dir is a subset of the teacher's training set: env builds "
+        "a name->index map from this dir so the one-hot vector matches the teacher's "
+        "original ordering. Without it, indices get scrambled and lift drops drastically."
+    ),
+)
 parser.add_argument("--video", action="store_true", default=False, help="Record video (MP4) of the evaluation.")
 parser.add_argument("--video_length", type=int, default=0, help="Max video length in steps (0 = entire eval).")
 parser.add_argument(
@@ -528,7 +549,7 @@ def _resolve_eval_object_names_and_idx(
 
 def _run_eval_for_checkpoint(
     checkpoint_path: str, objects_dir_override: str | None = None
-) -> tuple[float, float, int, int, dict[str, float], int]:
+) -> tuple[float, float, int, int, dict[str, float], int, dict[str, dict]]:
     eval_start_t = time.time()
     print(
         f"[INFO] Eval start: task={args_cli.task}, objects_dir={objects_dir_override}, "
@@ -553,6 +574,10 @@ def _run_eval_for_checkpoint(
             env_cfg.valid_objects_dir.append(env_cfg.objects_dir)
     if args_cli.max_pose_angle is not None:
         env_cfg.max_pose_angle = args_cli.max_pose_angle
+    if args_cli.teacher_onehot_size > 0:
+        env_cfg.teacher_onehot_size = args_cli.teacher_onehot_size
+    if args_cli.teacher_objects_dir is not None:
+        env_cfg.teacher_objects_dir = args_cli.teacher_objects_dir
 
     stage_t = time.time()
     agent_cfg = load_cfg_from_registry(args_cli.task, "rl_games_cfg_entry_point")
@@ -637,6 +662,24 @@ def _run_eval_for_checkpoint(
         total_reason_counts = {name: 0 for name in UNSAFE_REASON_NAMES}
         reason_to_idx = {name: idx for idx, name in enumerate(UNSAFE_REASON_NAMES)}
         total_unsafe_eps = 0
+
+        # Per-object accumulators (populated only if env exposes object_names / multi_object_idx).
+        eval_object_names, eval_object_idx = _resolve_eval_object_names_and_idx(
+            eval_env, num_envs, args_cli.device, fallback_names=None
+        )
+        per_object_lift_series = {name: [] for name in eval_object_names}
+        per_object_unsafe_rate_series = {name: [] for name in eval_object_names}
+        per_object_reason_counts_total = {
+            name: {reason: 0 for reason in UNSAFE_REASON_NAMES}
+            for name in eval_object_names
+        }
+        per_object_unsafe_total = {name: 0 for name in eval_object_names}
+        print(
+            f"[INFO] Single-checkpoint per-object tracking enabled for "
+            f"{len(eval_object_names)} objects: {eval_object_names}",
+            flush=True,
+        )
+
         for rollout_idx in range(total_rollouts):
             obs = env.reset()
             if isinstance(obs, dict):
@@ -709,6 +752,28 @@ def _run_eval_for_checkpoint(
             for name in UNSAFE_REASON_NAMES:
                 total_reason_counts[name] += rollout_reason_counts[name]
 
+            for obj_idx, object_name in enumerate(eval_object_names):
+                obj_mask = eval_object_idx == obj_idx
+                if not bool(obj_mask.any().item()):
+                    continue
+                per_object_lift_series[object_name].append(
+                    ever_lifted[obj_mask].float().mean().item()
+                )
+                per_object_unsafe_rate_series[object_name].append(
+                    ever_unsafe_terminated[obj_mask].float().mean().item()
+                )
+                obj_unsafe_count = int(ever_unsafe_terminated[obj_mask].sum().item())
+                per_object_unsafe_total[object_name] += obj_unsafe_count
+                obj_reason_counts = _reason_counts_from_episode(
+                    unsafe_reason_idx=unsafe_reason_idx[obj_mask],
+                    unsafe_mask=ever_unsafe_terminated[obj_mask],
+                    scope_label=(
+                        f"single-checkpoint rollout {rollout_idx + 1} object {object_name}"
+                    ),
+                )
+                for reason_name in UNSAFE_REASON_NAMES:
+                    per_object_reason_counts_total[object_name][reason_name] += obj_reason_counts[reason_name]
+
             now_t = time.time()
             rollout_done = rollout_idx + 1
             rollout_trigger = rollout_done >= next_rollout_progress
@@ -738,13 +803,44 @@ def _run_eval_for_checkpoint(
             total_unsafe_eps,
             UNSAFE_REASON_NAMES,
         )
+        eval_per_object_metrics = {}
+        for object_name in eval_object_names:
+            obj_reason_pct = unsafe_reason_percentages_from_counts(
+                per_object_reason_counts_total[object_name],
+                int(per_object_unsafe_total[object_name]),
+                UNSAFE_REASON_NAMES,
+            )
+            eval_per_object_metrics[object_name] = {
+                "eval/lift_success": (
+                    float(np.mean(per_object_lift_series[object_name]))
+                    if len(per_object_lift_series[object_name]) > 0
+                    else 0.0
+                ),
+                "eval/unsafe_episode_rate": (
+                    float(np.mean(per_object_unsafe_rate_series[object_name]))
+                    if len(per_object_unsafe_rate_series[object_name]) > 0
+                    else 0.0
+                ),
+                "eval/out_of_reach_reason_pct": {
+                    name: float(obj_reason_pct.get(name, 0.0))
+                    for name in UNSAFE_REASON_NAMES
+                },
+            }
         total_done = int(total_rollouts * num_envs)
         print(
             f"[INFO] Eval complete in {time.time() - eval_start_t:.1f}s: "
             f"episodes={total_done}, lift_success={avg_success:.4f}, unsafe_rate={unsafe_episode_rate:.4f}",
             flush=True,
         )
-        return avg_success, unsafe_episode_rate, total_done, num_envs, eval_reason_pct, total_unsafe_eps
+        return (
+            avg_success,
+            unsafe_episode_rate,
+            total_done,
+            num_envs,
+            eval_reason_pct,
+            total_unsafe_eps,
+            eval_per_object_metrics,
+        )
     finally:
         env.close()
         _ENV_HOLDER["env"] = None
@@ -777,6 +873,10 @@ def _run_eval_for_teacher_pool(
         env_cfg.valid_objects_dir.append(env_cfg.objects_dir)
     if args_cli.max_pose_angle is not None:
         env_cfg.max_pose_angle = args_cli.max_pose_angle
+    if args_cli.teacher_onehot_size > 0:
+        env_cfg.teacher_onehot_size = args_cli.teacher_onehot_size
+    if args_cli.teacher_objects_dir is not None:
+        env_cfg.teacher_objects_dir = args_cli.teacher_objects_dir
     # Teacher standalone eval needs per-env multi-object spawning while keeping
     # teacher observations (distillation=False).
     env_cfg.multi_object_eval = True
@@ -1228,7 +1328,15 @@ def main():
             return
 
         tb_writer, _ = _create_tb_writer(teacher_mode=False)
-        avg_success, unsafe_episode_rate, total_done, num_envs, reason_percentages, unsafe_eps = _run_eval_for_checkpoint(
+        (
+            avg_success,
+            unsafe_episode_rate,
+            total_done,
+            num_envs,
+            reason_percentages,
+            unsafe_eps,
+            per_object_metrics,
+        ) = _run_eval_for_checkpoint(
             checkpoint_path=args_cli.checkpoint,
             objects_dir_override=args_cli.objects_dir,
         )
@@ -1257,6 +1365,7 @@ def main():
                 "eval/unsafe_episode_rate": float(unsafe_episode_rate),
                 "eval/out_of_reach_reason_pct": reason_percentages_full,
             },
+            "per_object_metrics": per_object_metrics,
             "total_episodes": int(total_done),
             "num_envs": int(num_envs),
             "unsafe_episodes": int(unsafe_eps),
