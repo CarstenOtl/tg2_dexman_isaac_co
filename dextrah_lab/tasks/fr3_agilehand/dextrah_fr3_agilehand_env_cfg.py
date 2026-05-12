@@ -110,16 +110,11 @@ class EventCfg:
         },
     )
 
-    # NOTE: thumb_rot_init EventTerm removed 2026-05-11 — was randomizing thumb_rot
-    # offset 0.0→0.3491 rad on every reset (final range -20° to 0°). With recent
-    # observation that the thumb collides with object during approach despite the
-    # -20° init position being honored, the random offset toward 0° may be hurting
-    # rather than helping (policy can't develop a consistent approach if thumb
-    # starts in different positions each episode). With this removed, thumb_rot
-    # always starts at the init_state value (-0.3491 rad = -20°, joint min). If
-    # diversity in thumb_rot at reset turns out to be needed, re-introduce as
-    # an ADR-curriculum'd term ramping (0.0, 0.0) → (0.0, 0.3491) instead of
-    # full random from step 0.
+    # NOTE: thumb_rot_init EventTerm kept removed.
+    # Tried to re-add 2026-05-12 with the rest of run3i in place, but the random thumb_rot
+    # offset broke the simulation (fatal sim crash, possibly from interaction between the
+    # randomized init and the slow finger PD controllers + 3° thumb_mcp_pitch init).
+    # Reverted again — thumb_rot now deterministic at -0.3491 rad (-20°) from init_state.
 
     # Arm joint init randomization: ±0.2 rad (~11.5°) from default pose at every reset.
     # Forces the policy to learn approach from varied arm configurations from the start.
@@ -258,13 +253,13 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot"
     ).replace(
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 0.25),  # Raise robot to table height (matching TG2 config)
+            pos=(0.0, 0.0, -0.05),  # 2026-05-12: 0.25 → -0.05 (30 cm lower). Maximizes the FR3 workspace toward the object — previous z=0.25 had the arm reaching at an extreme angle where the thumb sat awkwardly during approach. Lower base = more comfortable joint posture for the same EE target.
             rot=(0.0, 0.0, 0.0, 1.0),
             joint_pos={
                 "fr3_joint1": -0.0873,  # -5.0 degrees
                 "fr3_joint2": -0.6109,  # -35.0 degrees
                 "fr3_joint3":  0.0000,  #  0.0 degrees
-                "fr3_joint4": -2.6180,  # -150.0 degrees
+                "fr3_joint4": -2.0944,  # -120.0 degrees. 2026-05-12: tuned visually from -90° → -120° to bring EE closer to the object after lowering base 30 cm — -90° put hand too far from object spawn (~0.7m), -150° was original (hand colliding with table after base drop). -120° is the middle ground.
                 "fr3_joint5": -0.5236,  # -30.0 degrees
                 "fr3_joint6":  2.9671,  #  170.0 degrees
                 "fr3_joint7":  0.0000,  #  0.0 degrees
@@ -274,16 +269,16 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                 "revolute_thumb_pip": 0.0524,  # 2026-05-11: 0.0 → 0.0524 (3°). Same reason as thumb_mcp_pitch.
                 "revolute_index_mcp_pitch": 0.1,
                 "revolute_index_mcp_yaw": 0.0,
-                "revolute_index_pip": 0.0,
+                "revolute_index_pip": 0.0524,  # 2026-05-12: 0.0 → 0.0524 (3°). Off joint min to prevent PD oscillation against hard stop (same reason as thumb_pip).
                 "revolute_middle_mcp_pitch": 0.1,
                 "revolute_middle_mcp_yaw": 0.0,
-                "revolute_middle_pip": 0.0,
+                "revolute_middle_pip": 0.0524,  # 2026-05-12: 0.0 → 0.0524 (3°).
                 "revolute_ring_mcp_pitch": 0.1,
                 "revolute_ring_mcp_yaw": 0.0,
-                "revolute_ring_pip": 0.0,
+                "revolute_ring_pip": 0.0524,  # 2026-05-12: 0.0 → 0.0524 (3°).
                 "revolute_pinky_mcp_pitch": 0.1,
                 "revolute_pinky_mcp_yaw": 0.0,
-                "revolute_pinky_pip": 0.0,
+                "revolute_pinky_pip": 0.0524,  # 2026-05-12: 0.0 → 0.0524 (3°).
             },
         )
     )
@@ -723,7 +718,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     # reward weights
     # phase 1: reaching
     hand_to_object_weight = 4. #default 1, prev 5
-    hand_to_object_sharpness = 4. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
+    hand_to_object_sharpness = 5. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
     
     palm_direction_alignment_weight = 0.7  # increased from 0.5
     in_grip_alignment_weight = 1. # 0.5
@@ -745,12 +740,12 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     # phase 2: contact
     hand_object_contact_weight = 3.0   # 8→4→3: contact still dominating lift
     good_grasp_weight = 3.0            # 6→3: halved
-    finger_curl_reg_weight = -0.2    # reduced to allow ADR to widen; was -0.5
+    finger_curl_reg_weight = -0.5    # reduced to allow ADR to widen; was -0.5
     finger_curl_reg_min = -6.0 # 2026-05-11: -8 → -6. Started at -3 (run3h saturated), raised to -8 but that over-penalized — policy over-corrected by pinning thumb at joint min, causing PD instability against the limit. -6 lets the penalty bite (2× the original -3 cap) without driving the policy into the unstable "pin against joint min" pose.
     finger_curl_reg_max = 0.0 # min penalty for finger curl
 
     #phase 3: lifting
-    object_to_goal_weight = 40 #default 5, was 20
+    object_to_goal_weight = 30 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
     success_bonus_weight = 10.0  # flat bonus per step when object is in goal region
     lift_sharpness = 2.0 #default 8.5; 5→2: much flatter gradient so policy discovers lifting from table height

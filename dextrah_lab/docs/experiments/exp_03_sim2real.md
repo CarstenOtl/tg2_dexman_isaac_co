@@ -1132,3 +1132,101 @@ The thumb now shares the same 1.0 rad/s limit as the other fingers' non-rotation
 **Lesson** (also captured in CLAUDE.md): avoid splitting a joint regex across multiple actuator groups in IsaacLab. Tune velocity_limit_sim at the unified-group level instead. If thumb-specific velocity is needed in the future, the only safe approach is to add a separate single-joint actuator (like `thumb_rot` already is) rather than splitting an existing regex.
 
 **Result:** *(to be filled in once livestream confirms episodes are running normally and lift behavior is observable)*
+
+#### run3i v2 result — thumb stability achieved (2026-05-12)
+
+**Run dir:** `logs/rl_games/dextrah_tekken_lstm/05-12_10-17-22/`
+
+After the actuator-split revert (yesterday), restarted livestream training (24 envs, seed 42) on the unified-actuator + run3i config. Through ep ~540:
+
+**Episodes are healthy** (no more vel_explosion):
+- `episode_lengths/iter` = **49.7** (max 127.8) — normal range, episodes terminating on legitimate conditions or running long
+- `joint_velocity_penalty/iter` = **-0.041** — back to typical magnitude (was -12.541 with the broken split)
+
+**Lift gate working correctly** (exploit closed):
+- `lift_reward/iter` latest 0.0, max **3.087** — way below the 14-17 saturation range observed in runs 3a-3h with the old `contact_mask = (contact_count > 0)` gate. The good_grasp_mask gate is preventing the buckled-thumb shaped-reward farming.
+- `good_grasp_reward/iter` max **0.625** — fires sometimes (thumb + ≥1 finger contact), indicating the policy is achieving proper multi-finger grasps occasionally.
+- `hand_object_contact_reward/iter` max **3.0** — modest contact happening (~1 finger avg).
+- `object_contact_count/iter` max **1.0** — single-finger contact on average (no over-aggressive multi-finger clenching).
+
+**Approach behavior** (`hand_to_object_distance` decreasing from 0.88m → 0.21m):
+- Hand is reaching toward the object.
+- Visual livestream observation: **thumb no longer folds inwards on approach**. The 3° init + 1.0 rad/s velocity cap is preventing the contact-driven buckling that plagued runs 3a-3h.
+
+**`lift_success` still 0 through ep 540**:
+- Policy hasn't yet figured out how to actually grasp + lift, but for the first time in 7 retraining attempts it's not stuck in the touch-don't-lift basin. The reward landscape now correctly biases toward proper grasps — needs more training time for the policy to find them.
+
+**Conclusion (preliminary):** the combination of changes in run3i v2 (good_grasp_mask gate + 3° thumb init + 1.0 rad/s finger velocity + raised curl cap + bumped lift weight + removed thumb_rot_init) has broken the policy out of the degenerate exploit. Visual stability confirms the thumb buckling root cause is addressed.
+
+**Next: let training continue.** Watch for `lift_success > 0.1` by ep ~1000-2000 if the run is going to converge. If still 0 by ep 3000+, may need additional levers (hand spawn closer to object, longer episodes, lift_weight bumped further).
+
+**Verified-working configuration after run3i v2:**
+- `contact_mask = good_grasp_mask` (env.py:2243)
+- Unified actuator groups: `mcp_pitch`/`mcp_yaw`/`pip` regex `revolute_.*_<joint>`, all at velocity_limit_sim=1.0 rad/s
+- thumb_rot dedicated actuator group at velocity_limit_sim=0.2618 rad/s
+- thumb_mcp_pitch + thumb_pip init at 0.0524 rad (3°)
+- finger_curl_reg ADR (-1.5, -3.0), cap -6.0
+- lift_weight ADR (60, 30)
+- thumb_rot_init EventTerm removed
+
+### run3j — livestream-tuned posture + scaled-up training (2026-05-12)
+
+**Approach.** After run3i v2's promising-but-unfinished result, used the livestream debug mode (24 envs, no headless) to *visually* iterate on the env starting pose. The 24-env count gives noisy gradients but lets us actually SEE the robot+hand behavior in each reset. Iterated several parameters by observation, then once the visuals looked stable+productive, restarted in 2048-env headless mode for productive training.
+
+**Livestream-tuning iterations done in real time (2026-05-12):**
+
+1. **Re-add `thumb_rot_init` EventTerm** → **fatal sim crash** (random thumb_rot offset interacts badly with slow finger PD + 3° thumb_mcp_pitch init). Reverted, keeping thumb_rot deterministic at -20°.
+2. **Lower robot base z: 0.25 → -0.05** (30 cm lower) — goal: maximize FR3 workspace toward object spawn region.
+3. **fr3_joint4 elbow extension iteration** — needed to compensate for the lowered base:
+   - -150° (original) → hand collides with table on reset
+   - -120° → tried first, EE still too low
+   - -60° → too much extension, EE position weird
+   - -10° → way too much, EE in air
+   - -30° → still too high
+   - -90° → EE far from object (`hand_to_object_distance` 0.7m vs original 0.2m — far worse), vel_explosion terminations
+   - **-120°** → settled here. Middle ground after observing the EE positioning vs object spawn region.
+4. **All non-thumb PIP inits 0.0 → 0.0524 rad (3°)** — moved off joint min. Same reasoning as the thumb_mcp_pitch/pip move earlier (run3i): init at joint min causes PD oscillation against the hard stop, manifests as finger jitter at reset. Brings the policy's curled_q target to 3° on every PIP.
+5. **Finger velocity_limit_sim 1.0 → 2.0 rad/s** — the 1.0 rad/s cap (yesterday) was producing PD limit-cycle instability (commands generated faster than the cap could resolve them). 2.0 rad/s gives PD enough headroom while still being 4× slower than the original 8 rad/s and well within hardware-safe range (~114 deg/s).
+
+**Verified-working configuration after livestream tuning (entering run3j productive training):**
+
+| Setting | Value | Why |
+|---|---|---|
+| Robot base `pos.z` | -0.05 m (was 0.25) | Lowered 30cm to maximize workspace toward object |
+| `fr3_joint4` init | -2.0944 rad (-120°) | Tuned visually; compensates lowered base without overshoot |
+| All hand PIP inits | 0.0524 rad (3°) | Off joint min, no PD oscillation |
+| `revolute_thumb_mcp_pitch` init | 0.0524 rad (3°) | Off joint min |
+| `revolute_thumb_rot` init | -0.3491 rad (-20°) | Deterministic (EventTerm removed) |
+| `mcp_pitch/yaw/pip` velocity_limit_sim | 2.0 rad/s (~114 deg/s) | PD-stable, hardware-safe |
+| `thumb_rot` velocity_limit_sim | 0.2618 rad/s | Hardware-realistic, unchanged |
+| `contact_mask` gate | `good_grasp_mask` (thumb + ≥1 finger) | Closes buckled-thumb exploit |
+| `finger_curl_reg` ADR | (-1.5, -3.0); cap -6.0 | Discourages buckled pose |
+| `lift_weight` ADR | (60, 30) | Stronger lift signal post-grasp |
+| `thumb_rot_init` EventTerm | removed | Random thumb_rot was breaking sim |
+
+**Train command (productive, 2048 envs headless):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 2048 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=8192 \
+  agent.params.config.central_value_config.minibatch_size=8192 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success > 0.1` by ep ~370-500 → on track to reach ADR 13 like historical run2a
+- `num_adr_increases` starts climbing from ep ~1500-2000 → ADR curriculum engaging
+- Healthy `episode_lengths` (hundreds) → no vel_explosion regression
+- If still flat at ep 2000: need to revisit hand spawn distance OR effort limits
+
+**Result:** *(to be filled in)*

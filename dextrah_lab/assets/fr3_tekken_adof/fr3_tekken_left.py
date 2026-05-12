@@ -103,21 +103,21 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
         "mcp_pitch": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_pitch"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=1.0,   # 2026-05-11: 8 → 1.0 rad/s (~57 deg/s). Previous 8 rad/s (~460 deg/s) was unsafe and let contact forces fling joints backward in a single 60Hz step (up to 7.6°), causing thumb buckling on approach. NOTE: thumb actuator split was tried at 0.5 rad/s but caused immediate vel_explosion terminations at reset (constraint conflict between IsaacLab actuator config and USD-baked joint limits when split into multiple groups). Reverted to a single unified group covering all 5 mcp_pitch joints.
+            velocity_limit_sim=2.0,   # 2026-05-12: 1 → 2 rad/s (~114 deg/s). 1.0 was too aggressive — the PD controller (stiffness=10, damping=6) generated commands the velocity cap couldn't resolve in one step, leading to limit-cycle-style finger instability. 2.0 keeps the cap meaningfully below the original 8 rad/s (still 4× slower) but gives PD enough headroom to settle cleanly.
             stiffness=10.0,
             damping=6.0,              # 3→6: more damping, smoother contact
         ),
         "mcp_yaw": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_yaw"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=1.0,   # 2026-05-11: 8 → 1.0 rad/s (matched to mcp_pitch above).
+            velocity_limit_sim=2.0,   # 2026-05-12: matched to mcp_pitch above.
             stiffness=10.0,
             damping=6.0,              # 3→6
         ),
         "pip": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_pip"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=1.0,   # 2026-05-11: 8 → 1.0 rad/s (matched to mcp_pitch above).
+            velocity_limit_sim=2.0,   # 2026-05-12: matched to mcp_pitch above.
             stiffness=10.0,
             damping=6.0,              # 3→6
         ),
