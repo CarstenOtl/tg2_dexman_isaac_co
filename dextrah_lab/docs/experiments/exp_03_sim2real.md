@@ -1230,3 +1230,203 @@ CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python
 - If still flat at ep 2000: need to revisit hand spawn distance OR effort limits
 
 **Result:** *(to be filled in)*
+
+### run3k — thumb_rot init randomization, recentered around 0° (2026-05-12)
+
+**Motivation:** Visual replay of run3j's best policy (ep ~1300) showed the thumb still getting in the way during approach, and the policy never crossed `lift_success = 0.1`. Metrics analysis:
+- `episode_lengths=512` (healthy), `hand_to_object_distance=0.10m` (hand reaching object), `good_grasp_reward=2.31` (~77% envs with multi-finger grip) — basic mechanics working
+- `lift_reward=17.99` (saturated), `object_to_goal_reward=2.22` (object moving toward goal) — partial lift happening, never enough
+- `finger_curl_reg=-5.06` (near -6 cap, saturated) — curl penalty fighting against full finger closure
+- `joint_velocity_penalty=-0.047` (low) — actuators NOT saturating, plenty of headroom
+
+User hypothesis: the deterministic thumb_rot at -20° creates a thumb plane that's ~90° offset from the finger plane — an opposed-thumb grip that's mechanically correct for power grasps but visually a difficult pre-grasp configuration. Moving thumb_rot to 0° (thumb aligned with finger plane) puts it in a tip-pinch starting orientation, with ±10° randomization for grasp-configuration diversity.
+
+**Changes from run3j (env_cfg.py):**
+
+| Setting | run3j | **run3k** | Why |
+|---|---|---|---|
+| `revolute_thumb_rot` init | -0.3491 rad (-20°) | **0.0 rad (0°)** | More natural tip-pinch starting orientation; less 90° offset from fingers |
+| `curled_q` for thumb_rot (= init) | -20° | **0°** | Regularizer now rewards thumb near 0° instead of -20° |
+| `thumb_rot_init` EventTerm | removed | **active**, position_range (-0.1745, 0.1745) | ±10° randomization at reset, gives LSTM diverse approach geometries |
+
+**Safety vs the previous crash:** the prior `thumb_rot_init` re-add attempt (earlier today) used `position_range=(0.0, 0.3491)` from -20° init → final [-20°, 0°]. The -20° end is **at the joint min**, suspect cause of the fatal sim crash. New configuration keeps thumb_rot strictly within [-10°, +10°] — at least 10° away from either joint limit at all times. No limit contact, no PD oscillation against limits.
+
+**Train command (1024 envs — chose this over 2048 since 79 envs/object is plenty above the ≥64 stability threshold, and gradients still settle cleanly):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- Sim doesn't crash → ±10° EventTerm range is safe (joint stays away from limits)
+- `lift_success > 0.1` by ep ~500-1000 → thumb_rot orientation was the missing piece; thumb-aligned-with-fingers pose unlocks the grasp+lift sequence
+- If still flat at ep 2000 → curl penalty saturation hypothesis is the real bottleneck; reduce `finger_curl_reg` ADR back to (-0.5, -1.5) and raise the cap back to -3.0
+
+**Result:** *(to be filled in)*
+
+### run3k result + run3l setup — reward-shape tuning for lift incentive (2026-05-12)
+
+**run3k observations (1024 envs, thumb_rot init=0° with ±10° randomization, finger_curl_reg reduced to (-1.0, -2.0), hand_to_object_weight 4→3):**
+
+- Sim stable, episodes healthy
+- Visual: thumb_rot diversity working (different starting angles per reset), but the thumb is still "getting in the way" — i.e., the policy still drives the thumb into a buckled-grip pose during approach
+- Policy keeps achieving multi-finger contact with thumb included but doesn't progress to lift
+- `lift_success` still 0 through several hundred epochs
+
+**Diagnosis (full reward landscape audit, 2026-05-12 afternoon):**
+
+Discovered two drift points from run2a baseline that were strangling the lift signal:
+- `lift_sharpness` had drifted to 5.0 (comment said "5→2" but value was 5) — at sharpness=5, the lift_reward exponential drops off much faster with vertical_error. Policy sees less reward at low elevations, so the gradient toward "lift higher" is weak.
+- `object_to_goal_weight` had dropped from 40 → 30 — 25% weaker goal-direction pull.
+
+**Reverted (env_cfg.py, user-applied):**
+- `lift_sharpness`: 5.0 → **2.0** (back to run2a value — flatter gradient so reward grows from any height)
+- `object_to_goal_weight`: 30 → **40** (back to run2a)
+
+**run3l setup — additional lift_weight bump after reverts didn't unlock lifting:**
+
+Even with sharpness=2 and object_to_goal_weight=40 restored, the policy still camps at the object. Observed `lift_reward` saturating without lift_success climbing. Joint torques have 100× headroom (0.21 Nm needed at wrist, 20 Nm available), so actuator strength is not the bottleneck — the incentive landscape is.
+
+**Change (env_cfg.py adr_custom_cfg_dict):**
+
+| Parameter | run3k | **run3l** | Why |
+|---|---|---|---|
+| `lift_weight` ADR | (60., 30.) | **(100., 50.)** | Doubling the lift signal — once good_grasp_mask gate opens, lift_reward at 5cm off table = 100 × exp(-0.2) = 82 per step, way above the 12-18 the policy can get from just camping at the object with contact. The lift state should now be obviously the dominant reward path. |
+
+**Current full reward landscape (ADR 0):**
+
+| Signal | Max value | Gated |
+|---|---|---|
+| `lift_reward` | **100** × exp(-2 × vert_err) | yes (good_grasp_mask) |
+| `object_to_goal_reward` | 40 × exp(-5 × pos_err) | yes (good_grasp_mask) |
+| `hand_object_contact_reward` | 3 × num_contacts (~9-15) | no |
+| `hand_to_object_reward` | 3 × exp(-5 × dist) | no |
+| `good_grasp_reward` | 3 (binary) | (is the gate) |
+| `success_bonus_reward` | 10 per step | yes (in goal region) |
+| `in_success_region_at_rest_weight` | 10 per step | yes (in goal region, at rest) |
+| `finger_curl_reg` | up to -6 (clamped) | no |
+| `palm_direction_alignment_reward` | up to -0.7 × θ² | no |
+
+**Train command:**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success > 0.1` by ep ~500-1000 → the incentive landscape was the bottleneck, 100 lift_weight unlocks the lift behavior
+- `lift_reward/iter` grows past 60-80 (previously saturated at 18) → lift gate is opening more often / at better positions
+- If `lift_success` still flat at ep 2000 → the issue is mechanical (object slipping during lift, or arm trajectory can't translate good_grasp into vertical motion under current posture). Next levers: bump object friction (static/dynamic), or adjust the arm pose so vertical motion is more "natural" for the policy.
+
+**Result:** Bumping `lift_weight` ADR (60, 30) → (100, 50) had no visible effect — policy still completely oblivious to lifting in livestream. Confirmed the issue is not reward magnitude. Reverted in run3m.
+
+### run3m — revert lift_weight + bump arm torques +20% (2026-05-12)
+
+**Hypothesis (rejected after livestream):** wrist torque might be the lift bottleneck despite ~100× headroom calculation. Probe by bumping arm `effort_limit_sim` +20% over hardware spec.
+
+**Changes (env_cfg.py + fr3_tekken_left.py):**
+
+| Parameter | run3l | **run3m** |
+|---|---|---|
+| `lift_weight` ADR | (100., 50.) | (60., 30.) (reverted) |
+| `franka_arm` effort_limit_sim | 90.0 | **108.0** Nm (+20%) |
+| `franka_joints_ee` effort_limit_sim | 20.0 | **24.0** Nm (+20%) |
+| `arm_14_effort_limit` ADR | (90.0, 87.0) | **(108.0, 104.4)** |
+| `arm_57_effort_limit` ADR | (20.0, 12.0) | **(24.0, 14.4)** |
+
+**Livestream observation:** policy "completely oblivious towards lifting" — not even attempting upward motion, despite plentiful torque.
+
+**Diagnosis (mid-session reward inspection):**
+
+```python
+# env.py:2243
+contact_mask = good_grasp_mask.to(contact_count.dtype)
+lift_reward = lift_weight * exp(-lift_sharpness * vert_err) * contact_mask
+object_to_goal_reward = ... * contact_mask  # also gated
+```
+
+`good_grasp_mask` = `(≥2 unique fingers in contact) AND (thumb is one of them)`. If the policy never achieves a real grasp during exploration, `lift_reward` and `object_to_goal_reward` are both **identically zero** for every episode — no gradient toward lifting exists in the policy's experience.
+
+The April run2g baseline used `contact_mask = (contact_count > 0)` — ANY single contact unlocked lift_reward, including thumb-scraping. That gate was the bootstrap path: policy could exploit messy contact to discover the lift action, then refine. Closing that exploit in run3 also closed the bootstrap.
+
+Run3m's torque bump was the wrong lever — torque isn't blocking lifting, the **reward signal itself never reaches the policy**.
+
+**Result:** Confirmed torque is not the bottleneck. Visually the policy started "trying to engage" with the object slightly more once contact-weight dynamics changed mid-session, which motivated run3n.
+
+### run3n — reduce contact weight + meaningful arm-torque curriculum (2026-05-12)
+
+**Motivation:** in run3m livestream, policy was beginning to interact with object meaningfully. To preserve that improvement, scale back `hand_object_contact_weight` proportionally with the earlier `hand_to_object_weight` reduction (4→3 in run3k). The previous arm-torque ADR was nearly flat for joints 1-4; make both groups span a real range that actually challenges sim2real robustness.
+
+**Changes (env_cfg.py):**
+
+| Parameter | run3m | **run3n** |
+|---|---|---|
+| `hand_object_contact_weight` | 3.0 | **2.0** |
+| `arm_14_effort_limit` ADR endpoint | 104.4 | **85.5** (5% below 90 Nm spec) |
+| `arm_57_effort_limit` ADR endpoint | 14.4 | **19.0** (5% below 20 Nm spec) |
+
+Now both arm groups span (start +20% above spec) → (end −5% below spec), so the curriculum actually tests robustness toward hardware-realistic torque. Previous endpoint of 14.4 Nm on wrist was overly aggressive (−28% below spec) for what's effectively a no-bottleneck regime.
+
+**Current reward landscape (ADR 0):**
+
+| Signal | Max | Gated |
+|---|---|---|
+| `hand_to_object_reward` | 3 × exp(-5 × dist) | no |
+| `hand_object_contact_reward` | 2 × num_contacts (~6-10) | no (reduced from 3) |
+| `good_grasp_reward` | 3 (binary) | (= the gate itself) |
+| `lift_reward` | 60 × exp(-2 × vert_err) | yes (good_grasp_mask) |
+| `object_to_goal_reward` | 40 × exp(-5 × pos_err) | yes (good_grasp_mask) |
+| `finger_curl_reg` | up to -6 | no |
+
+Now `good_grasp_reward` (3) > `hand_object_contact_reward` per sensor (2). Once policy achieves a real grasp, that path is strictly more rewarding than camping with mere contact.
+
+**Train command:**
+```bash
+cd dextrah_lab/rl_games
+python train.py --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` shows non-zero by ep ~1000-2000 → reduced contact weight unblocked the good_grasp incentive path
+- `extras/good_grasp_reward` rising over training → policy is finding thumb-opposed grasps
+- If `lift_success` still flat by ep 3000 → the `good_grasp_mask` gate itself is the bootstrap problem (policy never exploration-stumbles into the joint config). Next experiment: soft gate, `contact_mask = 0.2 + 0.8 * good_grasp_mask` so partial-contact still leaks a 20% lift gradient, OR curriculum gate (start with `contact_count > 0`, transition to `good_grasp_mask` once basic grasping emerges)
+
+**Result:** *(to be filled in)*

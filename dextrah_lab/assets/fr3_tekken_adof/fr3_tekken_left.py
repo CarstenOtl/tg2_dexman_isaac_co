@@ -81,14 +81,14 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
     actuators={
         "franka_arm": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[1-4]"],
-            effort_limit_sim=90.0,    # FR3 hardware spec for joints 1-4
+            effort_limit_sim=108.0,   # 2026-05-12 (run3m): +20% from 90 Nm hardware spec to probe whether torque is lift bottleneck
             velocity_limit_sim=2.175,
             stiffness=200.0,          # 400→200: softer spring, less force on contact
             damping=40.0,
         ),
         "franka_joints_ee": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[5-7]"],
-            effort_limit_sim=20.0,    # FR3 hardware spec for joints 5-7
+            effort_limit_sim=24.0,    # 2026-05-12 (run3m): +20% from 20 Nm hardware spec
             velocity_limit_sim=2.175,
             stiffness=200.0,          # 400→200
             damping=40.0,
