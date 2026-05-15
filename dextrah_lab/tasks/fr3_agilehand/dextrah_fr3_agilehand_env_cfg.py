@@ -110,22 +110,20 @@ class EventCfg:
         },
     )
 
-    # Thumb rotation init randomization: ±10° around the 0° init (final range -10° to +10°).
-    # 2026-05-12 (run3k): re-introduced with a SAFER range than the previous attempt.
-    # Previous range was offset (0.0, 0.3491) rad from -20° init → final [-20°, 0°],
-    # which let thumb_rot land at its joint min (-20°) and broke the sim. New range stays
-    # well within joint limits [-20°, 20°] (final ±10° from 0° init). Rationale: the -20°
-    # opposed-thumb pose was hard to grasp from; small ±10° variance around the canonical
-    # 0° gives the policy diverse approach geometries while staying away from joint stops.
-    thumb_rot_init = EventTerm(
-        func=mdp.reset_joints_by_offset,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=["revolute_thumb_rot"]),
-            "position_range": (-0.1745, 0.1745),  # ±10° offset from 0° init
-            "velocity_range": (0.0, 0.0),
-        },
-    )
+    # Thumb rotation init randomization: DISABLED 2026-05-15 (run3o).
+    # Hypothesis: randomized thumb_rot at reset interferes with good_grasp formation —
+    # the LSTM has to handle a different thumb plane each episode before it has even
+    # learned how to grasp. Reintroduce later as an ADR curriculum once basic grasp+lift
+    # is solid (range can ramp from (0, 0) → (-0.1745, 0.1745) over training).
+    # thumb_rot_init = EventTerm(
+    #     func=mdp.reset_joints_by_offset,
+    #     mode="reset",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", joint_names=["revolute_thumb_rot"]),
+    #         "position_range": (-0.1745, 0.1745),  # ±10° offset from 0° init
+    #         "velocity_range": (0.0, 0.0),
+    #     },
+    # )
 
     # Arm joint init randomization: ±0.2 rad (~11.5°) from default pose at every reset.
     # Forces the policy to learn approach from varied arm configurations from the start.
@@ -728,7 +726,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
 
     # reward weights
     # phase 1: reaching
-    hand_to_object_weight = 3.  # 2026-05-12 (run3k): 4 → 3. Reducing approach-phase reward weight slightly so it doesn't dominate over the lift signal once the hand is at the object — currently policy is camping at the object (good_grasp firing in ~77% of envs) without progressing to lift.
+    hand_to_object_weight = 2.  # 2026-05-15 (run3p): 1 → 2. Run3o cut to 1 was too aggressive — net per-step reward went negative (~-0.3 mean episode reward), policy never even bootstrapped to making contact because positive approach signal (~0.3-0.6 at object) was swamped by finger_curl_reg + palm_align negatives. 2.0 restores positive gradient toward the object while still being below run3n's 3.0 to keep the camping equilibrium less attractive than the lift path.
     hand_to_object_sharpness = 5. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
     
     palm_direction_alignment_weight = 0.7  # increased from 0.5
@@ -749,8 +747,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
 
     # phase 2: contact
-    hand_object_contact_weight = 2.0   # 2026-05-12 (run3n): 3 → 2. Reduced proportionally with hand_to_object_weight (4→3) so contact reward doesn't dominate the policy's optimum now that approach reward is lower. Livestream of run3m showed policy engaging with object, want to avoid contact reward farming overwhelming the lift signal.
-    good_grasp_weight = 3.0            # 6→3: halved
+    hand_object_contact_weight = 1.5   # 2026-05-15 (run3q): 2.0 → 1.5. Further reduces the always-on contact reward so camping-with-contact is less attractive than lifting. With sharpness=5 lift gradient now steep, contact should be a stepping stone, not a destination.
+    good_grasp_weight = 2.5            # 2026-05-15 (run3q): 3.0 → 2.5. Slight scale-down with hand_object_contact cut — still a real-grasp shaping bonus without dominating the always-on stack.
     finger_curl_reg_weight = -0.5    # reduced to allow ADR to widen; was -0.5
     finger_curl_reg_min = -6.0 # 2026-05-11: -8 → -6. Started at -3 (run3h saturated), raised to -8 but that over-penalized — policy over-corrected by pinning thumb at joint min, causing PD instability against the limit. -6 lets the penalty bite (2× the original -3 cap) without driving the policy into the unstable "pin against joint min" pose.
     finger_curl_reg_max = 0.0 # min penalty for finger curl
@@ -759,7 +757,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
     success_bonus_weight = 10.0  # flat bonus per step when object is in goal region
-    lift_sharpness = 2.0 #default 8.5; 5→2: much flatter gradient so policy discovers lifting from table height
+    lift_sharpness = 5.0  # 2026-05-15 (run3q): 2 → 5. At sharpness=2, table-touch already harvested ~40% of max lift_reward (23/60), making "camp on object" a stable equilibrium with no incentive to actually lift. At sharpness=5, table-touch harvests only ~10% (5.7/60) — lift_success threshold is 17%, goal is 100% — so the policy must lift to harvest meaningful lift_reward. (kuka_allegro uses 8.5; FABRICS smooths their actions which we don't have.)
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
@@ -938,9 +936,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "actuator_curriculum": {
             # Thumb rotation velocity limit (rad/s): 0.2618 (15 deg/s) → 0.1396 (8 deg/s)
             "thumb_rot_vel_limit": (0.2618, 0.1396),
-            # FR3 arm effort limits (Nm): start +20% above hardware spec (90/20 → 108/24), ADR endpoint at 5% below hardware spec (85.5/19.0). Both groups now meaningfully curriculum'd (previously joints 1-4 barely changed). At ADR end, wrist still has ~90× the torque needed for a 100g lift, but the policy must remain robust as effort tightens.
-            "arm_14_effort_limit": (108.0, 85.5),
-            "arm_57_effort_limit": (24.0, 19.0),
+            # FR3 arm effort limits (Nm): 2026-05-15 — flat at actual hardware spec (87/12), verified against USD joint max limits. No curriculum span: torque is not the lift bottleneck per run3m, and we don't want to throttle torque while debugging the bootstrap-gate. Re-introduce curriculum below spec once lift behavior emerges.
+            "arm_14_effort_limit": (87.0, 87.0),
+            "arm_57_effort_limit": (12.0, 12.0),
         },
     }
 

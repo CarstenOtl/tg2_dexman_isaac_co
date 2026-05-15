@@ -1429,4 +1429,145 @@ python train.py --headless --task=dextrah_fr3_agilehand --seed 42 \
 - `extras/good_grasp_reward` rising over training → policy is finding thumb-opposed grasps
 - If `lift_success` still flat by ep 3000 → the `good_grasp_mask` gate itself is the bootstrap problem (policy never exploration-stumbles into the joint config). Next experiment: soft gate, `contact_mask = 0.2 + 0.8 * good_grasp_mask` so partial-contact still leaks a 20% lift gradient, OR curriculum gate (start with `contact_count > 0`, transition to `good_grasp_mask` once basic grasping emerges)
 
+**Result (2026-05-15 livestream of best ckpt from run dir `05-12_18-31-14`):** ~16000 epochs trained over ~24h, reward flat at 15-17k throughout, ADR never advanced past 0 (`success_for_adr=0.4` never met because `lift_success` stayed at 0). Livestream confirmed the bootstrap-gate hypothesis: policy converges to "contact + camp" steady-state, never explores upward — `good_grasp_mask` is satisfied transiently in some envs but the lift gradient never makes it into the policy. Torque is not the bottleneck (verified at hardware-spec 87/12 Nm — robot moves fine, see run3o). Confirmed run3n's decision rule branch: bootstrap-gate is the blocker; next experiment reverts the strict gate.
+
+### run3o — revert lift gate to any-contact, cut hand_to_object weight, remove thumb_rot randomization (2026-05-15)
+
+**Motivation:** run3n confirmed three things: (1) `good_grasp_mask` gate prevents bootstrap — the policy never explores into the gated lift signal; (2) `hand_to_object_reward` at weight 3 + `contact_reward` at weight 2 give a ~9-13/step always-on positive signal that makes camping-at-object a stable equilibrium with no need to ever lift; (3) thumb_rot randomization at reset may be confusing the LSTM during early grasp learning (different thumb plane every episode before any grasp policy exists). Run3o targets all three.
+
+The good_grasp gate was originally added in run3 (2026-05-11) to close the thumb-buckling exploit from the April baseline (`contact_count > 0` let policies farm lift reward with a buckled-thumb scrape). The bet for run3o: `good_grasp_reward` as a +3 shaping bonus is sufficient to make real grasps more rewarding than buckled scrapes, *without* gating lift_reward on it.
+
+**Changes from run3n (3 files):**
+
+| Setting | run3n | **run3o** | Why |
+|---|---|---|---|
+| `hand_to_object_weight` | 3.0 | **1.0** | Cut always-on approach reward by 2/3. Camping equilibrium drops from ~9/step to ~7/step; lift path peak (60 + 40 + 10) becomes overwhelmingly dominant once any contact is made. |
+| `contact_mask` for lift/goal (env.py:2243) | `good_grasp_mask` | **`(contact_count > 0)`** | Bootstrap fix. Any contact opens the lift gradient; policy can discover "wrist up = object up" without first satisfying a complex multi-finger criterion it never explores into. |
+| `thumb_rot_init` EventTerm | active (±10°) | **disabled (commented out)** | Removes inter-episode thumb-plane variability while LSTM learns basic grasp. Plan: re-introduce as ADR curriculum (start (0, 0), ramp to (-0.1745, 0.1745)) once `lift_success > 0.3`. |
+| `franka_arm` effort_limit_sim | 108 Nm | **87 Nm** | Match actual USD hardware spec (user verified motion still clean at 87). Discussed in run3m as +20% probe — confirmed not the bottleneck. |
+| `franka_joints_ee` effort_limit_sim | 24 Nm | **12 Nm** | Match actual USD hardware spec. |
+| `arm_14_effort_limit` ADR | (108, 85.5) | **(87, 87)** | Flat at hardware spec. No curriculum span while debugging bootstrap. |
+| `arm_57_effort_limit` ADR | (24, 19) | **(12, 12)** | Flat at hardware spec. |
+
+**Current reward landscape (ADR 0):**
+
+| Signal | Max value | Gate |
+|---|---|---|
+| `hand_to_object_reward` | **1** × exp(-5 × dist) | none |
+| `hand_object_contact_reward` | 2 × num_contacts (~6-10) | none |
+| `good_grasp_reward` | 3 (binary) | (= the shaping signal for real grasps) |
+| `lift_reward` | 60 × exp(-2 × vert_err) | **any contact** |
+| `object_to_goal_reward` | 40 × exp(-5 × pos_err) | **any contact** |
+| `success_bonus_reward` | 10 per step | in_success_region |
+| `finger_curl_reg` | up to -6 (clamped) | none |
+| `palm_alignment_reward` | up to -0.7 × θ² | none |
+| `early_term_penalty` | -1.0 | terminated AND no_contact |
+
+**Predicted policy trajectory** (if hypothesis holds):
+1. Approach phase: policy moves hand toward object (still incentivized at +1/step max)
+2. First touch: any contact opens lift gate at +60 — even a finger graze, even thumb-only contact
+3. Discovery of "wrist up + contact = +50 per step" via random exploration is now trivially reachable
+4. As lift gradient takes hold, `good_grasp_reward` (+3 only for real grasps) gradually pulls thumb+finger pose toward proper grip — this is the slow-shaping mechanism rather than a hard gate
+5. ADR advances once `lift_success > 0.4` on the 13-object set
+
+**Train command (1024 envs, GPU 1):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success > 0.1` by ep ~500-1000 → bootstrap-gate was the bottleneck and any-contact gate unlocks lift; continue
+- `lift_reward/iter` climbs past 30 by ep 1000 → contact gate is opening reliably and policy is finding upward motion
+- Livestream shows thumb-buckling exploit (thumb scraping object without grasp, farming lift reward) → bump `good_grasp_weight` 3 → 6 to strengthen the real-grasp shaping signal
+- `lift_success` still flat at ep 2000 → contact gate isn't the issue either; suspect arm trajectory / posture, next experiment is init-pose sweep
+- Once `lift_success > 0.3` stably → re-introduce `thumb_rot_init` EventTerm as a curriculum (ADR range starting (0, 0), ramping to (-0.1745, 0.1745))
+
+**Result (run dir `05-15_12-32-16`, ~5000 epochs, ~3h):** Reward catastrophically negative throughout (-0.74 → -0.24 → -0.74, mean episode reward). Diagnosis: `hand_to_object_weight=1` cut the approach signal too aggressively — at weight 1, peak `hand_to_object_reward` is ~1 (vs ~3 in run3n), but `finger_curl_reg` (-1 to -2) + `palm_align` (~-0.5) + `action_rate` (~-0.05) + `early_term_penalty` (-1 on terminations without contact) sum to ~-2 to -3.5. Net per-step reward is negative regardless of position, so there's no positive gradient pulling the hand toward the object. Policy never bootstraps to contact. Confirmed via livestream: no contact attempts.
+
+This is a different failure mode than run3n. run3n was "contact + camp" (positive equilibrium, no exploration into lift). run3o is "freeze far from object" (negative equilibrium, no exploration into approach). The lift-gate change (`good_grasp_mask` → `contact_count > 0`) wasn't tested because contact never happened.
+
+### run3p — restore approach signal, remove velocity throttles (2026-05-15)
+
+**Motivation:** Run3o demonstrated that `hand_to_object_weight=1` is below the threshold needed to overcome the always-on negative regularizers. We need to restore enough approach signal to actually reach the object — but not so much that camping-at-object becomes the stable equilibrium again (run3n's failure). Compromise: 2.0 (halfway between run3n's 3.0 and run3o's 1.0). At weight 2, peak approach signal is ~2 which exceeds the ~-2 negative-regularizer floor, giving a positive gradient toward the object.
+
+Additionally, run3o livestream raised a separate concern: the policy's grasp closure looked sluggish even when reaching the object. Investigation showed finger `velocity_limit_sim=2.0 rad/s` (~114 deg/s) was throttling the PD-commanded closure speed. Real AgileHand fingers can move at ~360 deg/s (verified by user). Remove the sim throttle so finger closure speed matches hardware capability.
+
+For symmetry and to remove a potentially hidden constraint: arm `velocity_limit_sim=2.175 rad/s` removed too. Let `effort_limit_sim` (87/12 Nm) + PD (stiffness=200, damping=40) be the only motion constraints on the arm.
+
+**Changes from run3o (asset + env_cfg):**
+
+| Setting | run3o | **run3p** | Why |
+|---|---|---|---|
+| `hand_to_object_weight` | 1.0 | **2.0** | Restore positive net per-step reward; ~2/step peak approach signal exceeds the ~-2 always-on regularizer floor. |
+| `franka_arm` velocity_limit_sim | 2.175 rad/s | **removed** (USD default) | No software throttle on arm motion; PD + effort_limit shape it. |
+| `franka_joints_ee` velocity_limit_sim | 2.175 rad/s | **removed** (USD default) | Same. |
+| `mcp_pitch` velocity_limit_sim | 2.0 rad/s | **6.2832 rad/s (360 deg/s)** | Match hardware capability — fingers were artificially slow during grasp closure. |
+| `mcp_yaw` velocity_limit_sim | 2.0 rad/s | **6.2832 rad/s (360 deg/s)** | Same. |
+| `pip` velocity_limit_sim | 2.0 rad/s | **6.2832 rad/s (360 deg/s)** | Same. |
+| `thumb_rot` velocity_limit_sim | 0.2618 rad/s (15 deg/s) | unchanged | Hardware spec; sim2real lever already set. |
+
+**Important caveat:** Isaac Lab's `ImplicitActuatorCfg` falls back to USD's baked-in velocity limit when `velocity_limit_sim` is omitted. If FR3's USD has 2.175 rad/s baked in, the arm constraint will silently persist. **TODO during livestream: verify arm joints can exceed 2.175 rad/s in practice** — if not, set to a large explicit value (e.g. 100.0 rad/s).
+
+**Current reward landscape (ADR 0):**
+
+| Signal | Max value | Gate |
+|---|---|---|
+| `hand_to_object_reward` | **2** × exp(-5 × dist) | none |
+| `hand_object_contact_reward` | 2 × num_contacts (~6-10) | none |
+| `good_grasp_reward` | 3 (binary) | shaping for real grasps |
+| `lift_reward` | 60 × exp(-2 × vert_err) | any contact |
+| `object_to_goal_reward` | 40 × exp(-5 × pos_err) | any contact |
+| `success_bonus_reward` | 10 per step | in_success_region |
+| `finger_curl_reg` | up to -6 (clamped) | none |
+| `palm_alignment_reward` | up to -0.7 × θ² | none |
+| `early_term_penalty` | -1.0 | terminated AND no_contact |
+
+**Net per-step reward estimate by phase:**
+- Far from object: +0.2 (hand_to_object) - 1.5 (finger_curl + palm_align) = **-1.3/step** — still slightly negative, but gradient toward the object is positive (closer → higher reward)
+- At object, no contact: +2 - 1.5 = **+0.5/step** — positive, but small enough that contact is the better option
+- With contact, no lift: +2 + 6 (contact) - 1.5 = **+6.5/step** — strong incentive to maintain contact
+- With contact, lifting: +2 + 6 + 50 (lift, at 5cm) = **+56.5/step** — overwhelming incentive to lift
+
+The gradient stack is now: far → at object → contact → lift, each step strictly more rewarding than the previous.
+
+**Train command (1024 envs, GPU 1):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- Episode mean reward turns positive by ep ~500 → approach signal is now strong enough to bootstrap toward the object
+- `extras/hand_object_contact_reward` > 0 by ep ~500-1000 → contact is being made
+- `lift_success > 0.1` by ep ~1000-2000 → contact-gate (from run3o) actually opens lift gradient; this finally tests the run3o hypothesis
+- Livestream early on: verify arm joints can exceed 2.175 rad/s (no USD-baked limit) and finger joints can exceed 2.0 rad/s. If they can't, set explicit large values.
+- If `lift_success` flat at ep 2000 but contact is happening → buckling exploit returned; bump `good_grasp_weight` 3 → 6 or re-strict the gate
+
 **Result:** *(to be filled in)*

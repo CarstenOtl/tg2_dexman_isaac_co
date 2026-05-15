@@ -2234,13 +2234,16 @@ def compute_rewards(
     hand_action_scale: float,
 ):
 
-    # Binary mask: only award lift/goal progress when a PROPER GRASP is established
-    # (thumb + at least one other finger in contact). 2026-05-11: was previously
-    # `(contact_count > 0.0)` which fired on ANY single contact — including the
-    # outer surface of a buckled thumb, letting the policy farm shaped lift reward
-    # without actually grasping. good_grasp_mask requires thumb participation +
-    # multi-finger contact, much harder to fake with a degenerate pose.
-    contact_mask = good_grasp_mask.to(contact_count.dtype)
+    # Binary gate for lift/goal progress: ANY hand-object contact opens the gate.
+    # 2026-05-15 (run3o): reverted to `(contact_count > 0)` after the stricter
+    # good_grasp_mask gate (thumb + ≥1 other finger) prevented bootstrap — the
+    # policy never explored into the joint config that satisfies it, so lift_reward
+    # was identically zero for every episode and no lift gradient ever reached the
+    # policy. The thumb-buckling exploit this gate was guarding against is now
+    # mitigated by `good_grasp_reward` acting as a separate shaping term (+3 only
+    # when a real grasp forms), which makes a real grasp strictly more rewarding
+    # than a buckled-thumb scrape. If buckling re-emerges, tighten via curriculum.
+    contact_mask = (contact_count > 0.0).to(contact_count.dtype)
 
     # Reward for moving fingertip and palm points closer to object centroid point
     hand_to_object_reward = hand_to_object_weight * torch.exp(-hand_to_object_sharpness * hand_to_object_pos_error)

@@ -380,7 +380,7 @@ Every script that accepts `--task` must import the task's `gym_setup` module (e.
 
 ### CLI arg ordering for Hydra overrides
 `env.*` overrides (e.g. `env.distillation=True`) go as bare positional args — `parse_known_args()` routes them to Hydra automatically. All `--flags` must come before `env.*` args. Do NOT use `--` separator with `eval_student.py` — bash interprets remaining args as separate shell commands.
-- `eval_teacher.py` uses `parse_args()` (NOT `parse_known_args()`), so `env.*` Hydra overrides don't work. Use `--objects_dir` flag instead.
+- `eval_teacher.py` and `play_test.py` use `parse_args()` (NOT `parse_known_args()`), so `env.*` Hydra overrides don't work. Use the dedicated `--objects_dir` flag instead. `env.use_cuda_graph` and similar are training-only and irrelevant for these scripts.
 - `--teacher` flag in distillation scripts resolves relative paths as `<repo_root>/pretrained_ckpts/<value>`. Use absolute paths to skip this. The `--teacher` flag must come BEFORE the `--` separator, otherwise argparse doesn't see it.
 
 - Environment configs use Isaac Lab's `@configclass` decorator pattern

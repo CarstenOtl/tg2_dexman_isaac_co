@@ -81,15 +81,15 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
     actuators={
         "franka_arm": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[1-4]"],
-            effort_limit_sim=108.0,   # 2026-05-12 (run3m): +20% from 90 Nm hardware spec to probe whether torque is lift bottleneck
-            velocity_limit_sim=2.175,
+            effort_limit_sim=87.0,    # 2026-05-15: matches actual FR3 hardware spec (verified in USD, robot moves fine)
+            # 2026-05-15 (run3p): velocity_limit_sim removed — let effort_limit + PD shape arm motion, no software velocity throttle.
             stiffness=200.0,          # 400→200: softer spring, less force on contact
             damping=40.0,
         ),
         "franka_joints_ee": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[5-7]"],
-            effort_limit_sim=24.0,    # 2026-05-12 (run3m): +20% from 20 Nm hardware spec
-            velocity_limit_sim=2.175,
+            effort_limit_sim=12.0,    # 2026-05-15: matches actual FR3 hardware spec (verified in USD)
+            # 2026-05-15 (run3p): velocity_limit_sim removed.
             stiffness=200.0,          # 400→200
             damping=40.0,
         ),
@@ -103,21 +103,21 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
         "mcp_pitch": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_pitch"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=2.0,   # 2026-05-12: 1 → 2 rad/s (~114 deg/s). 1.0 was too aggressive — the PD controller (stiffness=10, damping=6) generated commands the velocity cap couldn't resolve in one step, leading to limit-cycle-style finger instability. 2.0 keeps the cap meaningfully below the original 8 rad/s (still 4× slower) but gives PD enough headroom to settle cleanly.
+            velocity_limit_sim=6.2832,  # 2026-05-15 (run3p): 2 → 6.2832 rad/s (360 deg/s) — fingers can physically move this fast, remove the sim throttle that was constraining grasp closure.
             stiffness=10.0,
             damping=6.0,              # 3→6: more damping, smoother contact
         ),
         "mcp_yaw": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_yaw"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=2.0,   # 2026-05-12: matched to mcp_pitch above.
+            velocity_limit_sim=6.2832,  # 2026-05-15 (run3p): 2 → 6.2832 rad/s (360 deg/s).
             stiffness=10.0,
             damping=6.0,              # 3→6
         ),
         "pip": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_pip"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=2.0,   # 2026-05-12: matched to mcp_pitch above.
+            velocity_limit_sim=6.2832,  # 2026-05-15 (run3p): 2 → 6.2832 rad/s (360 deg/s).
             stiffness=10.0,
             damping=6.0,              # 3→6
         ),
