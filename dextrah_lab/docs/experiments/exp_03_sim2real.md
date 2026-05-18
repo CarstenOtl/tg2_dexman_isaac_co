@@ -1830,3 +1830,98 @@ lift_gate = contact_mask * object_lifted.to(contact_mask.dtype)
 - run3s `lift_success` flat with no attempts → run3t alone won't help; need to reconsider the reward stack entirely
 
 **Status:** Not yet started. Wait for run3r results before deciding.
+
+### run3s.3 — revert lift landscape + bump approach anchor (working teacher v2 values, 2026-05-19)
+
+**Motivation:** run3s.2 (2048 envs, 3297 iters) confirmed the camp basin is structural to the current reward landscape, not a sample-size problem. `lift_success` stayed at noise floor (max 0.00195 = 4/2048 envs) throughout. `lift_reward` parked at exactly **2.25** = the camp residual (`25 × exp(-5 × 0.48)`), matching contact (2.0) + good_grasp (0.9) combined. With sharpness=5 the lift gradient is essentially flat for any vertical_err > 0.2m — the policy cannot discover lifting because the gradient is too steep close to the goal and too dead at table height.
+
+Diff against working teacher v2 (commit 32a8924, policy 12 stored at `12_teacher_v2_hw_realistic_adr13_04-06_12-49-15`) showed the **decisive landscape change was `lift_sharpness: 2 → 5`** plus the matching `lift_weight: (40,20) → (25,12.5)` cut. The working policy got lift_reward = 14.7/step at table height (40 · exp(-2·0.5)) — a clear, discoverable signal **6× the combined contact bonus**. The current policy gets lift_reward = 2.25/step at table height — **equal** to the combined contact bonus → no escape gradient.
+
+First attempt was a minimal 3-param revert (lift_sharpness, lift_weight, finger_curl_reg) keeping `hand_to_object_weight=2.0`. Livestream showed the policy turning **away** from the object and getting palm_flips — the new lift gradient was so strong it pulled the policy toward grasping-positions-without-an-object, and the 2.0 approach weight couldn't anchor the hand. Bumped `hand_to_object_weight` to 3.0 (working v2 used 4.0) as a second change in the same run.
+
+**Changes (cumulative from run3s.2):**
+
+| param | run3s.2 | run3s.3 | rationale |
+|---|---|---|---|
+| `lift_sharpness` | 5.0 | **2.0** | flatten — discoverable from table height |
+| `lift_weight` ADR | (25, 12.5) | **(40, 20)** | bigger pot, slower decay |
+| `finger_curl_reg` ADR | (-1.0, -2.0) | **(-0.5, -1.2)** | halve curl floor so fingers can fully close |
+| `hand_to_object_weight` | 2.0 | **3.0** | stronger anchor to counter the bigger lift attractor |
+
+**Resulting reward landscape at ADR 0, vertical_err = 0.5 m:**
+
+| signal | value/step |
+|---|---|
+| `lift_reward` | **14.7** (was 2.25) |
+| `hand_object_contact_reward` (≈4 sensors × 0.8) | 3.2 |
+| `good_grasp_reward` (full grasp × 1.5) | 1.5 |
+| `object_to_goal_reward` (at err ≈ 0.5) | 0.73 |
+| `hand_to_object_reward` (at object) | **1.33** (was 0.89) |
+| `finger_curl_reg` (full curl, ADR 0) | -0.5 (was -1.0) |
+| **net positive** | **21.2** (was 8.0) |
+| **net negative** | **-3.0** (was -4.6) |
+
+The lift signal is now ~3× the combined contact stack, ~20× the goal residual — clearly the dominant gradient when contact is present. At goal (vertical_err = 0), lift_reward = 40 (vs 25 before). At weight 3, hand_to_object pays +1.33/step at the object × ~500-step episode = +665 — comparable scale to lift_reward at table height, providing a real anchor against drift.
+
+**Unchanged from run3s.2 (intentionally NOT reverted):**
+- `hand_object_contact_weight = 0.8`, `good_grasp_weight = 1.5` (working had 3.0/3.0) — keep contact subordinate to lift
+- Arm effort fixed at 87/12 (working had 90→87 / 20→12 curriculum) — hardware-realistic from step 0
+- Contact gate using `(contact_count > 0)` not `good_grasp_mask` (working used good_grasp_mask)
+- `palm_flip` folded into `early_term_penalty` (run3s.1)
+
+If run3s.3 lifts, we know the lift landscape + approach anchor combo was the blocker. If it doesn't lift, we revert the next layer (contact weights to 3.0/3.0, then arm curriculum).
+
+**Train command (livestream first to sanity-check anchor + lift attempt, then scale to 2048 envs headless):**
+```bash
+# Livestream sanity check (16 envs, visible):
+cd dextrah_lab/rl_games
+/home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --task=dextrah_fr3_agilehand --seed 42 --livestream 2 \
+  --num_envs 16 \
+  agent.params.config.minibatch_size=256 \
+  agent.params.config.central_value_config.minibatch_size=256 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+
+# Headless 1024 envs (after livestream sanity — chosen over 2048 to reduce vel_explosion frequency):
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- Livestream: hand anchors on object, contact forms, upward motion attempts → kill livestream, start headless
+- Livestream: hand still drifts / palm_flips → bump hand_to_object_weight to 4.0 (full working-teacher-v2 value)
+- Headless: `lift_success > 0.05` and `num_adr_increases ≥ 1` within ep 2000 → lift landscape + anchor combo was the whole problem
+- Headless: `lift_reward` climbs above ~15 (table-height residual) but `lift_success` low → policy is *trying* to lift but not yet succeeding; let it train longer, possibly LR-bump
+- Headless: `lift_reward` parks at ~14-15 and `lift_success` stays at noise floor → revert contact weights next (3.0/3.0 instead of 0.8/1.5)
+- Negative reward / vel_explosion → curl penalty cut too aggressive, bump to (-0.7, -1.5)
+
+**Livestream observations (2026-05-19):**
+- **First positive sign in the whole run3 saga**: with the reverted lift_sharpness=2 + lift_weight=(40,20) + hand_to_object=3, the policy is now visibly **attempting upward motion** after contact. The lift gradient is being followed — not just sat on.
+- Lift attempts are **unsuccessful**: object is barely cleared from the table, never reaches `lift_success` threshold, no completions.
+- **vel_explosion territory**: as the policy tries harder to lift, finger and arm joints start hitting velocity limits → vel_explosion terminations creeping up. Free unpenalized resets are likely going to become attractive again if the rate stays high.
+- Decision: kill the 16-env livestream, scale to **1024 envs headless** (not 2048 — fewer envs may reduce vel_explosion cascade frequency from contact instabilities and give the policy more stable trajectories to learn lifting). Same reward config.
+
+**Next step: headless 1024-env run**, same reward config as logged above. Watch for `lift_success` actually firing now that the gradient is discoverable, AND for the `term_real` vs `term_physics_instability` ratio in TensorBoard — if vel_explosion dominates terminations, we'll need to address joint velocity stability before lift can converge.
+
+**Result:** *(headless 1024-env run pending)*
