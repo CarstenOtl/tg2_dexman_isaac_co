@@ -1173,12 +1173,13 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.extras["object_contact_count"] = self.object_contact_counts.mean()  # Track actual contact count
 
         early_term_penalty_weight = getattr(self.cfg, "early_termination_penalty", 0.0)
-        # Only penalise early terminations where no object contact was made.
-        # If the hand was touching the object, omit the penalty — grasping attempts
-        # will frequently cause early terminations and should not be discouraged.
+        # Penalise early terminations. object_out and hand_too_far are gated by no_contact
+        # (grasping attempts often cause these and shouldn't be discouraged), but palm_flip
+        # is penalised unconditionally — palm_flip is never a legitimate side-effect of grasping.
         no_contact = (self.object_contact_counts == 0)
+        penalty_mask = (self._penalty_terminated & no_contact) | self.last_palm_flipped
         early_term_penalty = torch.where(
-            self._penalty_terminated & no_contact,
+            penalty_mask,
             torch.full((self.num_envs,), early_term_penalty_weight, device=self.device, dtype=action_rate_penalty.dtype),
             torch.zeros(self.num_envs, device=self.device, dtype=action_rate_penalty.dtype),
         )
@@ -1242,6 +1243,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 ("episode_len",  episode_length_reward.mean().item()),
                 ("action_rate",  action_rate_penalty.mean().item()),
                 ("joint_vel",    joint_vel_penalty.mean().item()),
+                ("early_term",   early_term_penalty.mean().item()),
             ]
             print(" REWARDS")
             # pair up for two-column display

@@ -747,8 +747,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
 
     # phase 2: contact
-    hand_object_contact_weight = 1.5   # 2026-05-15 (run3q): 2.0 → 1.5. Further reduces the always-on contact reward so camping-with-contact is less attractive than lifting. With sharpness=5 lift gradient now steep, contact should be a stepping stone, not a destination.
-    good_grasp_weight = 2.5            # 2026-05-15 (run3q): 3.0 → 2.5. Slight scale-down with hand_object_contact cut — still a real-grasp shaping bonus without dominating the always-on stack.
+    hand_object_contact_weight = 0.8   # 2026-05-18 (run3s): 1.0 → 0.8. Further cut to push contact-farming below other engagement signals. At 4 sensors: 3.2/step (was 4.0), now comparable to object_to_goal (3.3).
+    good_grasp_weight = 1.5            # 2026-05-18 (run3s): 2.5 → 1.5. Scaled down with contact cut. Still acts as real-grasp shaping bonus but no longer dominates over object_to_goal as the always-on indicator that the hand is "doing something right".
     finger_curl_reg_weight = -0.5    # reduced to allow ADR to widen; was -0.5
     finger_curl_reg_min = -6.0 # 2026-05-11: -8 → -6. Started at -3 (run3h saturated), raised to -8 but that over-penalized — policy over-corrected by pinning thumb at joint min, causing PD instability against the limit. -6 lets the penalty bite (2× the original -3 cap) without driving the policy into the unstable "pin against joint min" pose.
     finger_curl_reg_max = 0.0 # min penalty for finger curl
@@ -782,7 +782,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     debug_print_every_steps = 16
     # Terminate if palm flips beyond this cosine threshold relative to target (-Z).
     palm_flip_cos_thresh = -0.3  # Allows up to ~108 degrees deviation from downward
-    early_termination_penalty: float = -1.0  # applied when episode ends early without object contact
+    early_termination_penalty: float = -1.0  # applied when episode ends early. Object_out and hand_too_far require no_contact (grasping attempts shouldn't be discouraged), but palm_flip triggers this unconditionally (palm_flip is never legitimate, regardless of contact state).
 
     # Goal reaching parameters
     object_goal_tol = 0.1 # m
@@ -921,9 +921,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "robot_joint_vel_bias": (0.0, 0.08), # rad
         },
         "reward_weights": {
-            "object_to_goal_sharpness": (-5., -10.),
+            "object_to_goal_sharpness": (-8., -12.),  # 2026-05-18 (run3s): (-5, -10) → (-8, -12). At sharpness -5 the camp reward was 40 × exp(-5 × 0.5) ≈ 3.3/step, parking the policy. At -8, camp drops to 0.73/step; reward only meaningfully fires when object is within ~20cm of goal. Goal-side reward (40 at err=0) unchanged.
             # "_weight": (5., 2.5) # default = (5,0)
-            "lift_weight": (60., 30.),  # 2026-05-12 (run3m): reverted from (100, 50). Bumping reward weight had little visible effect — lift behavior still stalled. Investigating torque headroom instead (arm effort_limit +20%).
+            "lift_weight": (25., 12.5),  # 2026-05-18 (run3s): (15, 7.5) → (25, 12.5). Run3r quarter-cut was too aggressive — policy still not attempting upward motion at ep ~1500. Bumping back up ~67% (keeping the 2× decay ratio) so lift_reward at goal becomes a more visible signal (15 → 25 at goal). Camp residual stays low: 25 × exp(-5 × 0.47) ≈ 2.4/step (was 1.4 at weight 15, was 5.7 at weight 60).
             "finger_curl_reg": (-1.0, -2.0),  # 2026-05-12 (run3k): reduced from (-1.5, -3.0). Run3j saturated this at -5.06 (near -6 cap), which was fighting the policy's attempt to close fingers tightly enough for a lift-capable grip. With good_grasp_mask gate now closing the thumb-scrape exploit, we don't need to over-penalize curl. -1.0 still discourages buckling but allows full closure.
         },
         "pd_targets": {
