@@ -110,20 +110,16 @@ class EventCfg:
         },
     )
 
-    # Thumb rotation init randomization: DISABLED 2026-05-15 (run3o).
-    # Hypothesis: randomized thumb_rot at reset interferes with good_grasp formation —
-    # the LSTM has to handle a different thumb plane each episode before it has even
-    # learned how to grasp. Reintroduce later as an ADR curriculum once basic grasp+lift
-    # is solid (range can ramp from (0, 0) → (-0.1745, 0.1745) over training).
-    # thumb_rot_init = EventTerm(
-    #     func=mdp.reset_joints_by_offset,
-    #     mode="reset",
-    #     params={
-    #         "asset_cfg": SceneEntityCfg("robot", joint_names=["revolute_thumb_rot"]),
-    #         "position_range": (-0.1745, 0.1745),  # ±10° offset from 0° init
-    #         "velocity_range": (0.0, 0.0),
-    #     },
-    # )
+    # Thumb rotation init randomization: -20° to 0° (default is -0.3491, offset 0 to +0.3491)
+    thumb_rot_init = EventTerm(
+        func=mdp.reset_joints_by_offset,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["revolute_thumb_rot"]),
+            "position_range": (0.0, 0.3491),
+            "velocity_range": (0.0, 0.0),
+        },
+    )
 
     # Arm joint init randomization: ±0.2 rad (~11.5°) from default pose at every reset.
     # Forces the policy to learn approach from varied arm configurations from the start.
@@ -262,32 +258,32 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot"
     ).replace(
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, -0.05),  # 2026-05-12: 0.25 → -0.05 (30 cm lower). Maximizes the FR3 workspace toward the object — previous z=0.25 had the arm reaching at an extreme angle where the thumb sat awkwardly during approach. Lower base = more comfortable joint posture for the same EE target.
+            pos=(0.0, 0.0, 0.25),  # Raise robot to table height (matching TG2 config)
             rot=(0.0, 0.0, 0.0, 1.0),
             joint_pos={
                 "fr3_joint1": -0.0873,  # -5.0 degrees
                 "fr3_joint2": -0.6109,  # -35.0 degrees
                 "fr3_joint3":  0.0000,  #  0.0 degrees
-                "fr3_joint4": -2.0944,  # -120.0 degrees. 2026-05-12: tuned visually from -90° → -120° to bring EE closer to the object after lowering base 30 cm — -90° put hand too far from object spawn (~0.7m), -150° was original (hand colliding with table after base drop). -120° is the middle ground.
+                "fr3_joint4": -2.6180,  # -150.0 degrees
                 "fr3_joint5": -0.5236,  # -30.0 degrees
                 "fr3_joint6":  2.9671,  #  170.0 degrees
                 "fr3_joint7":  0.0000,  #  0.0 degrees
-                "revolute_thumb_rot": 0.0,  # 2026-05-12: -0.3491 (-20°) → 0.0 (0°). Previous -20° put thumb at maximum offset from finger plane — anatomically opposed but visually a hard pre-grasp configuration. 0° (thumb aligned with finger plane) is a more natural tip-pinch start. EventTerm thumb_rot_init below randomizes ±10° around this for grasp-configuration diversity.
-                "revolute_thumb_mcp_pitch": 0.0524,  # 2026-05-11: 0.0 → 0.0524 (3°). Init at joint min (0°) caused PD oscillation against the hard stop when policy commanded "stay open." Small offset gives the joint wiggle room. Also moves the curled_q target to 3° so the regularizer rewards mild curl (achievable) instead of 0° (limit-bound).
+                "revolute_thumb_rot": -0.3491,  # -20 deg (joint min is -30 deg)
+                "revolute_thumb_mcp_pitch": 0.0,
                 "revolute_thumb_mcp_yaw": 0.0,
-                "revolute_thumb_pip": 0.0524,  # 2026-05-11: 0.0 → 0.0524 (3°). Same reason as thumb_mcp_pitch.
+                "revolute_thumb_pip": 0.0,
                 "revolute_index_mcp_pitch": 0.1,
                 "revolute_index_mcp_yaw": 0.0,
-                "revolute_index_pip": 0.0524,  # 2026-05-12: 0.0 → 0.0524 (3°). Off joint min to prevent PD oscillation against hard stop (same reason as thumb_pip).
+                "revolute_index_pip": 0.0,
                 "revolute_middle_mcp_pitch": 0.1,
                 "revolute_middle_mcp_yaw": 0.0,
-                "revolute_middle_pip": 0.0524,  # 2026-05-12: 0.0 → 0.0524 (3°).
+                "revolute_middle_pip": 0.0,
                 "revolute_ring_mcp_pitch": 0.1,
                 "revolute_ring_mcp_yaw": 0.0,
-                "revolute_ring_pip": 0.0524,  # 2026-05-12: 0.0 → 0.0524 (3°).
+                "revolute_ring_pip": 0.0,
                 "revolute_pinky_mcp_pitch": 0.1,
                 "revolute_pinky_mcp_yaw": 0.0,
-                "revolute_pinky_pip": 0.0524,  # 2026-05-12: 0.0 → 0.0524 (3°).
+                "revolute_pinky_pip": 0.0,
             },
         )
     )
@@ -726,10 +722,10 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
 
     # reward weights
     # phase 1: reaching
-    hand_to_object_weight = 3.  # 2026-05-19 (run3s.3): 2 → 3. With the reverted lift gradient (sharpness=2, weight 40) the policy was turning away from the object and getting palm_flips on livestream — approach signal at 2.0 too weak to anchor the hand against the much stronger lift attractor. 3.0 strengthens the approach (run3n value, half the working teacher v2's 4.0) without re-introducing the "camp on object" stickiness that 4.0 had relative to the older smaller lift_weight.
-    hand_to_object_sharpness = 5. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
+    hand_to_object_weight = 4. #default 1, prev 5
+    hand_to_object_sharpness = 4. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
     
-    palm_direction_alignment_weight = 0.5  # 2026-05-19 (run3z): 0.7 → 0.5. With palm_flip removed from termination (run3v.1), the only palm-orientation signal is this continuous penalty. Lowering weight reduces pressure on palm orientation so policy has more freedom to find grip poses even at non-canonical palm angles.
+    palm_direction_alignment_weight = 0.7  # increased from 0.5
     in_grip_alignment_weight = 1. # 0.5
     
     palm_down_local_axis = (1.0, 0.0, 0.0) # x axis of agile-hand points in the direction of palm
@@ -744,20 +740,20 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_action_rate_penalty_scale = 1.5       # reduced from 2.5 to encourage finger exploration
 
     joint_velocity_penalty_weight = 5e-4       # prev 5e-4 -- reduced to avoid freezing
-    hand_joint_velocity_penalty_scale = 2.0    # prev 3.0
+    hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
 
     # phase 2: contact
-    hand_object_contact_weight = 1.5   # 2026-05-19 (run3x): 0.8 → 1.5. Run3w livestream: fingers curled but missed the object. Restore contact weight so the policy gets a clear "fingers touching object" signal. At 3 sensors: ~4.5/step — meaningful shaping but still well below lift_reward magnitudes (~15 at lift_success, 40 at goal) so no camp regression.
-    good_grasp_weight = 3.0            # 2026-05-19 (run3x): 1.5 → 3.0. Doubled. good_grasp fires only when thumb + ≥1 other finger contact — the exact signal needed to align curl timing with object position. At 3/step it's competitive with the lift residual at table but only for REAL grasps; should shape curl-on-object behavior.
-    finger_curl_reg_weight = -0.5    # reduced to allow ADR to widen; was -0.5
-    finger_curl_reg_min = -3.0 # 2026-05-11: -8 → -6. Started at -3 (run3h saturated), raised to -8 but that over-penalized — policy over-corrected by pinning thumb at joint min, causing PD instability against the limit. -6 lets the penalty bite (2× the original -3 cap) without driving the policy into the unstable "pin against joint min" pose.
+    hand_object_contact_weight = 3.0   # 8→4→3: contact still dominating lift
+    good_grasp_weight = 3.0            # 6→3: halved
+    finger_curl_reg_weight = -0.2    # reduced to allow ADR to widen; was -0.5
+    finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl
 
     #phase 3: lifting
     object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
-    success_bonus_weight = 10.0  # flat bonus per step when object is in goal region
-    lift_sharpness = 1.0  # 2026-05-19 (run3z): 4 → 1. Compromise between sharpness=4 (camp residual 15% but reward back-loaded near goal) and sharpness=0.5 (camp residual 79% — too high). At sharpness=1: camp residual = 40·exp(-1·0.47) = 25.0/step (62.5% of max), goal=40, marginal gain from camp→goal = 15 reward (0.3/cm). Smoother gradient than sharpness=4 with less extreme camping than 0.5.
+    success_bonus_weight = 20.0  # bumped from 10: stronger incentive to close last few cm to goal
+    lift_sharpness = 4.0 #default 8.5; 2→4: steeper lift saturation so goal reward dominates once object is off table
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
@@ -782,7 +778,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     debug_print_every_steps = 16
     # Terminate if palm flips beyond this cosine threshold relative to target (-Z).
     palm_flip_cos_thresh = -0.3  # Allows up to ~108 degrees deviation from downward
-    early_termination_penalty: float = -1.0  # applied when episode ends early. Object_out and hand_too_far require no_contact (grasping attempts shouldn't be discouraged), but palm_flip triggers this unconditionally (palm_flip is never legitimate, regardless of contact state).
+    early_termination_penalty: float = -1.0  # applied when episode ends early without object contact
 
     # Goal reaching parameters
     object_goal_tol = 0.1 # m
@@ -844,25 +840,25 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "restitution_range": (0.8, 1.0)
         },
         "arm_joint_stiffness_and_damping": {
-            "stiffness_distribution_params": (0.5, 2.),
-            "damping_distribution_params": (0.5, 2.),
+            "stiffness_distribution_params": (0.7, 1.5),
+            "damping_distribution_params": (0.7, 1.5),
         },
-        # Finger gains: matched to kuka_allegro/tg2_inspirehand proven sim2real ranges
+        # Finger gains: tightened min from 0.5→0.7 to reduce grasp fragility at higher ADR
         "finger_mcp_pitch_gains": {
-            "stiffness_distribution_params": (0.5, 2.),
-            "damping_distribution_params": (0.5, 2.),
+            "stiffness_distribution_params": (0.7, 2.),
+            "damping_distribution_params": (0.7, 2.),
         },
         "finger_mcp_yaw_gains": {
-            "stiffness_distribution_params": (0.5, 2.),
-            "damping_distribution_params": (0.5, 2.),
+            "stiffness_distribution_params": (0.7, 2.),
+            "damping_distribution_params": (0.7, 2.),
         },
         "finger_pip_gains": {
-            "stiffness_distribution_params": (0.5, 2.),
-            "damping_distribution_params": (0.5, 2.),
+            "stiffness_distribution_params": (0.7, 2.),
+            "damping_distribution_params": (0.7, 2.),
         },
         "thumb_rot_gains": {
-            "stiffness_distribution_params": (0.5, 2.),
-            "damping_distribution_params": (0.5, 2.),
+            "stiffness_distribution_params": (0.7, 2.),
+            "damping_distribution_params": (0.7, 2.),
         },
         "robot_joint_friction": {
             "friction_distribution_params": (0., 5.),
@@ -911,7 +907,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "robot_spawn": {
             # TODO: Re-enable joint position noise after verifying open hand behavior
             # Original value was (0., 0.35) which adds ±20° randomization at reset
-            "joint_pos_noise": (0., 0.8),  
+            "joint_pos_noise": (0., 0.35),  # matched to kuka_allegro; EventTerm adds ±0.2 rad on top
             "joint_vel_noise": (0., 1.),
         },
         "robot_state_noise": {
@@ -921,10 +917,10 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "robot_joint_vel_bias": (0.0, 0.08), # rad
         },
         "reward_weights": {
-            "object_to_goal_sharpness": (-3., -8.),  # 2026-05-19 (run3z): (-5, -10) → (-3, -8). Lower magnitude → less sharp decay → more uniform reward across goal distances. At -3, camp residual (dist=0.5) = 40·exp(-1.5) = 8.9/step (was 3.3 at -5); but goal-side gradient near the goal becomes flatter too. Combined with lift_sharpness=0.5, total reward landscape is much smoother — consistent with the "linear approach" hypothesis.
+            "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
-            "lift_weight": (40., 20.),  # 2026-05-19 (run3u): (25, 12.5) → (40, 20) — revert to working teacher v2 ADR (commit 32a8924). With lift_sharpness back at 2.0, lift_reward at table = 40·exp(-2·0.5) = 14.7, at goal = 40 — dominant signal that grows monotonically with lift height (no flat camp residual).
-            "finger_curl_reg": (-0.05, -0.1),  # 2026-05-19 (run3w): (-0.5, -1.2) → (-0.05, -0.1) — 10× softer. Run3v livestream showed policy lifting an EMPTY hand: wrist goes up post-contact but fingers stay open. Diagnosis: `curled_q = init_joint_pos` (3° at PIPs/mcp_pitch = ~open), so the "curl_reg" pulls fingers AWAY from grasp poses. At previous magnitudes, closing 13 finger joints to a ~0.5 rad grasp cost ~1.6/step (ramping to ~3.9 with ADR), competitive with the lift gradient — policy chose "lift without curling" over "curl + lift". 10× weaker reopens the grasping space without going all the way to kuka_allegro's effectively-off (-0.01, -0.01).
+            "lift_weight": (40., 30.),  # slower decay so lift signal stays strong while goal sharpness ramps up
+            "finger_curl_reg": (-0.3, -0.8),  # reduced: previous (-0.5,-1.2) penalized grasps too aggressively at higher ADR
         },
         "pd_targets": {
             "velocity_target_factor": (1., 0.)
@@ -936,9 +932,9 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "actuator_curriculum": {
             # Thumb rotation velocity limit (rad/s): 0.2618 (15 deg/s) → 0.1396 (8 deg/s)
             "thumb_rot_vel_limit": (0.2618, 0.1396),
-            # FR3 arm effort limits (Nm): 2026-05-19 (run3s.5) — re-introduce a warm-up curriculum. Joints 1-4 ramp 90→87 (hardware spec end), joints 5-7 ramp 15→12 (hardware spec end). Working teacher v2 used (90, 87) / (20, 12). 15 chosen over v2's 20 for joint 5-7 — closer to hardware spec so we don't over-rely on a torque headroom that won't exist at deployment, while still giving a slightly easier wrist regime in early training when the policy is learning to lift.
+            # FR3 arm effort limits (Nm): hardware starting → factory spec
             "arm_14_effort_limit": (90.0, 87.0),
-            "arm_57_effort_limit": (15.0, 12.0),
+            "arm_57_effort_limit": (20.0, 12.0),
         },
     }
 

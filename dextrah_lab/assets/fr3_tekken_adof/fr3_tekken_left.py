@@ -81,15 +81,15 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
     actuators={
         "franka_arm": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[1-4]"],
-            effort_limit_sim=87.0,    # 2026-05-15: matches actual FR3 hardware spec (verified in USD, robot moves fine)
-            # 2026-05-15 (run3p): velocity_limit_sim removed — let effort_limit + PD shape arm motion, no software velocity throttle.
+            effort_limit_sim=90.0,    # FR3 hardware spec for joints 1-4
+            velocity_limit_sim=2.175,
             stiffness=200.0,          # 400→200: softer spring, less force on contact
             damping=40.0,
         ),
         "franka_joints_ee": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[5-7]"],
-            effort_limit_sim=12.0,    # 2026-05-15: matches actual FR3 hardware spec (verified in USD)
-            # 2026-05-15 (run3p): velocity_limit_sim removed.
+            effort_limit_sim=20.0,    # FR3 hardware spec for joints 5-7
+            velocity_limit_sim=2.175,
             stiffness=200.0,          # 400→200
             damping=40.0,
         ),
@@ -103,21 +103,21 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
         "mcp_pitch": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_pitch"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=6.2832,  # 2026-05-15 (run3p): 2 → 6.2832 rad/s (360 deg/s) — fingers can physically move this fast, remove the sim throttle that was constraining grasp closure.
+            velocity_limit_sim=8.0,
             stiffness=10.0,
             damping=6.0,              # 3→6: more damping, smoother contact
         ),
         "mcp_yaw": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_yaw"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=6.2832,  # 2026-05-15 (run3p): 2 → 6.2832 rad/s (360 deg/s).
+            velocity_limit_sim=8.0,
             stiffness=10.0,
             damping=6.0,              # 3→6
         ),
         "pip": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_pip"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=6.2832,  # 2026-05-15 (run3p): 2 → 6.2832 rad/s (360 deg/s).
+            velocity_limit_sim=8.0,
             stiffness=10.0,
             damping=6.0,              # 3→6
         ),

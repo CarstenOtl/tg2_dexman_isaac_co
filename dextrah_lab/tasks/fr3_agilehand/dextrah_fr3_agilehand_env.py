@@ -664,44 +664,13 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         # round-robin distribution across envs so the policy conditions on object identity.
         self.object_names = list(sub_dirs)
         self.num_unique_objects = len(self.object_names)
-
-        # When using a subset of objects, the one-hot indices must match the
-        # teacher's original object ordering. Applies to both distillation and
-        # teacher eval on a subset (e.g. eval_teacher.py with visdex_top8 against
-        # a teacher trained on visdex_selected).
-        teacher_objects_dir = getattr(self.cfg, "teacher_objects_dir", "")
-        if teacher_objects_dir and len(teacher_objects_dir) > 0:
-            teacher_path = scene_objects_usd_path + teacher_objects_dir + "/USD"
-            teacher_obj_names = sorted([
-                d for d in os.listdir(teacher_path)
-                if os.path.isdir(os.path.join(teacher_path, d))
-            ])
-            teacher_name_to_idx = {name: idx for idx, name in enumerate(teacher_obj_names)}
-            # Map each current object to its teacher index
-            self._obj_teacher_indices = []
-            for name in self.object_names:
-                if name not in teacher_name_to_idx:
-                    raise ValueError(
-                        f"Object '{name}' not found in teacher training set at {teacher_path}. "
-                        f"Available: {teacher_obj_names}"
-                    )
-                self._obj_teacher_indices.append(teacher_name_to_idx[name])
-            print(f"Object-to-teacher index mapping: "
-                  + ", ".join(f"{n}→{i}" for n, i in zip(self.object_names, self._obj_teacher_indices)))
-        else:
-            # No remapping needed — using the same object set as teacher
-            self._obj_teacher_indices = list(range(self.num_unique_objects))
-
-        # Round-robin object assignment across envs
         object_indices = [i % self.num_unique_objects for i in range(self.num_envs)]
-        self.multi_object_idx = torch.tensor(object_indices, dtype=torch.long, device=self.device)
 
-        # One-hot uses teacher indices so the teacher sees the correct object identity
-        teacher_indices_per_env = [self._obj_teacher_indices[i % self.num_unique_objects]
-                                   for i in range(self.num_envs)]
-        teacher_idx_tensor = torch.tensor(teacher_indices_per_env, dtype=torch.long, device=self.device)
+        self.multi_object_idx = torch.tensor(object_indices, dtype=torch.long, device=self.device)
+        # N-dim one-hot over object identity — used in teacher and critic obs.
+        # Padded to _onehot_size to match teacher checkpoint when distilling with fewer objects.
         self.multi_object_idx_onehot = F.one_hot(
-            teacher_idx_tensor, num_classes=self._onehot_size
+            self.multi_object_idx, num_classes=self._onehot_size
         ).float()
 
         stage = omni.usd.get_context().get_stage()
@@ -1173,15 +1142,12 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.extras["object_contact_count"] = self.object_contact_counts.mean()  # Track actual contact count
 
         early_term_penalty_weight = getattr(self.cfg, "early_termination_penalty", 0.0)
-        # Penalise early terminations for object_out and hand_too_far, gated by no_contact
-        # (grasping attempts often cause these and shouldn't be discouraged).
-        # 2026-05-19 (run3v.1): removed `| self.last_palm_flipped` path. palm_flip no longer
-        # terminates the episode (see _get_dones) nor incurs an early_term_penalty —
-        # continuous palm_direction_alignment_reward is the only palm-orientation signal now.
+        # Only penalise early terminations where no object contact was made.
+        # If the hand was touching the object, omit the penalty — grasping attempts
+        # will frequently cause early terminations and should not be discouraged.
         no_contact = (self.object_contact_counts == 0)
-        penalty_mask = self._penalty_terminated & no_contact
         early_term_penalty = torch.where(
-            penalty_mask,
+            self._penalty_terminated & no_contact,
             torch.full((self.num_envs,), early_term_penalty_weight, device=self.device, dtype=action_rate_penalty.dtype),
             torch.zeros(self.num_envs, device=self.device, dtype=action_rate_penalty.dtype),
         )
@@ -1200,11 +1166,6 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             "contact": contact_reward,  # ENABLED for debugging
             "good_grasp": good_grasp_reward,
             "episode_length": episode_length_reward,
-            # 2026-05-19 (run3y): approach_speed_penalty removed again. After run3x.1 collapse,
-            # we want to minimize "don't move" pressure on the policy — it's already learning to
-            # avoid the object on its own. Penalty value stays computed for tensorboard diagnostic
-            # but no longer contributes to total_reward. Re-enable if specifically debugging fast
-            # approach behavior.
             # "approach_speed_penalty": approach_speed_penalty,
             
             # lifting phase
@@ -1250,7 +1211,6 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 ("episode_len",  episode_length_reward.mean().item()),
                 ("action_rate",  action_rate_penalty.mean().item()),
                 ("joint_vel",    joint_vel_penalty.mean().item()),
-                ("early_term",   early_term_penalty.mean().item()),
             ]
             print(" REWARDS")
             # pair up for two-column display
@@ -1380,14 +1340,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             | hand_too_far
             | hand_too_close
             | self.arm_table_contact_mask
-            # 2026-05-19 (run3v.1): palm_flipped removed from termination set.
-            # Hypothesis: early-training policies were optimizing to AVOID palm_flip
-            # rather than to maximize reward — palm_flip created an "escape hatch"
-            # where the policy could short-circuit a bad rollout by flipping the palm.
-            # Removing termination keeps the continuous palm_direction_alignment_reward
-            # as the only palm-orientation signal. last_palm_flipped is still tracked
-            # for diagnostics and termination_count printout.
-            # | palm_flipped
+            | palm_flipped
             | robot_unstable
             | vel_explosion
         )
@@ -1418,14 +1371,12 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             time_out = self.episode_length_buf >= self.max_episode_length - 1
 
         self._early_terminated = out_of_reach.clone()
-        # Penalty only for intentional bad behaviour: object leaving workspace, hand out of bounds.
-        # Excludes: hand_too_close, arm_table_contact, robot_unstable, vel_explosion — physics
+        # Penalty only for intentional bad behaviour: object leaving workspace, hand out of bounds, palm flip.
+        # Excludes: hand_too_close, arm_table_contact, robot_unstable, vel_explosion — these are physics
         # artifacts or exploration side-effects that should not be penalised.
-        # 2026-05-19 (run3v.1): palm_flipped removed from penalty path along with its termination.
-        # Continuous `palm_direction_alignment_reward` (-0.7 × θ²) is now the only palm signal.
         object_out = (object_outside_upper_x | object_outside_lower_x |
                       object_outside_upper_y | object_outside_lower_y | object_too_low)
-        self._penalty_terminated = object_out | hand_too_far
+        self._penalty_terminated = object_out | hand_too_far | palm_flipped
 
         # Expose per-reason masks for eval_utils.py classification
         self.last_object_outside_upper_x.copy_(object_outside_upper_x)
@@ -2252,15 +2203,7 @@ def compute_rewards(
     hand_action_scale: float,
 ):
 
-    # Binary gate for lift/goal progress: ANY hand-object contact opens the gate.
-    # 2026-05-15 (run3o): reverted to `(contact_count > 0)` after the stricter
-    # good_grasp_mask gate (thumb + ≥1 other finger) prevented bootstrap — the
-    # policy never explored into the joint config that satisfies it, so lift_reward
-    # was identically zero for every episode and no lift gradient ever reached the
-    # policy. The thumb-buckling exploit this gate was guarding against is now
-    # mitigated by `good_grasp_reward` acting as a separate shaping term (+3 only
-    # when a real grasp forms), which makes a real grasp strictly more rewarding
-    # than a buckled-thumb scrape. If buckling re-emerges, tighten via curriculum.
+    # Binary mask: only award lift/goal progress after hand-object contact.
     contact_mask = (contact_count > 0.0).to(contact_count.dtype)
 
     # Reward for moving fingertip and palm points closer to object centroid point
