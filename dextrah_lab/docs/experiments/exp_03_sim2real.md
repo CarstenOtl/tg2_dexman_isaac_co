@@ -2163,4 +2163,328 @@ CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python
 - Approach OK but still no lift attempts → easing sharpness wasn't the missing piece; **activate run3t (table-contact gate)** — at this point we've exhausted shaping options and need to force the policy off the table to discover lift
 - Approach better but `palm_align` worsens / palm_flips spike → policy is trading speed against orientation; might need to bump palm_align weight in parallel
 
-**Result:** *(to be filled in — about to start)*
+**Result (livestream, 2026-05-19):** Approach speed visibly improved — palm slowed down on the approach as designed. Critically, **the policy DID start lifting after contact** — wrist went up toward the goal. But: **the object stayed on the table while the hand lifted empty**. The fingers never closed enough to maintain grip during the upward motion. New insight from the user: this is consistent with a *finger_curl_reg trap* — the regularizer's target `curled_q = init_joint_pos` ≈ open-hand (3° at PIPs/mcp_pitch), so the per-step penalty actively pulls fingers AWAY from a grasp pose. With ADR (-0.5, -1.2), closing 13 finger joints to a ~0.5 rad grasp costs roughly 1.6/step ramping to 3.9/step — directly competitive with the lift gradient. The policy correctly identified the local optimum: "lift hand WITHOUT curling fingers", since curling cost more reward than the marginal extra contact provided.
+
+Also added during run3v iteration: **run3v.1 — palm_flip removed from termination + penalty path** ([env.py:1376, 1180, 1412](dextrah_lab/tasks/fr3_agilehand/dextrah_fr3_agilehand_env.py)). Hypothesis: termination on palm_flip created an "escape hatch" where the policy could short-circuit a bad rollout. Continuous `palm_direction_alignment_reward` (-0.7 × θ²) remains as the only palm-orientation signal. `term_counts["palm_flip"]` still tracked for diagnostics. Effect on the empty-lift behavior: not the bottleneck (the empty lift was still observed after this change), but episodes did get longer with fewer palm_flip terminations.
+
+### run3w — relax finger_curl_reg to 10× weaker (allow grip to form) (2026-05-19)
+
+**Motivation:** Run3v livestream pinpointed the *finger closure* problem. The reward landscape successfully drives the wrist upward (lift gradient at sharpness=4 is fine), and approach speed is in check, but `finger_curl_reg` with `curled_q = init_joint_pos` actively punishes the policy for closing fingers. The naming is misleading — the "curl reg" is really an "open-hand reg" because `curled_q` was set to the slightly-open init pose (3° offsets to avoid joint-min PD oscillation, per CLAUDE.md note). At ADR (-0.5, -1.2), this is competitive with the lift gradient: closing 13 finger joints to ~0.5 rad bent costs ~1.6/step ramping to ~3.9/step, while the marginal lift_reward gain from actually carrying the object up is similar. Policy optimum: lift empty.
+
+**Change (env_cfg.py:927):**
+
+| Parameter | run3v | **run3w** |
+|---|---|---|
+| `finger_curl_reg` ADR | (-0.5, -1.2) | **(-0.05, -0.1)** |
+
+10× softer. Still leaves a small "default pose" pull (for sim2real stability) but no longer fights grasp formation. Reference: kuka_allegro uses (-0.01, -0.01) — effectively off — as a working proven config.
+
+**Magnitude impact at a typical grasp (13 finger joints each ~0.5 rad bent → finger_curl_dist² ≈ 3.25):**
+
+| ADR step | run3v (-0.5 → -1.2) | **run3w (-0.05 → -0.1)** |
+|---|---|---|
+| ADR 0 (start) | -1.6/step | **-0.16/step** |
+| ADR end | -3.9/step | **-0.33/step** |
+
+The lift gradient (~3-6/step at table → ~15/step at lift_success threshold → 40 at goal) now dominates by a wide margin even with a full grip — closing fingers is no longer punished competitively with lifting.
+
+**Livestream train command (16 envs, visdex_selected, GPU 1):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --task=dextrah_fr3_agilehand --seed 42 --livestream 2 \
+  --num_envs 16 \
+  agent.params.config.minibatch_size=256 \
+  agent.params.config.central_value_config.minibatch_size=256 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.multi_gpu=False \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `finger_curl` in rewards table drops from ~-1.6 → ~-0.16 magnitude (10× smaller — confirms config applied)
+- Livestream visibly shows finger closure during contact — the key behavioral test
+- Object lifts WITH the hand (vs the empty-hand lift in run3v) → curl_reg was the bottleneck; queue full training
+- Fingers close but object slips out → friction issue; either bump object/finger friction or restore some `good_grasp` weight
+- Fingers still don't close → curl_reg wasn't the dominant blocker; try (-0.01, -0.01) matching kuka_allegro, then investigate finger PD strength
+
+**Result (livestream, stopped at ~2500 epochs, 2026-05-19):** Mixed outcome. Fingers now visibly curl (the curl_reg fix worked as designed). **Contact reward started to emerge by ep ~2500** — the policy was learning to engage the object with the curled hand. **But no lift attempts were made** — the wrist-up motion that emerged in run3v didn't reappear here. Hypothesis: the run3s-era cuts to `hand_object_contact_weight` (0.8) and `good_grasp_weight` (1.5) left the contact shaping signal too weak to align the curl timing with the object position, so the policy spent epochs learning to make ANY contact rather than progressing toward the contact-then-lift sequence. The previous "lift empty hand" behavior from run3v was tied to the heavier curl_reg producing a flatter hand that incidentally lifted along the lift gradient — once fingers were freed to curl, the policy had to relearn the approach geometry.
+
+### run3x — restore contact + good_grasp weights to shape grip timing (2026-05-19)
+
+**Motivation:** Run3w showed the policy now CAN curl fingers (curl_reg fix), but the cut contact (0.8) and good_grasp (1.5) signals weren't strong enough to coordinate WHEN to close. After 2500 epochs the policy was just starting to make contact, with no lift attempts at all. The fix: restore these signals to roughly their pre-camp-fight values so they actively shape "curl AT the object, not in mid-air, then lift."
+
+**Changes (env_cfg.py:750-751):**
+
+| param | run3w | **run3x** |
+|---|---|---|
+| `hand_object_contact_weight` | 0.8 | **1.5** |
+| `good_grasp_weight` | 1.5 | **3.0** |
+
+`good_grasp_reward` fires only when thumb + ≥1 other finger touch — the exact "real grip formed" signal. Doubling it makes that pattern decisively more rewarding than "fingers closed near the object but missing it".
+
+**New reward stack (typical contact with 3 sensors + good_grasp firing, object on table):**
+
+| Signal | run3w | **run3x** |
+|---|---|---|
+| `hand_to_object` | ~2 | ~2 |
+| `contact_reward` (3 sensors) | 2.4 | **4.5** |
+| `good_grasp_reward` | 1.5 | **3.0** |
+| `lift_reward` at table | 6.1 | 6.1 |
+| `object_to_goal` at camp | ~0.7 | ~0.7 |
+| `finger_curl_reg` (grip pose) | -0.16 | -0.16 |
+| **Camp-with-grasp total** | ~13/step | **~18/step** |
+| **Goal-with-grasp total** | ~52/step | **~60/step** |
+
+Camp:goal ratio: 1:3.3 → 1:3.3. The bumps don't disproportionately favor camp — they raise both endpoints by similar amounts (lift gradient dominates the goal-side payoff). What changes is the *coordination*: the policy gets more reward feedback specifically for "fingers in contact with the object" patterns, which should shape when/where the curl happens.
+
+**Livestream train command (16 envs, visdex_selected, GPU 1):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --task=dextrah_fr3_agilehand --seed 42 --livestream 2 \
+  --num_envs 16 \
+  agent.params.config.minibatch_size=256 \
+  agent.params.config.central_value_config.minibatch_size=256 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.multi_gpu=False \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- Contact and good_grasp values in the rewards table climb past run3w's "suck" baseline within ~500-1000 epochs → grip shaping signals are taking hold
+- Visible finger closure ON the object (not in air) followed by lift attempts → the cuts were the problem; queue full training
+- Contact rises but still no lift after ~2500 epochs → contact+good_grasp shaping isn't enough; might need to tighten approach (palm_finger_alignment?) OR finally activate run3t (table-contact gate on lift_reward)
+- Camp regresses (contact rises but policy parks at object) → bumped good_grasp/contact too much relative to lift_reward; partial backoff (good_grasp 3 → 2.0)
+
+**Result (livestream, run dir `05-19_14-45-23`, stopped at ~1934 epochs, 2026-05-19):** Real progress for the first time. Most metrics climbing healthily AND **some envs achieved actual lifts** (lift_success max = 0.0625 = 1 env out of 16, with `lift_reward` max spike of 0.5/step — both well above the pure 1/1024 noise floor of prior runs).
+
+| Metric | start (<50 ep) | end (last 50 ep) | Trend |
+|---|---|---|---|
+| `rewards/iter` (ep mean) | -97 | **+123** | Strong climb |
+| `hand_to_object_distance` | 0.54 m | **0.21 m** | Hand reaching object |
+| `hand_object_contact_reward` | 0.006 | **0.69** | Contact emerging |
+| `good_grasp_reward` | 0.000 | **0.19** | ~6% of envs forming grasps |
+| `object_to_goal_reward` | 0.015 | **1.30** | Object motion toward goal |
+| `lift_reward` (mean) | 0.025 | 0.035 (peaks at 0.5) | Mostly camping, occasional lifts |
+| `lift_success` (mean) | 0.001 | 0.0 (peaks at 0.0625) | 1/16 envs lifting in good moments |
+| `finger_curl_reg` | -0.14 | -0.055 | Curl_reg fix confirmed working |
+| `early_term_penalty` | -0.003 | 0.000 | Penalized terminations not firing |
+| `episode_lengths` | **263** | **39** | ❌ Crashed |
+
+Two concerning patterns:
+- **Episode lengths crashed from 263 → 39**. The policy regressed into a strategy that terminates fast. `early_term_penalty ≈ 0` rules out the *penalized* terminations (object_out, hand_too_far), so episodes are dying via unpenalized causes — most likely `hand_too_close`, `arm_table_contact`, or `vel_explosion`. Consistent with a "rush at object, jam fingers" behavior that's productive per-step but fragile.
+- **Lift success intermittent, not sustained**. Some envs find the lift but the behavior doesn't generalize across the policy at 16-env scale.
+
+Net: **the reward shaping is now demonstrably producing lift behavior** — just not consistently at livestream scale. Worth scaling to 1024 envs to see if the lift discovery consolidates across the policy with 64× more parallel exploration. Episode-length and ramming concerns can be addressed in a follow-up run if they persist at scale.
+
+### run3x.1 — scale to 1024 envs (consolidate the emerging lift signal) (2026-05-19)
+
+**Motivation:** Run3x livestream proved the reward landscape can produce real lifts in some envs. At 16 envs across 13 objects (~1.2 envs/object), the gradient is too noisy to consolidate the discovered behavior — the lift behavior fired intermittently and never crossed into a stable strategy across the policy. At 1024 envs (~79 envs/object), parallel exploration should let the gradient lock in the lift trajectories that were already emerging.
+
+**Config unchanged from run3x** — same lift landscape (sharpness=4, weight=40), same grip shaping (contact=1.5, good_grasp=3.0), same curl_reg (-0.05, -0.1), same palm_flip-removed termination set, same approach_speed_penalty active.
+
+**Train command (1024 envs, headless, GPU 1):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` mean rises and sustains above 0.05 (= 50/1024 envs) by ep ~2000 → lift behavior consolidating; let it ride toward `success_for_adr=0.4` threshold and ADR climb
+- `lift_success` stays in noise (< 0.005) but `lift_reward` mean rising → lift attempts are happening but not crossing the height threshold; bump `object_height_thresh` down (0.15 → 0.10) OR ramp lift_weight via ADR
+- `episode_lengths` crashes the same way (< 100 by ep 1000) → ramming is still killing rollouts at scale; bump `approach_speed_penalty_weight` 0.001 → 0.005 and/or activate `penetration_penalty_weight`
+- Camp regression (no lifts, contact_reward growing past good_grasp_reward) → contact weight too high, partial backoff 1.5 → 1.2
+
+**Result (run dir `05-19_15-36-39`, stopped at ~1146 epochs, 2026-05-19) — catastrophic policy collapse:** The run3x reward shaping worked at first then was forgotten. Per-window means:
+
+| Window (iter) | rewards | contact | lift_reward | object_to_goal | hand_to_obj_dist | episode_lengths |
+|---|---|---|---|---|---|---|
+| 0-100 | 659 | 0.87 | 1.42 | 1.00 | 0.28 | 230 |
+| **100-200 (peak)** | **4391** | **2.71** | **4.26** | **2.64** | **0.12** | 360 |
+| 200-400 | 4421 | 1.79 | 3.37 | 2.02 | 0.19 | 456 |
+| 400-600 | 1301 | 0.24 | 0.62 | 0.38 | 0.24 | 548 |
+| 600-800 | 531 | 0.025 | 0.10 | 0.06 | 0.23 | 523 |
+| 800-1000 | 261 | **0.001** | 0.006 | 0.003 | 0.25 | 539 |
+| 1000-1147 | 455 | 0.003 | 0.017 | 0.010 | 0.24 | 574 |
+
+Policy trajectory:
+1. **ep 100-400 — working policy.** Hand approaching to 12cm, contact firing at 2.7 (~1.8 sensors), good_grasp at 0.83 (~28% of envs gripping), lift_reward 4.3.
+2. **ep 400-800 — abandoning engagement.** Contact drops 100×. hand_to_obj_distance climbs from 0.12m to 0.24m. *Episode lengths simultaneously grow.* Policy is finding longer-survival strategies that involve LESS contact.
+3. **ep 800+ — locked into avoidance.** Contact = 0.001 (basically never touches object), hovering at safe distance. rewards/iter slowly recovering (261 → 635) on the wrong axis — the policy is milking small positive signals (hand_to_object ~1.0, palm_align ~-0.23) over long-duration episodes.
+
+`early_term_penalty ≈ 0` across all windows means the penalized terminations (object_out, hand_too_far) weren't firing. So engagement was being implicitly punished by UNPENALIZED early terminations (`hand_too_close`, `arm_table_contact`, `vel_explosion`) — the policy lost future reward from short rollouts and PPO gradients pulled it toward the safe-hover equilibrium.
+
+Structural diagnosis: with the current termination set, **commitment to engagement is a high-variance bet** (sometimes lift = big reward, sometimes terminate early = small reward), while **hovering near the object** is a low-variance positive return (~1/step from `hand_to_object_reward` × ~540 steps ≈ 540 reward/episode). The policy correctly minimized variance and abandoned the high-variance lift trajectory.
+
+### run3y — remove approach_speed_penalty, retry 1024 envs (2026-05-19)
+
+**Motivation:** After the run3x.1 collapse, the priority is reducing "don't move" pressure on the policy that might compound with the implicit-termination cost it already faces. The approach_speed_penalty was re-enabled in run3v with weight 0.001 — magnitude was tiny in practice (-0.0007/step at peak, totaling maybe -0.4 over an episode) but conceptually it added another small headwind against approach motion. Removing it simplifies the gradient. Doesn't solve the structural collapse problem (those are run3t / terminate-penalty changes), but removes one confounder before deciding whether to invoke those bigger changes.
+
+**Change (env.py:1203):**
+
+| | run3x.1 | **run3y** |
+|---|---|---|
+| `approach_speed_penalty` in reward_terms | active (weight 0.001) | **commented out** |
+
+Penalty term still computed and logged to `extras/approach_speed_penalty` for diagnostics — just removed from `total_reward`.
+
+**Train command (1024 envs, headless, GPU 1):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- Reward curve tracks similar to run3x.1 (peak ep 200-400, then collapse) → approach_speed_penalty wasn't the bottleneck; structural problem confirmed; **activate run3t (table-contact gate) and/or penalize unpenalized terminations**
+- Reward keeps climbing past ep 400 without collapse → simpler reward stack helped; let it run toward ADR ramp
+- Collapse happens *earlier* than last time (e.g. by ep 200) → some other parameter regression; check for asset/code changes since last run3x.1
+- `lift_success` sustained > 0.05 by ep 2000 → lift behavior consolidated; first real success since this saga began
+
+**Watch checkpoint:** if reward peaks similarly to run3x.1 (ep 200-400 around 4000+), check `dextrah_tekken_lstm.pth` immediately after that window — it's likely the auto-best snapshot of the working policy before collapse, useful for replay analysis.
+
+**Result (run dir `05-19_16-27-37`, stopped at ~1500 epochs, 2026-05-19) — engaged camp equilibrium, no collapse, no lift:** Run3y survived past the run3x.1 collapse zone (ep ~400) without abandoning engagement. Removing approach_speed_penalty was sufficient to prevent the avoidance basin from emerging.
+
+| Window (iter) | rewards | contact | good_grasp | lift_reward | hand_to_obj_dist | episode_lengths |
+|---|---|---|---|---|---|---|
+| 0-100 | 679 | 0.68 | 0.18 | 1.35 | 0.25 | 234 |
+| 100-200 | 3836 | 2.31 | 0.72 | 4.07 | 0.12 | 342 |
+| 200-300 | 5456 | 3.05 | 1.05 | 4.54 | 0.11 | 403 |
+| 300-400 | 5983 | 2.58 | 1.08 | 4.52 | 0.13 | 446 |
+| 400-500 | 5060 | 2.19 | 1.01 | 4.34 | 0.15 | 428 |
+| **500-1500 (plateau)** | **~5500-6000** | **~2.5-2.9** | **~1.0-1.3** | **~5.0-5.5** | **~0.12** | **~430** |
+
+Hand approaches reliably (12cm distance), 84% of envs form real grasps (good_grasp ~1.0 at weight 3.0), but **lift_success stayed at noise floor** (max 0.0029 = 3/1024 envs at peaks, never sustained). `lift_reward` plateaued at 5.5/step which decodes to ~90% of envs in contact × `40·exp(-4·0.47) = 6.1` camp residual = 5.5. **The lift_reward is parked at the camp residual ceiling, not from lifting.** Policy is risk-averse: marginal gain from "actually lift" (~34/step at goal) is small compared to the guaranteed ~5/step from "camp with contact", risk-adjusted equilibrium = camp.
+
+`object_to_goal` plateaued at 3.3/step = same camp residual story for that signal at sharpness=-5, dist=0.5m.
+
+`episode_lengths` stable at ~430 (vs the run3x.1 climbing-while-engagement-collapsing pattern). No avoidance, just engagement+camp.
+
+Net diagnosis: same structural camping problem we've been chasing since run3p. The two reward exponentials (lift_reward and object_to_goal) both have camp residuals because their shape pays out at table-touch. The policy correctly identified that "camp and harvest residuals" beats "risk a lift attempt".
+
+### run3z — soften lift/goal sharpness toward "linear-style" gradient (2026-05-19)
+
+**Motivation:** The user's intuition: maybe the previous sharpness values created reward cliffs the policy couldn't traverse. Partial lifts paid out small marginal reward (at sharpness=4, lifting 5cm gains only +1.3/step over camp), so the policy stayed at camp. Try a much flatter exponential — closer to "linear" — where every cm of lift pays a more constant marginal reward (~0.3/cm at sharpness=1).
+
+This is the *opposite* direction from killing the camp residual (which would mean *higher* sharpness or a table-contact gate). The hypothesis: the policy isn't camp-trapped because the residual is too big — it's camp-trapped because partial lifts feel like "no progress" due to the small marginal gradient. A flatter curve provides more uniform gradient feedback during any upward motion.
+
+CAVEAT: this makes the camp residual much LARGER (25/step vs 6.1/step at sharpness=4). If the hypothesis is wrong, run3z will camp even harder than run3y.
+
+**Changes (env_cfg.py):**
+
+| Param | run3y | **run3z** | Why |
+|---|---|---|---|
+| `palm_direction_alignment_weight` | 0.7 | **0.5** | Reduce palm-orientation pressure now that palm_flip terminations are off (run3v.1). |
+| `lift_sharpness` | 4.0 | **1.0** | Smoother lift gradient; constant ~0.3 reward per cm of lift. Caveat: camp residual 6.1 → 25.0. |
+| `object_to_goal_sharpness` ADR | (-5, -10) | **(-3, -8)** | Smoother goal-distance gradient; ~16/step at lift_success threshold (was 5). Caveat: object_to_goal camp residual 3.3 → 8.9. |
+
+**Resulting lift_reward landscape (weight=40, sharpness=1):**
+
+| Object pose | vert_err | lift_reward | % of max |
+|---|---|---|---|
+| Table sit | 0.47 | 25.0 | 62.5% |
+| 5cm above table | 0.42 | 26.3 | 65.8% |
+| Lift_success threshold (15cm) | 0.35 | 28.2 | 70.5% |
+| Halfway lifted (25cm) | 0.25 | 31.1 | 77.8% |
+| At goal (50cm) | 0 | 40 | 100% |
+
+Marginal gain per cm of lift: **constant ~0.3 reward**. Total gain from camp to goal: 15 reward over 50cm.
+
+**Resulting object_to_goal_reward landscape (weight=40, sharpness=-3):**
+
+| 3D distance to goal | reward |
+|---|---|
+| 0.5 m (camp) | 8.9 |
+| 0.4 m | 12.0 |
+| 0.3 m | 16.3 |
+| 0.2 m | 21.9 |
+| 0.1 m | 29.6 |
+| 0 (at goal) | 40 |
+
+Combined camp residual at table-touch: ~25 + ~9 = **~34/step** of lift+goal signals alone (was 5.5 + 3.3 = 8.8/step in run3y). The total camp equilibrium reward is now MUCH higher.
+
+**Train command (1024 envs, headless, GPU 1):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` consolidates above 0.05 sustained by ep 2000 → smooth gradient hypothesis confirmed; flatter exponential was the missing piece
+- `lift_success` stays at noise floor + camp metrics inflate (`lift_reward` jumps to ~22-25/step from camp residual alone) → confirms camp trap is structural, regardless of curve shape; **NEXT MOVE: activate run3t (table-contact gate)** to zero lift_reward when object is on table
+- Total ep reward climbs past 10k (vs run3y's 5500-6000) but lift_success still zero → policy farming the inflated camp residual; same diagnosis as above
+- Policy collapses to avoidance like run3x.1 → unlikely without approach_speed_penalty back, but worth watching
+
+**Result (run dir `05-19_18-18-53`, 7595 epochs, single-object chicken_head_in_car, 2026-05-19) — decisive confirmation of camp residual trap, smooth-gradient hypothesis falsified:** This run was the cleanest possible test: single-object training removes object-diversity confounds, 1024 envs gives dense gradients. Result is the worst outcome of any run in the saga.
+
+| Window (iter) | rewards | **lift_reward** | **good_grasp** | contact | obj_to_goal | hand_to_obj_dist | episode_lengths |
+|---|---|---|---|---|---|---|---|
+| 0-500 | 14,536 | 18.1 | **0.69** | 2.17 | 7.3 | 0.16 | 460 |
+| 500-1500 | 18,389 | 21.5 | **0.08** | 1.47 | 8.5 | 0.15 | 540 |
+| 1500-3000 | 17,779 | 21.8 | **0.002** | 1.35 | 8.7 | 0.15 | 521 |
+| 3000-4500 | 19,339 | 22.4 | **0.000** | 1.38 | 8.8 | 0.15 | 555 |
+| 4500-6000 | 20,156 | 22.5 | **0.000** | 1.46 | 9.2 | 0.15 | 567 |
+| **6000-7596** | **20,482** | **22.5** | **0.000** | 1.43 | 9.2 | 0.15 | **578** |
+
+Decoding:
+- `lift_reward = 22.5` = `40 × exp(-1 × 0.47) × P(contact=0.9) = 25.0 × 0.9 = 22.5` — **exactly the predicted camp residual at sharpness=1**
+- `object_to_goal = 9.2` = `40 × exp(-3 × 0.5) × P(contact=1.0) = 8.9` — **exactly the predicted camp residual at sharpness=-3**
+- Total camp harvest from lift+goal alone = 31.7/step × 578 steps = ~18,000 reward/episode (matches `rewards/iter ≈ 20,000`)
+- `lift_success = 0` for entire run after iter ~200 — no lifts at all
+
+The bombshell: **good_grasp REGRESSED to zero.** Started at 0.69 (23% of envs grasping early on), collapsed to literally 0.0 by ep 1500. The policy actively *unlearned* grasping. Why? At sharpness=1, lift_reward fires at 22.5/step (near max) for ANY single-finger contact (`contact_mask` is binary). Forming a real grasp (thumb + finger) provides no additional lift_reward — only the marginally smaller good_grasp_reward (3/step max). So the policy converged to the *minimum-effort contact* strategy: hover at 15cm, tap one finger, harvest 31.7/step residual indefinitely. `object_contact_count = 0.95` (less than 1 sensor avg) confirms the lazy contact.
+
+Replay confirms visually: hand hovers stable at ~15cm from object, occasionally brushes with one finger, never attempts grasp or lift.
+
+**Conclusion from the run3o → run3z arc:** Every reward shape we've tried — sharpness 2, 4, 5, 8, 10, 1, 0.5 — produces the same outcome with different operating points: the policy finds the laziest way to harvest the camp residual, and the residual is structurally guaranteed to exist as long as `lift_reward = weight × exp(...) × contact_mask` fires for any table-touch. **No exponential shape solves this.** The reward formula needs a hard gate (run3t) to zero out lift_reward when the object is on the table.
+
+The good_grasp degradation in run3z is the new evidence that this saga can't continue with shaping alone — at smooth sharpness the policy is *incentivized to do less*, not more. Run3t is now structurally required, not optional.

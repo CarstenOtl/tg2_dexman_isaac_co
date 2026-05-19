@@ -1173,11 +1173,13 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.extras["object_contact_count"] = self.object_contact_counts.mean()  # Track actual contact count
 
         early_term_penalty_weight = getattr(self.cfg, "early_termination_penalty", 0.0)
-        # Penalise early terminations. object_out and hand_too_far are gated by no_contact
-        # (grasping attempts often cause these and shouldn't be discouraged), but palm_flip
-        # is penalised unconditionally — palm_flip is never a legitimate side-effect of grasping.
+        # Penalise early terminations for object_out and hand_too_far, gated by no_contact
+        # (grasping attempts often cause these and shouldn't be discouraged).
+        # 2026-05-19 (run3v.1): removed `| self.last_palm_flipped` path. palm_flip no longer
+        # terminates the episode (see _get_dones) nor incurs an early_term_penalty —
+        # continuous palm_direction_alignment_reward is the only palm-orientation signal now.
         no_contact = (self.object_contact_counts == 0)
-        penalty_mask = (self._penalty_terminated & no_contact) | self.last_palm_flipped
+        penalty_mask = self._penalty_terminated & no_contact
         early_term_penalty = torch.where(
             penalty_mask,
             torch.full((self.num_envs,), early_term_penalty_weight, device=self.device, dtype=action_rate_penalty.dtype),
@@ -1198,7 +1200,12 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             "contact": contact_reward,  # ENABLED for debugging
             "good_grasp": good_grasp_reward,
             "episode_length": episode_length_reward,
-            "approach_speed_penalty": approach_speed_penalty,  # 2026-05-19 (run3v): re-enabled. Livestream of run3u showed the policy approaching the object too fast and spending effort decelerating before contact. Weight stays at 0.001 — at typical 0.3 m/s closing speed this is -0.00009/step (negligible), only biting hard at fast approaches (~1 m/s = -0.001/step). Adjust if too soft.
+            # 2026-05-19 (run3y): approach_speed_penalty removed again. After run3x.1 collapse,
+            # we want to minimize "don't move" pressure on the policy — it's already learning to
+            # avoid the object on its own. Penalty value stays computed for tensorboard diagnostic
+            # but no longer contributes to total_reward. Re-enable if specifically debugging fast
+            # approach behavior.
+            # "approach_speed_penalty": approach_speed_penalty,
             
             # lifting phase
             "object_to_goal": object_to_goal_reward,
@@ -1373,7 +1380,14 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             | hand_too_far
             | hand_too_close
             | self.arm_table_contact_mask
-            | palm_flipped
+            # 2026-05-19 (run3v.1): palm_flipped removed from termination set.
+            # Hypothesis: early-training policies were optimizing to AVOID palm_flip
+            # rather than to maximize reward — palm_flip created an "escape hatch"
+            # where the policy could short-circuit a bad rollout by flipping the palm.
+            # Removing termination keeps the continuous palm_direction_alignment_reward
+            # as the only palm-orientation signal. last_palm_flipped is still tracked
+            # for diagnostics and termination_count printout.
+            # | palm_flipped
             | robot_unstable
             | vel_explosion
         )
@@ -1404,12 +1418,14 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             time_out = self.episode_length_buf >= self.max_episode_length - 1
 
         self._early_terminated = out_of_reach.clone()
-        # Penalty only for intentional bad behaviour: object leaving workspace, hand out of bounds, palm flip.
-        # Excludes: hand_too_close, arm_table_contact, robot_unstable, vel_explosion — these are physics
+        # Penalty only for intentional bad behaviour: object leaving workspace, hand out of bounds.
+        # Excludes: hand_too_close, arm_table_contact, robot_unstable, vel_explosion — physics
         # artifacts or exploration side-effects that should not be penalised.
+        # 2026-05-19 (run3v.1): palm_flipped removed from penalty path along with its termination.
+        # Continuous `palm_direction_alignment_reward` (-0.7 × θ²) is now the only palm signal.
         object_out = (object_outside_upper_x | object_outside_lower_x |
                       object_outside_upper_y | object_outside_lower_y | object_too_low)
-        self._penalty_terminated = object_out | hand_too_far | palm_flipped
+        self._penalty_terminated = object_out | hand_too_far
 
         # Expose per-reason masks for eval_utils.py classification
         self.last_object_outside_upper_x.copy_(object_outside_upper_x)

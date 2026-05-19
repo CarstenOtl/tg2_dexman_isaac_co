@@ -369,6 +369,9 @@ Generates all thesis plots to `dextrah_lab/docs/Report/figures/plots/` (PDF + PN
 
 ## Code Conventions
 
+### Checkpoint file naming (rl_games training output)
+In a run's `nn/` dir: `<task_name>.pth` (no suffix) is overwritten each save — points to the latest weights of an active run. `last_<task_name>_ep_<N>_rew_<R>.pth` is frozen at epoch N. Replay/eval the unsuffixed file to track a still-training run; replay the suffixed file to pin to a specific epoch.
+
 ### Entry-point script registration
 Every script that accepts `--task` must import the task's `gym_setup` module (e.g. `import dextrah_lab.tasks.fr3_agilehand.gym_setup`). When adding a new task, check ALL entry points: `train.py`, `play_test.py`, `eval_teacher.py`, and every `run_distillation*.py` / `eval_student.py`.
 
@@ -381,6 +384,7 @@ Every script that accepts `--task` must import the task's `gym_setup` module (e.
 ### CLI arg ordering for Hydra overrides
 `env.*` overrides (e.g. `env.distillation=True`) go as bare positional args — `parse_known_args()` routes them to Hydra automatically. All `--flags` must come before `env.*` args. Do NOT use `--` separator with `eval_student.py` — bash interprets remaining args as separate shell commands.
 - `eval_teacher.py` and `play_test.py` use `parse_args()` (NOT `parse_known_args()`), so `env.*` Hydra overrides don't work. Use the dedicated `--objects_dir` flag instead. `env.use_cuda_graph` and similar are training-only and irrelevant for these scripts.
+- `play_test.py` also accepts `--object_name <name>` to filter a multi-object `--objects_dir` down to a single object on the fly (no asset symlinking required).
 - `--teacher` flag in distillation scripts resolves relative paths as `<repo_root>/pretrained_ckpts/<value>`. Use absolute paths to skip this. The `--teacher` flag must come BEFORE the `--` separator, otherwise argparse doesn't see it.
 
 - Environment configs use Isaac Lab's `@configclass` decorator pattern

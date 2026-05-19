@@ -729,7 +729,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_to_object_weight = 3.  # 2026-05-19 (run3s.3): 2 → 3. With the reverted lift gradient (sharpness=2, weight 40) the policy was turning away from the object and getting palm_flips on livestream — approach signal at 2.0 too weak to anchor the hand against the much stronger lift attractor. 3.0 strengthens the approach (run3n value, half the working teacher v2's 4.0) without re-introducing the "camp on object" stickiness that 4.0 had relative to the older smaller lift_weight.
     hand_to_object_sharpness = 5. #default 10, increased from 4 to match TG2 - creates steeper gradient and urgency to approach
     
-    palm_direction_alignment_weight = 0.7  # increased from 0.5
+    palm_direction_alignment_weight = 0.5  # 2026-05-19 (run3z): 0.7 → 0.5. With palm_flip removed from termination (run3v.1), the only palm-orientation signal is this continuous penalty. Lowering weight reduces pressure on palm orientation so policy has more freedom to find grip poses even at non-canonical palm angles.
     in_grip_alignment_weight = 1. # 0.5
     
     palm_down_local_axis = (1.0, 0.0, 0.0) # x axis of agile-hand points in the direction of palm
@@ -744,20 +744,20 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_action_rate_penalty_scale = 1.5       # reduced from 2.5 to encourage finger exploration
 
     joint_velocity_penalty_weight = 5e-4       # prev 5e-4 -- reduced to avoid freezing
-    hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
+    hand_joint_velocity_penalty_scale = 2.0    # prev 3.0
 
     # phase 2: contact
-    hand_object_contact_weight = 0.8   # 2026-05-18 (run3s): 1.0 → 0.8. Further cut to push contact-farming below other engagement signals. At 4 sensors: 3.2/step (was 4.0), now comparable to object_to_goal (3.3).
-    good_grasp_weight = 1.5            # 2026-05-18 (run3s): 2.5 → 1.5. Scaled down with contact cut. Still acts as real-grasp shaping bonus but no longer dominates over object_to_goal as the always-on indicator that the hand is "doing something right".
+    hand_object_contact_weight = 1.5   # 2026-05-19 (run3x): 0.8 → 1.5. Run3w livestream: fingers curled but missed the object. Restore contact weight so the policy gets a clear "fingers touching object" signal. At 3 sensors: ~4.5/step — meaningful shaping but still well below lift_reward magnitudes (~15 at lift_success, 40 at goal) so no camp regression.
+    good_grasp_weight = 3.0            # 2026-05-19 (run3x): 1.5 → 3.0. Doubled. good_grasp fires only when thumb + ≥1 other finger contact — the exact signal needed to align curl timing with object position. At 3/step it's competitive with the lift residual at table but only for REAL grasps; should shape curl-on-object behavior.
     finger_curl_reg_weight = -0.5    # reduced to allow ADR to widen; was -0.5
-    finger_curl_reg_min = -6.0 # 2026-05-11: -8 → -6. Started at -3 (run3h saturated), raised to -8 but that over-penalized — policy over-corrected by pinning thumb at joint min, causing PD instability against the limit. -6 lets the penalty bite (2× the original -3 cap) without driving the policy into the unstable "pin against joint min" pose.
+    finger_curl_reg_min = -3.0 # 2026-05-11: -8 → -6. Started at -3 (run3h saturated), raised to -8 but that over-penalized — policy over-corrected by pinning thumb at joint min, causing PD instability against the limit. -6 lets the penalty bite (2× the original -3 cap) without driving the policy into the unstable "pin against joint min" pose.
     finger_curl_reg_max = 0.0 # min penalty for finger curl
 
     #phase 3: lifting
     object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
     success_bonus_weight = 10.0  # flat bonus per step when object is in goal region
-    lift_sharpness = 4.0  # 2026-05-19 (run3v): 5 → 4. Run3u at sharpness=5 was still not producing lift attempts in livestream. Slight relaxation: at sharpness=4, camp residual = 40·exp(-4·0.47) = 6.1/step (15% of max, was 9.5% at sharpness=5) — small extra carrot at low elevations so the policy gets *some* lift signal as it nudges the object up, without the run3s.5 problem (sharpness=2 → 39% residual). Goal-side reward (40 at err=0) unchanged.
+    lift_sharpness = 1.0  # 2026-05-19 (run3z): 4 → 1. Compromise between sharpness=4 (camp residual 15% but reward back-loaded near goal) and sharpness=0.5 (camp residual 79% — too high). At sharpness=1: camp residual = 40·exp(-1·0.47) = 25.0/step (62.5% of max), goal=40, marginal gain from camp→goal = 15 reward (0.3/cm). Smoother gradient than sharpness=4 with less extreme camping than 0.5.
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
@@ -921,10 +921,10 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "robot_joint_vel_bias": (0.0, 0.08), # rad
         },
         "reward_weights": {
-            "object_to_goal_sharpness": (-5., -10.),  # 2026-05-19 (run3s.5): (-8, -12) → (-5, -10) — revert to working teacher v2 ADR (commit 32a8924). The run3s change to (-8, -12) cut the goal-side gradient at table height from 16.4/m to 5.86/m and dropped the camp value from 3.28 to 0.73 — but it removed a critical *second* upward gradient on top of lift_reward. With lift_reward alone the policy parks at table-touch (camp residual 14.7/step) and refuses to risk vertical motion. Restoring (-5, -10) reinstates ~16.4/m of "go to goal" gradient stacked on top of lift's 29.4/m for ~46/m total upward pull — matches working v2.
+            "object_to_goal_sharpness": (-3., -8.),  # 2026-05-19 (run3z): (-5, -10) → (-3, -8). Lower magnitude → less sharp decay → more uniform reward across goal distances. At -3, camp residual (dist=0.5) = 40·exp(-1.5) = 8.9/step (was 3.3 at -5); but goal-side gradient near the goal becomes flatter too. Combined with lift_sharpness=0.5, total reward landscape is much smoother — consistent with the "linear approach" hypothesis.
             # "_weight": (5., 2.5) # default = (5,0)
             "lift_weight": (40., 20.),  # 2026-05-19 (run3u): (25, 12.5) → (40, 20) — revert to working teacher v2 ADR (commit 32a8924). With lift_sharpness back at 2.0, lift_reward at table = 40·exp(-2·0.5) = 14.7, at goal = 40 — dominant signal that grows monotonically with lift height (no flat camp residual).
-            "finger_curl_reg": (-0.5, -1.2),  # 2026-05-19 (run3u): (-1.0, -2.0) → (-0.5, -1.2) — revert to working teacher v2 ADR (commit 32a8924). Halving the curl penalty floor reopens the closure space — fingers can fully curl around the object without the regularizer fighting the grasp.
+            "finger_curl_reg": (-0.05, -0.1),  # 2026-05-19 (run3w): (-0.5, -1.2) → (-0.05, -0.1) — 10× softer. Run3v livestream showed policy lifting an EMPTY hand: wrist goes up post-contact but fingers stay open. Diagnosis: `curled_q = init_joint_pos` (3° at PIPs/mcp_pitch = ~open), so the "curl_reg" pulls fingers AWAY from grasp poses. At previous magnitudes, closing 13 finger joints to a ~0.5 rad grasp cost ~1.6/step (ramping to ~3.9 with ADR), competitive with the lift gradient — policy chose "lift without curling" over "curl + lift". 10× weaker reopens the grasping space without going all the way to kuka_allegro's effectively-off (-0.01, -0.01).
         },
         "pd_targets": {
             "velocity_target_factor": (1., 0.)
