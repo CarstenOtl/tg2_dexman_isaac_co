@@ -2098,4 +2098,69 @@ CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python
 - Policy still parks at table (lift_reward ~3.8 = max camp residual) with no upward motion → camp is structurally attractive even at 9.5% residual; **activate run3t (table-contact gate) which zeros lift_reward when object is on table**
 - Episode lengths short / palm_flips spike → the reward landscape change destabilized the existing learned palm orientation; check `palm_align` and termination counts
 
+**Result (livestream, stopped by user, 2026-05-19):** Camp residual cleared (`lift_reward` settled in the 3-5/step range at table, ~10% of max — matching the math) but **the policy still did not attempt to lift the object**. The bigger observation from livestream: the **palm approach speed was visibly too high** — the hand rushed in toward the object and the policy had to spend the rest of the episode bleeding velocity / oscillating. This suggests the missing element is not lift signal magnitude but exploration *quality*: the policy lands on the object too fast and unstably to even attempt the vertical-lift action sequence before contact is lost.
+
+Two leverage points identified for run3v: (a) re-enable the dormant `approach_speed_penalty` to discourage fast palm approach, (b) ease sharpness slightly from 5 → 4 so the policy gets a bit more carrot at low elevations once it does engage stably.
+
+### run3v — re-enable approach_speed_penalty + ease lift_sharpness 5 → 4 (2026-05-19)
+
+**Motivation:** Run3u livestream showed the policy approaching the object too fast and never settling into a lift attempt. The `approach_speed_penalty` formula (`-weight × max(0, palm_velocity · approach_dir)²`) has been computed and logged but commented out of the `reward_terms` dict since the run3p-era "don't move" diagnosis. The asymmetric clamp means only INWARD motion is penalized — moving away from the object is free — so it's a clean "slow down on approach" signal that doesn't recreate the freeze-everything failure mode.
+
+Secondary tweak: sharpness=5 was working as designed (camp residual gone) but the gradient between "object on table" and "lift_success" is so steep that brief upward nudges don't produce visible reward feedback. Easing to sharpness=4 gives a slightly bigger reward jump for partial lifts (e.g. at vert_err=0.42 / 5cm up: 4.6 → 7.4) without re-introducing the camping problem (camp residual goes 9.5% → 15% of max, still far from sharpness=2's 39% trap).
+
+**Changes from run3u (2 files):**
+
+| Where | Before | **After** | Why |
+|---|---|---|---|
+| `env.py:1201` (reward_terms dict) | `# "approach_speed_penalty": approach_speed_penalty` (commented) | **`"approach_speed_penalty": approach_speed_penalty`** (active) | Re-enable. Weight stays at 0.001 — squared, so only fast approaches bite. |
+| `env_cfg.py:760` | `lift_sharpness = 5.0` | **`lift_sharpness = 4.0`** | Slightly more carrot for partial lifts; camp residual still small. |
+
+**Resulting lift_reward landscape (weight=40, sharpness=4):**
+
+| Object pose | sharpness=5 (run3u) | **sharpness=4 (run3v)** |
+|---|---|---|
+| Table sit (vert_err=0.47) | 3.8 (9.5%) | **6.1 (15%)** |
+| 5 cm above table (vert_err=0.42) | 4.6 | **7.4** (60% more carrot at low elevation) |
+| Lift_success threshold (vert_err=0.35) | 6.9 (17%) | **9.9 (25%)** |
+| Halfway lifted (vert_err=0.25) | 11.4 (29%) | **14.7 (37%)** |
+| At goal (vert_err=0) | 40 | 40 |
+
+Camp:goal ratio: 1:6.6 (was 1:10.5 at sharpness=5, 1:2.6 at sharpness=2).
+
+**approach_speed_penalty magnitudes at weight=0.001:**
+
+| Palm closing speed | penalty/step |
+|---|---|
+| 0.1 m/s (slow) | -0.00001 (negligible) |
+| 0.3 m/s (typical approach) | -0.00009 (negligible) |
+| 0.6 m/s | -0.00036 (small) |
+| 1.0 m/s (fast) | -0.001 (mild) |
+| 2.0 m/s (ramming) | -0.004 (starts to bite) |
+
+If 0.001 is too gentle and livestream still shows fast approach, bump to 0.005 or 0.01.
+
+**Livestream train command (16 envs, visdex_selected, GPU 1):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --task=dextrah_fr3_agilehand --seed 42 --livestream 2 \
+  --num_envs 16 \
+  agent.params.config.minibatch_size=256 \
+  agent.params.config.central_value_config.minibatch_size=256 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.multi_gpu=False \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- Livestream approach visibly slower / smoother and policy attempts lift → both levers worked; queue full training
+- Approach still fast (`extras/approach_speed_penalty` mean small in absolute terms, indicating policy not really feeling the penalty) → bump weight from 0.001 → 0.005 or 0.01
+- Approach OK but still no lift attempts → easing sharpness wasn't the missing piece; **activate run3t (table-contact gate)** — at this point we've exhausted shaping options and need to force the policy off the table to discover lift
+- Approach better but `palm_align` worsens / palm_flips spike → policy is trading speed against orientation; might need to bump palm_align weight in parallel
+
 **Result:** *(to be filled in — about to start)*

@@ -1198,7 +1198,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             "contact": contact_reward,  # ENABLED for debugging
             "good_grasp": good_grasp_reward,
             "episode_length": episode_length_reward,
-            # "approach_speed_penalty": approach_speed_penalty,
+            "approach_speed_penalty": approach_speed_penalty,  # 2026-05-19 (run3v): re-enabled. Livestream of run3u showed the policy approaching the object too fast and spending effort decelerating before contact. Weight stays at 0.001 — at typical 0.3 m/s closing speed this is -0.00009/step (negligible), only biting hard at fast approaches (~1 m/s = -0.001/step). Adjust if too soft.
             
             # lifting phase
             "object_to_goal": object_to_goal_reward,

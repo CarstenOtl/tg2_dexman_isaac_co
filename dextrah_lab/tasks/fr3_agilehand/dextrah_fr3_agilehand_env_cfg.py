@@ -757,7 +757,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
     success_bonus_weight = 10.0  # flat bonus per step when object is in goal region
-    lift_sharpness = 5.0  # 2026-05-19 (run3u): 2 → 5. Sharpness=2 at the reverted weight=40 created a HUGE camp residual: 40·exp(-2·0.47)=15.6/step at table-touch = 39% of max lift_reward harvested without lifting. Confirmed in livestream (lift_reward=14.075 with lifted_now=0%). Bumping back to 5 drops camp residual to 40·exp(-5·0.47)=3.8/step = 9.5% of max, restoring the steep gradient that forces the policy to actually lift to harvest most of the reward. Goal-side lift_reward=40 unchanged.
+    lift_sharpness = 4.0  # 2026-05-19 (run3v): 5 → 4. Run3u at sharpness=5 was still not producing lift attempts in livestream. Slight relaxation: at sharpness=4, camp residual = 40·exp(-4·0.47) = 6.1/step (15% of max, was 9.5% at sharpness=5) — small extra carrot at low elevations so the policy gets *some* lift signal as it nudges the object up, without the run3s.5 problem (sharpness=2 → 39% residual). Goal-side reward (40 at err=0) unchanged.
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
