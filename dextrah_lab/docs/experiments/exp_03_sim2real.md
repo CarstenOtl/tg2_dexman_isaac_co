@@ -1924,4 +1924,178 @@ CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python
 
 **Next step: headless 1024-env run**, same reward config as logged above. Watch for `lift_success` actually firing now that the gradient is discoverable, AND for the `term_real` vs `term_physics_instability` ratio in TensorBoard — if vel_explosion dominates terminations, we'll need to address joint velocity stability before lift can converge.
 
-**Result:** *(headless 1024-env run pending)*
+**Result:** *(headless 1024-env run pending — see run3s.4)*
+
+### run3s.4 — scale run3s.3 to 1024 envs headless (2026-05-19)
+
+**Motivation:** First livestream of run3s.3 (16 envs) showed the policy attempting upward motion after contact — first positive signal in the whole run3 saga. Lifts unsuccessful and vel_explosion creeping up, but the gradient is now being followed. Scaling to 1024 envs headless to get a proper training signal: more parallel trajectories means higher chance some envs survive the vel_explosion regime and reach lift_success, and the gradient-averaging across 1024 envs should be smoother than 16. Chose **1024 over 2048** because vel_explosion is likely contact-instability triggered — fewer envs may reduce per-step physics solver load and give cleaner contact resolution.
+
+**Reward config:** unchanged from run3s.3 (lift_sharpness=2, lift_weight=(40,20), finger_curl=(-0.5,-1.2), hand_to_object=3, hand_object_contact=0.8, good_grasp=1.5, arm effort fixed at 87/12). Only delta vs the livestream is `--num_envs 16 → 1024` and `--livestream 2` removed.
+
+**Train command:**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+Single GPU (1), 4 minibatches per epoch (1024 × 16 / 4096), matching the run3s.2 horizon/minibatch structure.
+
+**What to watch:**
+- `lift_success/iter` — must rise above noise floor (>0.01 sustained). At 1024 envs, noise floor is 1/1024 ≈ 0.001.
+- `lift_reward/iter` climbing past **14.7** (table-height residual = 40·exp(-2·0.5)) → policy following the gradient *upward*, not just sitting on contact.
+- `termination/physics_instability` vs `termination/real_unsafe` ratio → if physics dominates (>50% of terms), vel_explosion is the bottleneck and we need joint velocity stability fixes (e.g. tighter `velocity_limit_sim` on fingers, lower `max_depenetration_velocity`).
+- `episode_lengths` recovering past **60** → unlocks the `min_num_episode_steps=60` lift_reward warmup gate. Below 60, lift_reward is forced to zero by env.py:1085-1091.
+- `num_adr_increases` ticking up → cleared `success_for_adr=0.4` threshold on some objects.
+
+**Decision rule:**
+- `lift_success > 0.1` and `num_adr_increases ≥ 1` within ep 2000 → success, ride it out, watch for ADR climb
+- `lift_success > 0` but slow (e.g. 0.01-0.05 sustained) → gradient working but undersamped; let train longer (5000+ epochs)
+- `lift_success ≈ 0` and `lift_reward` parks at 14.7 → policy stuck at table-touch camp again; lower `min_num_episode_steps` 60 → 0 so short-episode envs can also receive lift gradient
+- physics_instability > 50% of terms → tighten finger `velocity_limit_sim` 6.2832 → 3.0 rad/s (still ~170 deg/s, way above hardware 60 deg/s spec but more PD-resolvable)
+- Episode rewards go negative for >500 epochs → in_grip_alignment is again driving early termination; gate it on hand-near-object (`hand_to_object_pos_error < 0.15`)
+
+**Result (15,645 iters, 2026-05-19 night):** Policy converged to a stable camp at table height. `lift_success = 0` throughout (max ever = 0.00098 at iter 26 = noise floor, > 0 in only 79/15645 iters). `episode_lengths` recovered to 588 (full duration), `hand_to_object_distance` = 9 cm (palm anchored), `object_contact_count` = 2.6 (multiple grasping contacts), `good_grasp_reward` = 1.07 (real grasp formed), `lift_reward` parks at **14.15/step** — exactly the table-touch residual (40·exp(-2·0.5) = 14.7). Net reward ~11,332/episode — policy converged to a new, much higher local optimum: approach + grasp + hold-at-table. Replays of ep 2500 and ep 15000 both show the same "settle for touching" behavior; no upward attempts in either.
+
+Diagnosis: value-function trap. With camp residual = 14.7/step × ~500 steps = ~7,350 secured reward, any upward exploration risks dropping the object (and losing the camp). PPO correctly values "don't move" higher than "risk it". Subsequent audit found 3 silent drifts from working teacher v2 not addressed by run3s.3 — feeding into run3s.5.
+
+### run3s.5 — restore working v2 upward gradient (object_to_goal_sharpness + arm effort curriculum) (2026-05-19)
+
+**Motivation:** Number-by-number audit of current env_cfg vs working teacher v2 (commit 32a8924) found that three parameters had silently drifted away from v2 over the run3s saga, and these collectively weaken the upward reward gradient by ~24%:
+
+1. **`object_to_goal_sharpness` ADR: (-5, -10) → (-8, -12)** — sharpened during run3s to reduce a "camp at object" residual (3.28/step at table → 0.73/step), but this *also* removed a second upward gradient stack. At table height, v2's object_to_goal gradient toward goal was 16.4/m; current is 5.86/m. Lift_reward alone (29.4/m gradient) is doing all the "go up" work. In v2, lift+goal stacked for ~46/m total — that's the gradient the working policy used to discover lifting.
+
+2. **`arm_14_effort_limit`: (90, 87) curriculum → (87, 87) fixed**. Working v2 used hardware spec as the curriculum *end*, with 90 Nm as a small warm-up. Current is flat at 87 from step 0.
+
+3. **`arm_57_effort_limit`: (20, 12) curriculum → (12, 12) fixed**. Same story — wrist torque had 20 Nm warm-up in v2; current is fixed at 12.
+
+Other silent drifts NOT addressed in run3s.5: `hand_to_object_sharpness 5` (v2 was 4), `finger_curl_reg_min -6` (v2 was -3). Left alone — these are second-order effects compared to the upward-gradient issue.
+
+**Changes (cumulative from run3s.3 = run3s.4):**
+
+| param | run3s.4 | run3s.5 |
+|---|---|---|
+| `object_to_goal_sharpness` ADR | (-8, -12) | **(-5, -10)** |
+| `arm_14_effort_limit` ADR | (87, 87) fixed | **(90, 87)** curriculum |
+| `arm_57_effort_limit` ADR | (12, 12) fixed | **(15, 12)** curriculum (15 < v2's 20 — keep close to hardware spec) |
+
+**Resulting reward landscape at ADR 0, vertical_err = 0.5 m, hand on object:**
+
+| signal | run3s.4 value | run3s.5 value | delta |
+|---|---|---|---|
+| `object_to_goal_reward` (camp at table) | 0.73 | **3.28** | +2.55/step |
+| upward gradient (lift + goal) | 35.3 / m | **45.8 / m** | **+30% upward pull** |
+| arm joints 1-4 effort | 87 Nm | 90 Nm at ADR 0, ramping to 87 | small warm-up |
+| arm joints 5-7 effort | 12 Nm | 15 Nm at ADR 0, ramping to 12 | small warm-up |
+
+**Unchanged from run3s.3/3s.4:** lift_sharpness=2, lift_weight=(40,20), finger_curl_reg=(-0.5,-1.2), hand_to_object_weight=3, hand_object_contact_weight=0.8, good_grasp_weight=1.5.
+
+**Train command (1024 envs, single GPU, headless):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success > 0.05` sustained by ep 2000 → restored upward gradient broke the camp, ride it out and watch for ADR climb
+- `lift_success > 0` intermittent but trending up → gradient working but undersamped; let train longer
+- `lift_success ≈ 0` and `lift_reward + object_to_goal` parks at ~18/step (= 14.7 + 3.28 camp) → camp trap is structural even with stacked gradients; **time to do run3t (z-threshold gate on lift_reward)**
+- Episode lengths drop below 60 → the run3s.3 stability has regressed; check whether arm effort warm-up (90/15) destabilized contact
+
+**Result (livestream training, 2026-05-19):** Predicted decision-rule outcome triggered. Status table showed `lift_reward = 14.075` while `lifted_now = 0.0%` and `in_goal_now = 0.0%`. Decoding:
+- `lift_reward = 40 × exp(-2 × 0.47) × P(contact) = 15.6 × 0.90 ≈ 14.0` — object sitting on table, ~90% of envs with at least 1 sensor contact, harvesting **39% of the maximum lift_reward (40) WITHOUT lifting**.
+- `obj_to_goal = 3.43` — consistent with object at table near spawn (3D dist ~0.31m, weight 40, sharpness -5: 40 × exp(-5 × 0.31) ≈ 8.5 × P(contact)).
+- `total = 18.9` — stable camp equilibrium parking value.
+
+Confirms structurally: at `lift_sharpness=2 + lift_weight=40`, the camp residual is so large (15.6/step at table) that it dominates the camp-stack and removes any incentive to lift. The historical teacher v2 win was not a clean reward-gradient result — it relied on specific stochastic exploration. The flat sharpness=2 gradient is fundamentally a camping trap with these weights.
+
+### run3u — bump lift_sharpness 2 → 5 while keeping working v2 reverts (2026-05-19)
+
+**Motivation:** run3s.5 livestream confirmed the camp residual was the actual signal the policy was farming. The reverts to working-v2 values (lift_weight=40, finger_curl=-0.5/-1.2, hand_to_obj=3, object_to_goal_sharpness=-5/-10, arm warm-up curricula) restored the *upward-pull magnitudes* but at sharpness=2 the camp residual at the table (15.6/step) is itself large enough to be a stable equilibrium. **Sharpness alone is the camp-vs-lift discriminator; weights set the magnitude.** Bumping sharpness back to 5 drops the camp residual to 3.8/step (9.5% of max) while keeping the goal-side reward (40) and all other run3s.x reverts intact.
+
+**Change (env_cfg.py:760):**
+
+| param | run3s.5 | **run3u** |
+|---|---|---|
+| `lift_sharpness` | 2.0 | **5.0** |
+
+All other config carries forward from run3s.5 (unchanged).
+
+**Full state of run3u env_cfg vs the previously-committed run3s state (a577c6f):**
+
+| Variable | committed (run3s) | run3u | run history |
+|---|---|---|---|
+| `hand_to_object_weight` | 2.0 | **3.0** | bumped in run3s.3 (palm_flip stability) |
+| `palm_direction_alignment_weight` | 0.6 | **0.7** | reverted to working v2 |
+| `hand_action_rate_penalty_scale` | 1.2 | **1.5** | reverted to working v2 |
+| `lift_sharpness` | 5.0 | **5.0** | dropped to 2 in run3s.3, bumped back in run3u |
+| `object_to_goal_sharpness` ADR | (-8, -12) | **(-5, -10)** | reverted in run3s.5 (restore stacked upward gradient) |
+| `lift_weight` ADR | (25, 12.5) | **(40, 20)** | reverted in run3s.3 (working v2 ADR) |
+| `finger_curl_reg` ADR | (-1.0, -2.0) | **(-0.5, -1.2)** | reverted in run3s.3 (reopen closure space) |
+| `arm_14_effort_limit` ADR | (87, 87) flat | **(90, 87)** curriculum | re-introduced in run3s.5 (warm-up) |
+| `arm_57_effort_limit` ADR | (12, 12) flat | **(15, 12)** curriculum | re-introduced in run3s.5 (warm-up; 15 not v2's 20 — closer to hardware) |
+
+**Resulting reward landscape at ADR 0 (sharpness=5, weight=40):**
+
+| Object pose | lift_reward | % of max |
+|---|---|---|
+| Sitting on table (z=0.28, vert_err=0.47) | **3.8** | 9.5% |
+| Lift_success threshold (z=0.40, vert_err=0.35) | 6.9 | 17% |
+| Halfway lifted (z=0.50, vert_err=0.25) | 11.4 | 29% |
+| Halfway higher (z=0.60, vert_err=0.15) | 18.9 | 47% |
+| At goal (z=0.75, vert_err=0) | 40 | 100% |
+
+Camp:goal ratio is now **1:10.5** (was 1:2.6 at sharpness=2). The flat residual problem from run3s.5 livestream is gone; lift signal grows steeply with vertical motion.
+
+`object_to_goal_reward` at camp (sharpness=-5, weight=40, 3D dist ≈ 0.49 m): 40 × exp(-2.45) = 3.4. Still provides ~16/m goal-side gradient stacked on top of lift's ~38/m → ~54/m total upward pull from table.
+
+**Livestream train command (16 envs, visdex_selected, GPU 1):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --task=dextrah_fr3_agilehand --seed 42 --livestream 2 \
+  --num_envs 16 \
+  agent.params.config.minibatch_size=256 \
+  agent.params.config.central_value_config.minibatch_size=256 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.multi_gpu=False \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- Livestream `lift_reward` settles meaningfully below 10/step at the table → camp residual cleared, policy must work for the lift signal
+- Policy visibly attempts upward motion → sharpness=5 was the missing piece; queue full 1024+ env training
+- Policy still parks at table (lift_reward ~3.8 = max camp residual) with no upward motion → camp is structurally attractive even at 9.5% residual; **activate run3t (table-contact gate) which zeros lift_reward when object is on table**
+- Episode lengths short / palm_flips spike → the reward landscape change destabilized the existing learned palm orientation; check `palm_align` and termination counts
+
+**Result:** *(to be filled in — about to start)*
