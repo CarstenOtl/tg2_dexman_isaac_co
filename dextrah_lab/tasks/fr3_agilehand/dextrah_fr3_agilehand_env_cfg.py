@@ -744,7 +744,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
 
     # phase 2: contact
     hand_object_contact_weight = 3.0   # 8→4→3: contact still dominating lift
-    good_grasp_weight = 15.0           # run6a (2026-05-20): 3→15, 5x bump to make good_grasp dominate contact (~6/step peak). Tests whether incentivizing proper thumb+finger grasps fixes the touch-don't-lift basin (policy may currently be lifting before forming a real grasp, per run5c TB analysis)
+    good_grasp_weight = 9.0            # run6a.1 (2026-05-20): 15→9, dial back from run6a's 5x bump (which caused catastrophic collapse after 1.6% lift peak @ ep 517). 3x net bump vs baseline — enough to make good_grasp slightly dominate contact (6/step) without the violent reward-expectation gradient that destabilized run6a.
     finger_curl_reg_weight = -0.2    # reduced to allow ADR to widen; was -0.5
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl

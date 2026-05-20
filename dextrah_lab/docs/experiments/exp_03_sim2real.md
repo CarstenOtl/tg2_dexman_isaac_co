@@ -3103,6 +3103,88 @@ Did not quite cross 0.05 (peak 0.016 = 1.6%), but **2× the previous v2 record o
 - A more moderate bump (3→9 = 3×) should retain the grasp incentive without the catastrophic failure cost.
 - Once a sustainable magnitude is found, run6a.x can stack with other improvements (e.g., reduced approach speed, longer training horizon).
 
+### run6a.1 — dial good_grasp_weight back from 15 → 9 (2026-05-20)
+
+**Motivation:** Run6a confirmed the grasp-before-lift hypothesis (1.6% lift peak, the strongest v2 signal ever) but the 5× bump (3→15) was too aggressive — caused catastrophic policy collapse at ep ~700 (rewards +7132 → -722, all engagement to zero). Find the sustainable magnitude. **3× bump (3→9)** should still let good_grasp dominate contact (max 9/step vs contact's ~6/step) while halving the reward-expectation gradient violence that destabilized run6a.
+
+If 3× works → look for `lift_success` peak comparable to run6a (>1%) but *sustained* — no collapse to negative rewards. If 3× also collapses (just smaller magnitude) → grasp shaping isn't a stable lever on its own; need to combine with other adjustments (gate lift on good_grasp_mask, reduce approach speed, etc).
+
+**Configuration delta from previous (85799c0 / run6a):**
+- `good_grasp_weight`: 15.0 → **9.0** ([env_cfg.py:747](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+- Net vs 990c395 baseline: still single-knob (good_grasp 3 → 9, 3× bump vs baseline).
+- Everything else identical to run2g baseline.
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` reaches >0.005 by ep 500 AND sustains without collapsing past ep 1000 → 3× is the sustainable magnitude. Then let it run longer to see if ADR finally advances past 0 (success_for_adr=0.4).
+- Same peak-then-collapse pattern as run6a, just smaller peak → 3× still too aggressive; try 3 → 6 (2× bump = just matching contact weight).
+- No lift signal at all, peak < run6a's 1.6% → 3× isn't enough incentive; the 5× peak from run6a was the natural ceiling for this approach without combining with other shaping. Pivot to combination experiments (run6b: good_grasp 3→9 + gate lift on good_grasp_mask).
+- Catastrophic collapse to negative rewards (like run6a) → good_grasp bump in *any* magnitude triggers the avoidance basin. Need to add a positive baseline reward (e.g., increased hand_to_object_weight) to prevent the policy from retreating.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-20_16-49-54/` (test repo, GPU 0, dextrah_test env)
+
+**Result (ep 4178, stopped by user, 2026-05-20): FAILURE. Moderate bump (3×) didn't break the basin — peak 4× lower than run6a's 5× peak.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 200 | ep 500 | ep 1000 (eng. peak) | ep 1500 (CRASH) | ep 2500 (recovery) | ep 3500 | ep 4000 | PEAK |
+|---|---|---|---|---|---|---|---|---|
+| **lift_success** | 0.001 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | **0.004 @ ep 926** |
+| in_success_region | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.001 @ ep 983 |
+| rewards (raw) | 2696 | 6186 | 8795 | **95** | 2917 | 7176 | 6149 | 12437 @ ep 831 |
+| lift_reward | 3.32 | 3.26 | 4.95 | **0.011** | 4.10 | 5.36 | 4.95 | 5.60 @ ep 3519 |
+| hand_object_contact_reward | 3.18 | 3.47 | 5.32 | **0.006** | 1.90 | 3.18 | 3.23 | 8.33 @ ep 753 |
+| good_grasp_reward | 1.30 | 2.08 | 3.34 | **0.001** | 0.001 | 1.72 | 1.86 | 5.97 @ ep 764 |
+| object_contact_count | 1.06 | 1.16 | 1.77 | **0.002** | 0.63 | 1.06 | 1.08 | 2.78 @ ep 753 |
+| hand_to_object_distance (m) | 0.149 | 0.195 | 0.145 | **0.377** | 0.194 | 0.155 | 0.170 | — |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| episode_lengths | 256 | 460 | 469 | 528 | 280 | 454 | 407 | 599 |
+| finger_curl_reg | -1.15 | -1.46 | -1.48 | -0.58 | -0.53 | -0.48 | -0.95 | -0.01 |
+
+**Observations:**
+1. **`lift_success` peaked at 0.004 (0.4%) at ep 926 — 4× LOWER than run6a's 1.6% peak.** The 3× bump (vs run6a's 5×) wasn't enough incentive to push the policy into the lift basin even briefly.
+2. **Same collapse pattern as run6a, less severe magnitude.** Rewards 8795 → 95 at ep 1500 (>99% drop but not negative this time). Hand walked 0.145m → 0.377m, all engagement vanished. Confirms the basin pulls the policy back regardless of weight magnitude.
+3. **Recovery into stable touch-don't-lift state.** By ep 3500-4000 the policy re-engaged (contact 1.06, good_grasp 1.7-1.9, rewards 6000-7000) — but **lift_success stays at zero**. The policy found a stable equilibrium that's not lifting.
+4. **ADR stuck at 0** through 4178 epochs — same as every v2 run.
+
+**Decision rule outcome — third branch fires:**
+
+> "No lift signal at all, peak < run6a's 1.6% → 3× isn't enough incentive; the 5× peak from run6a was the natural ceiling for this approach without combining with other shaping. Pivot to combination experiments (run6b: good_grasp 3→9 + gate lift on good_grasp_mask)."
+
+**Three-data-point picture of the good_grasp_weight landscape:**
+
+| Bump | Weight | Peak lift_success | Collapse severity | Stable end-state |
+|---|---|---|---|---|
+| 1× (baseline 4fe7cb7) | 3.0 | ~0.8% (run4d) | mild collapse to declining | touch-don't-lift |
+| **3× (run6a.1)** | **9.0** | **0.4%** | rewards to +95 | touch-don't-lift, recovered |
+| 5× (run6a) | 15.0 | **1.6%** | rewards to -722 | partial recovery |
+
+**Non-monotonic in peak, monotonic in collapse severity.** Higher good_grasp incentive → higher peak lift signal AND deeper collapse. There's no monotonic sweet spot on this single knob.
+
+**Implication:** good_grasp_weight alone isn't a sustainable lever. The lift basin is pulled back regardless of shaping magnitude. **Next move: structural pressure via gating** — make `lift_reward` conditional on `good_grasp_mask`, so the policy literally cannot earn the lift_reward camp residual without forming a proper thumb+finger grasp first. This is the run3-era fix described in CLAUDE.md.
+
 
 
 
