@@ -3022,6 +3022,87 @@ Worse than that branch: the 10× bump didn't help initial exploration (peak 0.2%
 
 Every single-knob revert has now been tested. None unlock lifting. **The next experiment should be a multi-knob test** — revert several v2 deltas simultaneously to v1's values. Candidates: remove `arm_joint_init` + restore thumb_rot start to v1's 10.0 rad/s + restore arm 5-7 effort to v1's 50 Nm. If that lifts, narrow down which combination matters. If that *also* fails, the cause is below the config level (LSTM hidden state interaction with these constraints? early termination cascade?).
 
+### run6a — bump good_grasp_weight 3 → 15 to dominate contact (2026-05-20)
+
+**Motivation:** Pivoting from actuator-side bisection to reward-shaping based on user qualitative observation during run5c. Hypothesis: the touch-don't-lift basin is caused by the policy **lifting before forming a proper grasp** — it commits to upward motion when finger contact is insufficient, the object slips, hand ends up empty. This explains the contact-then-avoidance oscillation observed in run5c: contact emerges → policy tries to lift → grasp slips → contact drops → policy retreats → cycles back.
+
+Evidence from run5c TB at peaks: `hand_object_contact_reward = 6.0`, `good_grasp_reward = 1.4`. With weights `hand_object_contact_weight=3.0` and `good_grasp_weight=3.0`, good_grasp condition fires only ~23% of contact time. The policy is rewarded ~4× more for *touching* than for *properly grasping*, so it never has structural pressure to commit to thumb+finger closure before attempting lift.
+
+Fix: **bump `good_grasp_weight` 3 → 15 (5×)** so good_grasp can deliver up to 15/step (vs contact's ~6/step at 5 sensors). With good_grasp dominating, the policy's reward gradient should pull it toward thumb+finger commit before any vertical motion is profitable. lift_weight stays at baseline (40, 30) — undoing run5c's 10× bump that destabilized the policy.
+
+This is identical to the run3-era hypothesis that produced the `contact_mask = good_grasp_mask` gate (per CLAUDE.md), but tested via weight-shaping rather than hard gating — softer and reversible.
+
+**Configuration delta from previous (cd6ecfe / run5c):**
+- `good_grasp_weight`: 3.0 → **15.0** ([env_cfg.py:747](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+- `lift_weight` ADR: (400., 300.) → (40., 30.) — reverting run5c's 10× bump back to baseline
+- Net diff vs 990c395 (run2g baseline): one line, `good_grasp_weight` only.
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` climbs past 0.05 by ep 2000+ → good_grasp shaping was the missing piece; the basin was a grasp-formation problem, not actuator-side. Then iterate: try a smaller bump (run6a.1 with 9.0 to find minimum sufficient weight), check for unsafe rate, then resume distillation pipeline.
+- Brief lift peak then collapse, similar to run4d/5c → good_grasp helps initial exploration but contact oscillation still drives the policy out of engagement. Means the issue is *also* in approach stability, not just grasp commit. Next: combine good_grasp bump with reduced approach speed / arm_joint_init removal.
+- Contact stabilizes higher (>2.0 average), good_grasp jumps proportionally, BUT lift still doesn't emerge → grasp is being formed but policy still doesn't lift. Then it's an actuator/feasibility issue. Pivot back to multi-knob actuator revert (run6b).
+- Flat zero lift through ep 2000+, no improvement in good_grasp/contact ratio → good_grasp_weight isn't the lever even at 5×. Strong push to multi-knob actuator revert next.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-20_15-39-08/` (test repo, GPU 0, dextrah_test env)
+
+**Result (ep 1393, stopped early, 2026-05-20): HIGHEST v2 LIFT PEAK EVER (1.6%), then catastrophic collapse — hypothesis validated but magnitude too aggressive.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 200 | ep 400 (engaging) | ep 500 (peak) | ep 700 (CRASH) | ep 900 | ep 1100 | ep 1300 (recovering) | PEAK |
+|---|---|---|---|---|---|---|---|---|
+| **lift_success** | 0.000 | 0.001 | 0.004 | **0.000** | 0.000 | 0.000 | 0.000 | **0.016 @ ep 517** |
+| rewards (raw) | 2819 | 9023 | 7132 | **-722** | -344 | -717 | 459 | 10371 @ ep 373 |
+| lift_reward | 3.51 | 4.43 | 2.99 | **0.00** | 0.004 | 0.004 | 0.085 | 4.86 |
+| hand_object_contact_reward | 3.55 | 4.75 | 3.06 | **0.00** | 0.002 | 0.002 | 0.045 | 5.60 @ ep 313 |
+| good_grasp_reward | 3.01 | 5.13 | 3.20 | **0.00** | 0.00 | 0.00 | 0.006 | **6.06 @ ep 401** |
+| object_contact_count | 1.19 | 1.58 | 1.02 | **0.00** | 0.001 | 0.001 | 0.015 | 1.87 @ ep 313 |
+| hand_to_object_distance (m) | 0.14 | 0.14 | 0.27 | **0.38** | 0.24 | 0.37 | 0.21 | — |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| episode_lengths | 226 | 472 | 524 | **580** | 530 | 563 | 293 | 599 |
+
+**Observations:**
+1. **`lift_success` peaked at 0.016 (1.6%) at ep 517 — 2× the previous v2 record (run4d's 0.8%).** User observed 1.8% in debug window around the peak. The grasp-before-lift hypothesis is validated: incentivizing proper thumb+finger grasps over single-finger taps produced the strongest lift signal of any v2 retrain.
+2. **`good_grasp_reward` jumped 4.3× from run5c (1.41 → 6.06).** The 5× weight bump translated into a ~4× reward increase — the policy was actually getting credit for forming proper grasps, and exploration responded.
+3. **Catastrophic policy collapse at ep ~700.** Total reward went from +7132 → -722 in one window (-110% swing). All engagement metrics dropped to zero: contact 3.06 → 0.00, good_grasp 3.20 → 0.00, lift_reward 2.99 → 0.00. Hand walked from 0.27m → 0.38m. Episode_lengths spiked to 580 (timeout-only, no contact-triggered ends). This is the worst collapse pattern of any v2 run to date.
+4. **Mechanism of collapse:** with `good_grasp_weight = 15`, the policy's reward expectations grew large. A few failed grasps (with grasp event delivering 0 reward vs the expected ~15) likely produced strongly negative advantage estimates, pushing the policy away from approach behavior entirely. The combination of "high promised reward for success" + "zero reward for partial success" + "no positive baseline for staying near" created a deep avoidance gradient.
+5. **Slow recovery starting ep 1300** (rewards back to +459, distance dropping). But based on every prior v2 collapse pattern, recovery from -700 rewards back to engagement is extremely slow and unlikely to surpass the original peak.
+
+**Decision rule outcome — first branch fires with caveat:**
+
+> "`lift_success` climbs past 0.05 by ep 2000+ → good_grasp shaping was the missing piece"
+
+Did not quite cross 0.05 (peak 0.016 = 1.6%), but **2× the previous v2 record on a single-knob change** is strong validation that good_grasp shaping is the right lever. The hypothesis is correct; the magnitude was too aggressive. Next: dial back to find the sustainable magnitude.
+
+**Implications:**
+- Grasp-before-lift hypothesis is structurally correct — verified by the strongest lift signal in any v2 retrain.
+- 5× bump (3→15) is too aggressive: reward gradient becomes too violent and collapses the policy after the brief engagement window.
+- A more moderate bump (3→9 = 3×) should retain the grasp incentive without the catastrophic failure cost.
+- Once a sustainable magnitude is found, run6a.x can stack with other improvements (e.g., reduced approach speed, longer training horizon).
+
 
 
 

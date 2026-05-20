@@ -744,7 +744,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
 
     # phase 2: contact
     hand_object_contact_weight = 3.0   # 8→4→3: contact still dominating lift
-    good_grasp_weight = 3.0            # 6→3: halved
+    good_grasp_weight = 15.0           # run6a (2026-05-20): 3→15, 5x bump to make good_grasp dominate contact (~6/step peak). Tests whether incentivizing proper thumb+finger grasps fixes the touch-don't-lift basin (policy may currently be lifting before forming a real grasp, per run5c TB analysis)
     finger_curl_reg_weight = -0.2    # reduced to allow ADR to widen; was -0.5
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl
@@ -919,7 +919,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "reward_weights": {
             "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
-            "lift_weight": (400., 300.),  # run5c (2026-05-20): 10x bump from (40, 30) to test whether reward magnitude can break the touch-don't-lift basin. Makes lift action ~10x more rewarding than any other shaped term.
+            "lift_weight": (40., 30.),  # slower decay so lift signal stays strong while goal sharpness ramps up
             "finger_curl_reg": (-0.3, -0.8),  # reduced: previous (-0.5,-1.2) penalized grasps too aggressively at higher ADR
         },
         "pd_targets": {
