@@ -744,7 +744,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
 
     # phase 2: contact
     hand_object_contact_weight = 3.0   # 8→4→3: contact still dominating lift
-    good_grasp_weight = 9.0            # run6a.1 (2026-05-20): 15→9, dial back from run6a's 5x bump (which caused catastrophic collapse after 1.6% lift peak @ ep 517). 3x net bump vs baseline — enough to make good_grasp slightly dominate contact (6/step) without the violent reward-expectation gradient that destabilized run6a.
+    good_grasp_weight = 15.0           # run6b (2026-05-20): match run6a's 5x bump (3→15) — the value that produced the 1.6% lift peak. Stacked with lift_sharpness 4→2 to test if the flatter lift gradient prevents the collapse pattern that broke run6a at sharpness=4.
     finger_curl_reg_weight = -0.2    # reduced to allow ADR to widen; was -0.5
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl
@@ -753,7 +753,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
     success_bonus_weight = 20.0  # bumped from 10: stronger incentive to close last few cm to goal
-    lift_sharpness = 4.0 #default 8.5; 2→4: steeper lift saturation so goal reward dominates once object is off table
+    lift_sharpness = 2.0 #run6b (2026-05-20): 4→2, restore run2a baseline value (drifted to 4 within run-2a-g per CLAUDE.md). At sharpness=2 the lift gradient is flatter/more uniform from table to goal — d(reward)/dh stays meaningful across the full lift trajectory instead of saturating in the first 10cm. Tests whether a sustained vertical gradient unsticks the camp-at-table equilibrium that's been the v2 retrain failure mode.
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   

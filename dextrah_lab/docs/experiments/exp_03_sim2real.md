@@ -3185,6 +3185,93 @@ TensorBoard at iter sample points:
 
 **Implication:** good_grasp_weight alone isn't a sustainable lever. The lift basin is pulled back regardless of shaping magnitude. **Next move: structural pressure via gating** — make `lift_reward` conditional on `good_grasp_mask`, so the policy literally cannot earn the lift_reward camp residual without forming a proper thumb+finger grasp first. This is the run3-era fix described in CLAUDE.md.
 
+### run6b — lift_sharpness 4 → 2 + good_grasp 3 → 15 (run6a's bump value) (2026-05-20)
+
+**Motivation:** Combine the two reward-shape changes that produced the most signal so far:
+- **lift_sharpness 4 → 2** — flatter, more sustained lift gradient. CLAUDE.md flags 2.0 as the run2a baseline value that drifted to 4.0 during run-2a-g. At sharpness=4 the lift_reward saturates fast (gradient collapses by h≈25cm); at sharpness=2 ~80% of d(reward)/dh remains at h=15cm.
+- **good_grasp_weight 3 → 15** — match run6a's 5× bump, the value that produced the **strongest v2 lift peak (1.6% @ ep 517)** before catastrophically collapsing at ep 700.
+
+**Hypothesis:** run6a's collapse was driven by the steep lift_sharpness=4 landscape — once the policy briefly engaged and lifted, the lift gradient flattened sharply past h=25cm, leaving the policy without continuous pull. The high good_grasp expectation (15) combined with the diminishing lift gradient created an unstable "high promised reward, vanishing gradient" zone that the policy retreated from. By flattening the lift gradient (sharpness=2), the upward pull is more sustained, so the good_grasp=15 incentive can be paired with a lift landscape that doesn't punish the policy for getting partway up.
+
+In short: take the run6a peak that worked, but fix the gradient collapse that destabilized it.
+
+**Configuration delta from previous (5ece6da / run6a.1):**
+- `lift_sharpness`: 4.0 → **2.0** ([env_cfg.py:756](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+- `good_grasp_weight`: 9.0 → **15.0** (bumped back to run6a's value)
+- Net vs 990c395 baseline: two lines, both reward-shaping. **2-knob test by user direction.**
+
+Historically novel combination: 32a8924's lift_sharpness (2.0) on top of 4fe7cb7's other values (success_bonus=20, tightened ADR ranges, etc.) + run6a's good_grasp=15. Neither was tested in the 2a-g range.
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` peak exceeds run6a's 1.6% AND sustains past ep 1000 without collapsing to negative rewards → the combination worked. Both shaping changes are validated; let it run long enough for ADR to advance past 0 for the first time in any v2 retrain.
+- Lift peak ~run6a's 1.6% but collapse delayed or avoided → flatter gradient helped sustain but didn't push higher. Still a major win; iterate down on good_grasp (run6b.1 with 12) to find the smallest sufficient bump.
+- Lift peak < run6a's 1.6% and same collapse pattern → flatter gradient didn't help the collapse mechanism; the policy is still being yanked out of engagement by something other than the lift_reward saturation. Pivot to structural gating (run6c: gate lift on good_grasp_mask, lift_sharpness=4 restored).
+- No lift signal at all → 2-knob combination broke something (e.g., flatter lift gradient + high good_grasp pulled the policy into a different bad equilibrium). Revert and isolate: run6b.1 with sharpness=2 + good_grasp=3 to test sharpness alone.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-20_19-14-18/` (test repo, GPU 0, dextrah_test env)
+
+**Result (ep 3225, stopped by user, 2026-05-20): Major partial breakthrough — no collapse, sustained engagement, partial-lift basin replaces touch-don't-lift. But lift_success still capped at 1.0%.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 200 | ep 500 | ep 1000 | ep 1500 | ep 2000 | ep 2500 | ep 3000 | PEAK |
+|---|---|---|---|---|---|---|---|---|
+| **lift_success** | 0.000 | 0.002 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | **0.010 @ ep 486** |
+| in_success_region | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.002 @ ep 467 |
+| rewards (raw) | 4450 | 10625 | 14728 | 13241 | 13799 | 13886 | **15676** | **17184 @ ep 2720** |
+| lift_reward | 9.08 | 10.27 | 12.45 | 11.82 | 12.34 | 11.96 | 12.91 | 13.75 @ ep 3225 |
+| **good_grasp_reward** | 2.83 | 3.85 | 8.47 | 5.39 | 7.23 | 7.19 | 8.39 | **10.25 @ ep 3216** |
+| hand_object_contact_reward | 3.61 | 4.23 | 4.73 | 3.97 | 4.56 | 4.20 | 4.58 | 5.35 |
+| object_contact_count | 1.20 | 1.41 | 1.58 | 1.32 | 1.52 | 1.40 | 1.53 | 1.78 |
+| hand_to_object_distance (m) | 0.135 | 0.154 | 0.142 | 0.136 | 0.142 | 0.160 | 0.145 | — |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| finger_curl_reg | -1.16 | -1.35 | -2.51 | -2.60 | -2.60 | -2.24 | -2.37 | — |
+
+**Observations:**
+
+1. **No collapse — monotone reward climb.** Rewards grew 4450 → 17184 over 3225 epochs with no negative-reward window. This is the first v2 retrain that didn't crash at some point.
+2. **`good_grasp_reward` peaked at 10.25 — highest of any v2 run** (vs run6a's 6.06, run6a.1's 5.97). With weight=15, that's a ~68% grasp rate (vs run6a's 40%). The policy is forming proper grasps consistently.
+3. **`lift_reward` climbed to 13.75 — implies object lifted ~21cm off the table on average.** The policy IS lifting, just to a moderate height. With sharpness=2: `13.75 / 40 = 0.34 = 1 - exp(-2*h)` → h ≈ 0.21m.
+4. **`lift_success` peak 0.010 (1.0%) at ep 486 — second-highest v2 peak ever** (below run6a's 1.6%), but the trajectory is different: after the peak it dropped to 0 while everything else continued climbing. The peak was *transient exploration*, not the policy's learned behavior.
+5. **Hand stayed near object throughout** (0.13-0.16m). No avoidance phases. Sustained engagement.
+6. **ADR stuck at 0** through 3225 epochs.
+7. **User livestream qualitative observation (best ckpt `ep_3000_rew_15616`):** policy uses **thumb + ring finger** as the primary grasp (ring is geometrically opposite the thumb in this configuration). **Middle and index fingers are fully curled at the MCP and not contributing to the grasp** — they may be incidentally brushing the object for `contact_mask=True`, but they're not forming the grip. The policy found the simplest valid grasp under the current good_grasp_mask definition (`thumb + ≥1 other finger`) and ignores the unnecessary fingers.
+
+**Mechanism — why partial lift but no full success:**
+
+Two factors compound:
+1. **`lift_reward` is gated on `contact_mask` (any contact)**, not `good_grasp_mask`. So at altitude ≈ 21cm, the policy earns lift_reward 13.75/step just for keeping any sensor touching. Higher altitude doesn't pay much more (gradient at h=21cm with sharpness=2 is `40*2*exp(-0.42) ≈ 52` per meter — still meaningful but the policy has already exited the steep part of the curve).
+2. **lift_reward 13.75 > good_grasp_reward 8.39 at the "moderate lift" equilibrium.** Lifting to camp altitude is more rewarding than maintaining a tighter grasp. The policy settled here because it's the local optimum.
+
+The flatter sharpness=2 gradient + grasp shaping cleared the camp-at-table basin (huge progress vs runs 4c-6a.1), but introduced a NEW basin: **camp-at-moderate-height**. Object never reaches the goal region, in_success_region stays at 0, ADR can't advance.
+
+**Decision rule outcome — first branch fires partially:** the combination prevented the collapse and produced sustained partial-lift behavior. But lift_success didn't exceed run6a's 1.6%, so it's not a full win yet. The remaining issue is the lift_reward camp residual at moderate altitude — addressed in run6c.
+
+**Path forward (run6c):** gate `lift_reward` on `good_grasp_mask` so the policy can only earn lift_reward when a proper thumb+finger grasp is formed. This breaks the "any contact + slight lift = camp residual" exploit at moderate height. The run3-era structural fix per CLAUDE.md, but applied here on top of the run6b reward shape that prevents the collapse pattern.
+
 
 
 
