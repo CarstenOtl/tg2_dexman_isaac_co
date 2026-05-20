@@ -919,7 +919,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "reward_weights": {
             "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
-            "lift_weight": (40., 30.),  # slower decay so lift signal stays strong while goal sharpness ramps up
+            "lift_weight": (400., 300.),  # run5c (2026-05-20): 10x bump from (40, 30) to test whether reward magnitude can break the touch-don't-lift basin. Makes lift action ~10x more rewarding than any other shaped term.
             "finger_curl_reg": (-0.3, -0.8),  # reduced: previous (-0.5,-1.2) penalized grasps too aggressively at higher ADR
         },
         "pd_targets": {

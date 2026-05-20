@@ -2488,3 +2488,540 @@ Replay confirms visually: hand hovers stable at ~15cm from object, occasionally 
 **Conclusion from the run3o → run3z arc:** Every reward shape we've tried — sharpness 2, 4, 5, 8, 10, 1, 0.5 — produces the same outcome with different operating points: the policy finds the laziest way to harvest the camp residual, and the residual is structurally guaranteed to exist as long as `lift_reward = weight × exp(...) × contact_mask` fires for any table-touch. **No exponential shape solves this.** The reward formula needs a hard gate (run3t) to zero out lift_reward when the object is on the table.
 
 The good_grasp degradation in run3z is the new evidence that this saga can't continue with shaping alone — at smooth sharpness the policy is *incentivized to do less*, not more. Run3t is now structurally required, not optional.
+
+### run4a — fresh retrain from run2g baseline post-revert (2026-05-19)
+
+**Motivation:** The run3o→run3z saga of reward shaping decisively failed (full diagnosis in exp_03 commit acafa2b). Rather than continue exploring shape variants or adding the table-contact gate to an env config that has drifted far from the working baseline, do a clean reset: revert the three diverged files (`env.py`, `env_cfg.py`, `fr3_tekken_left.py`) to commit `4fe7cb7` — the end of the original run2a-g exploration that produced Teacher v2's best result (79.1% lift / 25.3% unsafe at run2g ep 2500). All experiment logs and CLAUDE.md are preserved (see commit `990c395`).
+
+This is a direct re-test of the question: **can run2g's training setup still reproduce its historical result on current IsaacLab v2.2.1?** Per CLAUDE.md, this hasn't been reproducible since the IsaacLab upgrade — recent measurements with the same .pth + same env_cfg give 55.0% lift / 40.8% unsafe on visdex_selected. So the realistic expectation isn't 79.1% — it's whether the working config can at least produce LIFTING behavior again, even if the absolute number is lower.
+
+**Configuration (as reverted from 4fe7cb7):**
+
+Key reward weights:
+- `lift_sharpness = 4.0` (not 1.0 from run3z, not 5.0 from run3u — the run2g-tuned middle value)
+- `success_bonus_weight = 20.0` (was 10 pre-run2g)
+- `object_to_goal_weight = 40` static
+- `hand_to_object_weight = 4.0` (run2g value, was bumped to 3.0 then back)
+- `hand_object_contact_weight = 3.0` (run2g value)
+- `good_grasp_weight = 6.0` (run2g value — much higher than run3 era's 1.5-3.0)
+
+Key ADR ranges:
+- `lift_weight` ADR: (40, 30) — slower decay than run3u's (40, 20)
+- `object_to_goal_sharpness` ADR: (-5, -10)
+- `finger_curl_reg` ADR: (-0.3, -0.8) — between run3w's (-0.05, -0.1) and run3 pre-revert (-0.5, -1.2)
+- Arm + finger gains: (0.7, 2.0) — tightened from run3's (0.5, 2.0)
+- `joint_pos_noise`: (0, 0.35) — was (0, 0.8) in some run3 attempts
+
+Termination set: palm_flip is BACK in `out_of_reach` (reverts run3v.1). approach_speed_penalty is BACK in reward_terms (reverts run3y).
+
+Asset state: `fr3_tekken_left.py` at 4fe7cb7 — slightly different from recent edits.
+
+**Run directory:** `05-19_22-32-41`
+
+**Train command (1024 envs, headless, GPU 1):**
+```bash
+cd dextrah_lab/rl_games
+CUDA_VISIBLE_DEVICES=1 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Expected vs run3z (single-object, sharpness=1, smooth-gradient regression):**
+
+| Signal | run3z plateau | run4a expectation |
+|---|---|---|
+| `rewards/iter` | 20,500 (inflated camp harvest) | 3,000-6,000 (run2g-era reward magnitudes) |
+| `lift_reward` | 22.5/step (camp residual) | ~3-4/step at table + scaling toward 40 at goal |
+| `lift_success` | 0.000 (no lifts) | Expect intermittent lifts emerging by ep 500-1000; consolidation by ep 2000-3000 if reproducible |
+| `good_grasp` | 0.000 (regressed) | Expect ~1.0-3.0 (good_grasp_weight=6 here) |
+| `hand_to_obj_dist` | 0.15m (lazy hover) | Expect to drop below 0.12m as approach learns |
+
+**Decision rule:**
+- `lift_success` sustained > 0.05 by ep 2000 → run2g baseline is still trainable on current IsaacLab → can proceed to distillation
+- `lift_success` 0.01-0.05 plateau → partial success, same structural ceiling as the cited "55% lift" measurement from CLAUDE.md
+- `lift_success` < 0.005 indefinitely → the run2g baseline IS NOT trainable from scratch on current IsaacLab; the historical 79.1% was either a fluke run or required IsaacLab v < 2.2.1; **next step: table-contact gate (run3t) on this baseline**, since we've now isolated the issue from the run3 shape drift
+- Collapse pattern emerges (rewards peak then decline like run3x.1) → IsaacLab drift introduced the same termination-cost asymmetry that broke run3x.1; investigate which terminations are firing
+
+**Result:** *(to be filled in — training in progress)*
+
+### run4b — Teacher v1 (exp 1m, non-hardware-realistic) sanity check (2026-05-19)
+
+**Motivation:** Before assuming the run4a v2 retrain plateau (if it happens) is system-level drift below the repo, isolate whether the dextrah_clean env / current IsaacLab v2.2.1 / current physx + driver stack can still train *any* fr3_agilehand teacher to lift behavior. Teacher v1 (exp 1m) is the pre-hardware-realistic baseline that historically reached ~85.8% lift (Teacher 11 benchmark). If v1 trains today, the regression is v2-specific; if v1 also fails to lift, the cause is below the repo.
+
+This pairs with the diagnostic snapshot tooling added in `dextrah_lab/docs/scripts/diagnostic_snapshot.py` (2026-05-19) — the snapshot was designed to surface system-level drift (IsaacLab HEAD, rl_games commit, driver version, USD LFS state, omni.physx version). The v1 sanity check is the empirical complement to that static comparison.
+
+**Setup:** Main repo (`/home/carsten.oertel/code/tg2_dexman_isaac_co`), `dextrah_clean` env, Teacher v1 (exp 1m) config — i.e. the original non-hardware-realistic FR3+AgileHand teacher setup, NOT the run4a v2 setup in the test repo. Different repo, different config, same underlying stack (Isaac Sim 5.1.0.0, IsaacLab v2.2.1, driver 555.42.06, torch 2.7.0+cu128, RTX 4090).
+
+**Result (epoch 180):** **6% lift_success**, climbing.
+
+**Result (epoch 13500, 2026-05-20):** **ADR level 13 reached.** v1 climbed through the full ADR curriculum and settled at the same structural plateau as the historical Teacher 11 benchmark (which converged at ADR ~13, 85.8% lift). This is the healthy, expected outcome — v1 has historically been the strongest fr3_agilehand teacher.
+
+**Interpretation (confirmed at ep 13500):**
+- The stack is **not** broken at the system level — IsaacLab v2.2.1 + current physx + driver 555.42.06 + dextrah_clean env are still capable of training a full fr3_agilehand teacher through the entire ADR curriculum to ADR 13.
+- **Decisively rules out** the "below-the-repo drift" hypothesis from the diagnostic checklist (categories A1–A6 in `diagnostic_snapshot.py`): IsaacLab commit, rl_games version, PyTorch/CUDA, driver, apt-installed libs, omni.physx version. None of those can be the cause if the same stack trains v1 to ADR 13 today.
+- Narrows the regression to **v2-specific config or v2-specific actuator+physics interaction**: hardware-realistic effort/velocity limits, arm init randomization, tighter starting joint limits, soft_joint_pos_limit=0.8, etc. — these are present in v2 and absent in v1.
+- Early signal (6% at ep 180) was consistent with healthy Teacher 11 trajectory; ADR 13 at ep 13500 confirms the full curriculum is traversable on current stack.
+
+**Implications for run4a (in progress, test repo):**
+
+run4a is testing v2 at the **4fe7cb7-state revert** — but a closer look (via the diagnostic_snapshot script) revealed that the env_cfg at 4fe7cb7 had already drifted from the actual policy-12 training state (`32a8924`, Apr 3) within the 2a-2g runs themselves. **10 fields** drifted between 32a8924 and 4fe7cb7:
+
+| Field | 32a8924 (policy 12 training) | 4fe7cb7 / current run4a |
+|---|---|---|
+| `success_bonus_weight` | 10.0 | 20.0 |
+| `lift_sharpness` | 2.0 | 4.0 |
+| `arm_joint_stiffness_and_damping` | (0.5, 2.0) | (0.7, 1.5) |
+| `finger_mcp_pitch_gains` / `_yaw` / `pip` / `thumb_rot_gains` | (0.5, 2.0) | (0.7, 2.0) |
+| `robot_spawn.joint_pos_noise` | (0., 0.8) | (0., 0.35) |
+| `lift_weight` ADR | (40., 20.) | (40., 30.) |
+| `finger_curl_reg` ADR | (-0.5, -1.2) | (-0.3, -0.8) |
+
+Applied a hand-edit revert to the **test repo only** (`code/test/tg2_dexman_isaac_co/dextrah_lab/tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py`) to restore all 10 fields to 32a8924 state. `git diff 32a8924 -- ...env_cfg.py` is now clean except for one trailing-whitespace difference. All other training-path files (`env.py`, `train.py`, USDs, agent yaml configs) are bit-identical to 32a8924 by `git diff --stat`. Verified via `diagnostic_snapshot.py` re-run.
+
+**Decision rule for next experiment:**
+- v1 (run4b) climbs to >50% lift by ep 2000+ → confirms system works.
+- THEN run v2 at the 32a8924-reverted env_cfg in the test repo (parallel GPU). If v2 lifts → drift across 2a-2g and run3 investigations was the entire cause (lesson: accumulated config tweaks during exploration silently broke trainability). If v2 still won't lift even at the 32a8924-exact config → narrows to v2-specific actuator/physics interaction that became incompatible with current physx (the only remaining suspect).
+- Either way, run4a (the 4fe7cb7 revert) is *not* the same experiment as a 32a8924-exact revert — the 10-field drift makes that distinction important.
+
+**Status (2026-05-20):** v1 reached ADR 13 at ep 13500 → system healthy. Next step is unblocked: kick off v2 training at the 32a8924-reverted env_cfg in the test repo on a parallel GPU and observe whether it lifts. That experiment will isolate "drift across run3 was the entire cause" from "v2 actuator/physics interaction is itself the problem".
+
+### run4c — fresh v2 retrain at exact policy-12 baseline (32a8924) (2026-05-20)
+
+**Motivation:** run4a is anchored at `4fe7cb7`, which the diagnostic_snapshot.py-driven audit revealed had **10 fields drifted** from the actual policy-12 training state at `32a8924` (Apr 3, 2026). Those drifts accumulated *within* the 2a-2g run cycle itself — so run4a is *not* the same experiment as a true policy-12 baseline retrain. run4c corrects that: hand-edit env_cfg.py to exactly match `32a8924` (verified via `git diff 32a8924 -- ...env_cfg.py` clean except trailing whitespace). All other training-path files (`env.py`, `train.py`, USDs, agent yaml configs, `fr3_tekken_left.py`) are already bit-identical to 32a8924 — verified via `git diff --stat 32a8924 -- dextrah_lab/tasks/fr3_agilehand/` and the asset file. So run4c is the **closest empirical retrain of policy 12 possible from the current repo**.
+
+This run is paired with the v1 sanity check (run4b): v1 already confirmed the stack (IsaacLab v2.2.1, Isaac Sim 5.1.0.0, driver 555.42.06, torch 2.7.0+cu128) trains a teacher to ADR 13 today. So run4c's failure modes are now disambiguated — if v2 also fails at the 32a8924-exact config, the cause must be v2-specific.
+
+**Configuration (32a8924-exact, the 10 reverted fields):**
+
+Scalar reward weights:
+- `success_bonus_weight = 10.0` (was 20.0 in 4fe7cb7)
+- `lift_sharpness = 2.0` (was 4.0 in 4fe7cb7) — the prime suspect for "touch-don't-lift" basin in run3
+- `object_to_goal_weight = 40` (unchanged)
+- `hand_to_object_weight = 4.0` (unchanged; CLAUDE.md's "expect 3.0" was a false alarm based on later tuning notes)
+
+ADR ranges:
+- `lift_weight` ADR: (40., 20.) (was (40., 30.) in 4fe7cb7)
+- `finger_curl_reg` ADR: (-0.5, -1.2) (was (-0.3, -0.8))
+- `robot_spawn.joint_pos_noise`: (0., 0.8) (was (0., 0.35) — note CLAUDE.md considers 0.35 "correct" for sim2real but 0.8 is what policy 12 actually trained with)
+- `arm_joint_stiffness_and_damping`: (0.5, 2.0) (was (0.7, 1.5))
+- `finger_mcp_pitch_gains` / `_yaw_gains` / `pip_gains` / `thumb_rot_gains`: (0.5, 2.0) (were (0.7, 2.0))
+
+Everything else (env.py reward computation, contact gating, termination set, USDs, agent yaml) is unchanged from current HEAD = bit-identical to 32a8924.
+
+**Setup:**
+- Repo: test repo (`code/test/tg2_dexman_isaac_co`)
+- Env: `dextrah_test` (test repo's env, distinct from main repo's `dextrah_clean`, but same underlying Isaac Sim / IsaacLab / driver — validated healthy by run4b)
+- GPU: 0 (free; v1 was on GPUs 1-3 in main repo)
+- Seed: 42 (matches v1 + prior v2 attempts for direct comparability)
+
+**Train command:**
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` climbs past 30% by ep 2000-3000 → accumulated config drift across run3 was the entire cause; v2 is trainable at the 32a8924 baseline; can resume distillation.
+- `lift_success` plateau at near-zero through ep 5000+ → narrowed to **v2-specific actuator/physics interaction** (hardware-realistic effort/velocity limits, soft_joint_pos_limit=0.8, arm init randomization EventTerm) incompatible with current physx state. Next move would be to bisect those one at a time, starting with the v2-only differences from v1's config.
+- Partial lift (5-20% plateau) with same ADR 13 wall as historical → matches the "55% lift current measurement" pattern; suggests policy 12's 79.1% historical number was a fluke run or required IsaacLab < v2.2.1, but the config is otherwise sound.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-20_07-35-01/` (test repo, GPU 0)
+
+**Result (ep 4800, 2026-05-20): FAILURE. Same touch-don't-lift basin as run3.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep ~200 | ep ~1000 (peak rew) | ep ~2500 | ep ~4500 |
+|---|---|---|---|---|
+| **lift_success** | 0.000 | 0.000 | 0.000 | 0.000 |
+| **in_success_region** | 0.000 | 0.000 | 0.000 | 0.000 |
+| **num_adr_increases** | 0 | 0 | 0 | 0 |
+| rewards (raw) | 6754 | **13870** | 12690 | 12771 |
+| lift_reward (shaped) | 11.2 | 13.8 | 13.9 | 14.1 |
+| hand_object_contact_reward | 6.1 | 6.9 | 3.5 | 4.6 |
+| good_grasp_reward | 1.10 | 1.53 | 0.28 | 1.02 |
+| object_contact_count | 2.0 | 2.3 | 1.2 | 1.5 |
+| hand_to_object_distance (m) | 0.116 | 0.111 | 0.153 | 0.129 |
+| episode_lengths | 306 | 519 | 554 | 529 |
+
+Checkpoints by reward: ep 500 (5413), **ep 1000 (14411 — peak)**, ep 1500 (13256), ep 2000 (12070), ep 2500 (11932), ep 3000 (11938), ep 3500 (10112 — dip), ep 4000 (13016), ep 4500 (12981).
+
+**Observations:**
+1. **Zero lifts across 4800 epochs.** `lift_success = 0.000` and `in_success_region = 0.000` for the entire run. Identical to the run3 touch-don't-lift basin.
+2. **ADR stuck at level 0** for the entire run — curriculum never advanced because `in_success_region < success_for_adr=0.4` was never met. So this isn't even a meaningful "hardware-realistic v2 with curriculum" test — it's failing at ADR 0 (the easiest possible setting).
+3. **Peak-then-decline pattern** at ep 1000 — same regression structure as run3x.1. Between ep 1000 and 2500, `hand_object_contact_reward` dropped 6.9 → 3.5 (-49%) and `good_grasp_reward` dropped 1.5 → 0.28 (-81%). The policy briefly explored grasping at ep 1000 then *abandoned* it because farming the shaped `lift_reward` (~14/step) without committing to grasping pays better than risking a failed grasp.
+4. **`lift_reward ≈ 14` despite zero lifts** — the shaped distance-from-table term fires from micro-displacement / vibration without actual lifting. Same exploit closed by `good_grasp_mask` gating during run3, but that fix isn't in the 32a8924 baseline code.
+5. **Replay of `ep_1000_rew_14411.823.pth`** (highest-reward checkpoint) confirmed visually: same behavior as run3 era — hand approaches, fingers contact, thumb buckles or fails to close, no lift.
+
+**Implication — decision rule trigger from earlier in this log fired:**
+> "v2 won't lift even at 32a8924-exact config → narrowed to v2-specific actuator/physics interaction."
+
+Accumulated config drift across run3 was **not** the cause. The original policy-12 baseline state itself can't be retrained to lift on current IsaacLab v2.2.1 + current physx state. Combined with run4b (v1 reached ADR 13 on same stack), this rules out below-the-repo system drift AND in-repo config drift as primary causes — narrows decisively to **v2-specific actuator/physics interaction** with the current Isaac Sim state.
+
+The historical 79.1% policy 12 result is either a fluke run that benefitted from random init luck, or required an Isaac Sim / IsaacLab / physx state that no longer exists.
+
+**v1 ↔ v2 diff analysis (post-failure, 2026-05-20):**
+
+Diffing the test repo (v2/32a8924) against the main repo (v1, currently at ADR 13) surfaces exactly **5 training-relevant differences**:
+
+| # | Surface | v1 (main, trains) | v2/32a8924 (test, fails) | Priority |
+|---|---|---|---|---|
+| 1 | `arm_joint_init` EventTerm | absent | ±0.2 rad on `fr3_joint.*` every reset | HIGH |
+| 2 | thumb_rot starting vel limit | 10.0 rad/s (573 deg/s) | **0.2618 rad/s (15 deg/s)** | **VERY HIGH** |
+| 3 | arm 5-7 starting effort | 50.0 Nm | **20.0 Nm** (hardware spec) | MEDIUM |
+| 4 | arm 1-4 starting effort | 100.0 Nm | 90.0 Nm | LOW |
+| 5 | Finger spawn noise zeroing | absent — noise on all 19 joints | finger noise zeroed (arm-only) | LOW (counter-direction) |
+
+All four curriculum *endpoints* are identical between v1 and v2 — the differences are entirely in the **starting state** of the actuator curriculum. So v2 trains in a much harder regime from epoch 0 (38× tighter thumb_rot velocity, 2.5× tighter wrist effort) and the curriculum has narrower headroom to ramp down from.
+
+Bisection plan as run5a-5d: re-introduce each v2 change on top of v1's config one at a time. Prime suspect is **thumb_rot starting velocity limit** (run5a) — 15 deg/s from epoch 0 may be too tight for the policy to learn grasp timing, since v1 trains with a 38× faster thumb throughout.
+
+### run5a — double thumb_rot starting velocity limit (2026-05-20)
+
+**Motivation:** Isolate whether the 15 deg/s thumb_rot starting velocity floor is what blocks grasping in v2 (run4c's failure mode). Double the starting value from 0.2618 → 0.5236 rad/s (~15 → ~30 deg/s). Keep the endpoint at 0.1396 rad/s (8 deg/s, hardware-realistic) so the curriculum still terminates at the same hardware target — only the *headroom during early learning* changes. Still **38× tighter than v1's 10 rad/s starting value**, so this is the most conservative possible bisection step (a single-knob increase, not a full revert to v1).
+
+**Configuration delta from run4c:**
+- `thumb_rot_vel_limit`: (0.2618, 0.1396) → **(0.5236, 0.1396)** ([env_cfg.py:937](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+- Everything else identical to run4c / 32a8924 baseline (arm_joint_init EventTerm still active, arm 5-7 effort still 20 Nm start, all reward weights unchanged, all other ADR ranges unchanged).
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024, visdex_selected — identical to run4c.
+
+**Train command:**
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` > 0.05 by ep 2000 → 15 deg/s starting floor was the blocker. Can then tighten back toward 15 deg/s start incrementally once learning is established (run5a.1 with start=0.3927 = ~22 deg/s, run5a.2 with start=0.2618 = 15 deg/s).
+- Lift peaks then declines (run4c pattern) → thumb headroom alone is insufficient; reward shape also pulls toward camp-don't-lift. Compare contact/good_grasp peak heights to run4c's 6.9/1.5.
+- Still flat-zero lift through ep 4000+ → thumb_rot is **not** the structural cause. Revert to (0.2618, 0.1396), then run5b: remove `arm_joint_init` EventTerm.
+
+**Run directory:** *(launched on test repo GPU 0, terminated early at ep ~1000)*
+
+**Result (ep 1000, terminated early, 2026-05-20):** `lift_success = 0.000`. Identical trajectory to run4c at the same epoch — flat-zero lifting, no early sign of grasp-timing emerging despite 30 deg/s thumb headroom. Did not reach the 2000-epoch decision point per the rule above. Inconclusive on whether thumb_rot is the structural cause (decision rule required ep 4000+ of flat-zero to definitively rule it out), but the absence of any positive signal at ep 1000 (run4c's contact_reward peak epoch) is a discouraging early indicator. User chose to switch tracks rather than wait — moving to an environment-isolation test (run4d) to rule out test-repo / dextrah_test env as the cause before continuing the actuator bisection.
+
+### run4d — replicate run4a (4fe7cb7) in main repo + dextrah_clean env (2026-05-20)
+
+**Motivation:** run4a (test repo, dextrah_test env, 4fe7cb7 state) and run4c (test repo, dextrah_test env, 32a8924 state) both failed to lift. run5a (test repo, doubled thumb velocity) shows no early grasping at ep 1000 either. Before continuing the v2 actuator bisection, isolate one more environmental variable: **does the same v2/4fe7cb7 config train differently when run from the main repo with the dextrah_clean env (the env that just trained v1 to ADR 13)?** If main+dextrah_clean also fails at 4fe7cb7 → repo/env can be ruled out as the cause. If it succeeds → something in the test repo install or dextrah_test env is contaminating training.
+
+This is a pure environment-swap experiment with config controlled (same commit as run4a, same train hyperparams as run4c).
+
+**Setup:**
+- Repo: **main** (`/home/carsten.oertel/code/tg2_dexman_isaac_co`)
+- Branch state: detached HEAD at `4fe7cb7` (Teacher v2 runs 2a-2g wrap-up commit)
+- Env: **`dextrah_clean`** (`/home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python`)
+- GPU: 0 (free)
+- Seed: 42, num_envs 1024, visdex_selected — matches run4a/4c/5a for direct comparability
+
+**Commands:**
+
+```bash
+# 1. Switch to main repo and checkout the last working 2a-g commit
+cd /home/carsten.oertel/code/tg2_dexman_isaac_co
+git checkout 4fe7cb7
+# (detached HEAD warning is expected and fine)
+
+# 2. Launch training from main repo with dextrah_clean env
+cd /home/carsten.oertel/code/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_clean/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- Same failure pattern (0 lift through ep 2000+, peak-then-decline reward) → repo + env confirmed irrelevant; v2 actuator/physics interaction is the root cause regardless of which env/repo runs it. Resume bisection (run5b: remove arm_joint_init EventTerm).
+- Materially different result (any lift signal, or different reward trajectory) → test repo or dextrah_test env had a contaminating factor; investigate dextrah_test pip freeze vs dextrah_clean, USD copy state, asset symlinks, and other test-repo-specific state.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-20_11-54-27/` (main repo, GPU 0, dextrah_clean env)
+
+**Result (ep 2500, 2026-05-20): FAILURE, but different failure mode than run4c.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 500 | ep 1000 | ep 1500 | ep 2000 | ep 2500 | PEAK |
+|---|---|---|---|---|---|---|
+| **lift_success** | 0.002 | 0.000 | 0.000 | 0.000 | 0.000 | **0.008 @ ep 474** |
+| in_success_region | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.003 @ ep 479 |
+| rewards (raw) | 7418 | 7870 | 6924 | 7158 | 6898 | 9334 @ ep 996 |
+| good_grasp_reward | 0.54 | 0.28 | 0.25 | 0.12 | 0.13 | **1.11 @ ep 351** |
+| hand_object_contact_reward | 4.77 | 6.47 | 5.52 | 5.36 | 4.87 | 7.43 @ ep 942 |
+| in_grip_alignment_reward | -1.00 | -1.12 | -1.12 | -1.24 | **-1.34** | -0.15 @ ep 62 |
+| finger_curl_reg | -1.08 | -1.55 | -1.51 | -1.53 | -1.55 | -0.01 @ ep 75 |
+| hand_to_object_distance (m) | 0.148 | 0.133 | 0.151 | 0.152 | 0.146 | — |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 | — |
+| episode_lengths | 500 | 456 | 444 | 469 | 472 | 599 @ ep 38 |
+
+**Observations:**
+1. **Brief lifting signal emerged then collapsed.** Peak `lift_success = 0.008 (0.8%) at ep 474`; `good_grasp_reward = 1.11 at ep 351`. By ep 1000 both had collapsed to ~0 and stayed there through ep 2500.
+2. **Reward landscape peaked at ep 996** (9334 raw) then declined to 6898 at ep 2500. Not climbing anymore.
+3. **`in_grip_alignment_reward` worsened over time** (-1.00 → -1.34): the object is *increasingly not in the grip zone*. The policy learned to keep fingers near the object without putting it between them — same "camp at contact" failure pattern as run4c, just shifted later.
+4. **`hand_object_contact_reward` stays 4.8-6.5**: policy makes contact but doesn't grasp. Touch-don't-lift basin fully locked in.
+5. **ADR stuck at level 0** through 2500 epochs — same as run4c, run5a.
+
+**Comparison to run4c:**
+
+| Signal | run4c (test, 32a8924) | run4d (main, 4fe7cb7) |
+|---|---|---|
+| Lift signal ever > 0? | NO (flat zero entire 4800 ep) | **YES, briefly (peak 0.8% @ ep 474)** |
+| Peak reward | 14411 @ ep 1000 | 9334 @ ep 996 |
+| Failure mode | never grasps | grasps briefly then abandons |
+| Env / repo | test, dextrah_test | main, dextrah_clean |
+| Config | 32a8924 | 4fe7cb7 |
+
+**Decision rule triggered:**
+> "Same failure pattern (0 lift through ep 2000+, peak-then-decline reward) → repo + env confirmed irrelevant; v2 actuator/physics interaction is the root cause regardless of which env/repo runs it."
+
+Conclusions reinforced:
+- Below-the-repo stack ruled out (v1 trains)
+- Config drift across run3 ruled out (both 32a8924 and 4fe7cb7 fail)
+- **Now also ruled out: repo state (test vs main) and conda env (dextrah_test vs dextrah_clean)** — same v2 config fails identically in either.
+- Brief lifting in run4d but not run4c suggests the 4fe7cb7 reward shape (steeper `lift_sharpness=4.0`, higher `success_bonus=20`) does *initially* steer the policy toward lifting better than 32a8924's shape — but neither holds the basin past ep ~1000.
+
+Remaining surface: the 5 v2-only differences from v1's working config (arm_joint_init EventTerm, thumb_rot starting velocity, arm 5-7/1-4 starting effort, finger spawn noise zeroing). Bisection should now isolate which of these breaks v2 on the current stack.
+
+### run4e — 32a8924 config + main repo + dextrah_clean env (2026-05-20)
+
+**Motivation:** Complete the 2×2 grid (config × env/repo) before continuing the actuator bisection:
+
+| Config \ env+repo | test + dextrah_test | main + dextrah_clean |
+|---|---|---|
+| **32a8924** | run4c (failed: flat zero) | **run4e (this run)** |
+| **4fe7cb7** | run4a (failed: flat zero) | run4d (failed: brief 0.8% lift, collapse) |
+
+run4e checks the only remaining unfilled cell: **does 32a8924 also produce a brief lifting signal when run in the env that v1 succeeded in?** If yes, it would mean repo/env *does* contribute to the early exploration phase (just not enough to break the basin). If no, the 32a8924 config is structurally worse than 4fe7cb7 for lifting regardless of env.
+
+This is also the closest practical reproduction of "policy 12's actual training conditions" given the lack of an Apr 6 commit: 32a8924 is the only env_cfg state committed before policy 12 trained, and dextrah_clean is the env that just trained v1 to ADR 13.
+
+**Setup:**
+- Repo: **main** (`/home/carsten.oertel/code/tg2_dexman_isaac_co`)
+- Branch state: detached HEAD at `32a8924` (Apr 3, 2026 — Teacher v2 setup commit)
+- Env: **`dextrah_clean`** (conda-activated, not direct-binary path)
+- GPU: 0
+- Seed: 42, num_envs 1024, visdex_selected — matches run4a/4c/4d/5a
+
+**Commands:**
+
+```bash
+cd /home/carsten.oertel/code/tg2_dexman_isaac_co
+git checkout 32a8924
+conda activate dextrah_clean
+cd dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- Same flat-zero lift through ep 2000+ as run4c → 32a8924 config is structurally non-trainable on current stack regardless of repo/env. Both Apr 6 bracketing states fail; policy-12 reproduction is impossible from current dextrah_lab state. Confirms cause is v2-specific actuator/randomization deltas. Move to **run5b: remove arm_joint_init EventTerm**.
+- Brief lift signal like run4d → 32a8924 is salvageable in dextrah_clean; run4c's flat-zero was contaminated by test repo / dextrah_test specifics. Worth investigating what's different about that env (pip freeze diff, asset copy state, etc).
+- Sustained climbing past run4d's 0.8% peak → policy 12 was actually trained at this 32a8924 config (Apr 3 commit) and the wrap-up 4fe7cb7 drift introduced the regression. Then the fix is to revert env_cfg to 32a8924 and continue distillation.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-20_13-39-06/` (main repo, GPU 0, dextrah_clean env)
+
+**Result (ep 579, terminated early, 2026-05-20): brief lift signal — DIFFERENT failure mode than run4c.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 250 | ep 500 | PEAK |
+|---|---|---|---|
+| **lift_success** | 0.000 | 0.001 | **0.005 @ ep 147** |
+| in_success_region | 0.000 | 0.000 | 0.000 |
+| rewards (raw) | 8317 | 12434 | 13991 @ ep 552 |
+| lift_reward | 12.77 | 13.49 | 14.12 @ ep 430 |
+| hand_object_contact_reward | 6.99 | 7.68 | 8.10 @ ep 531 |
+| good_grasp_reward | 1.21 | 1.53 | **1.75 @ ep 531** |
+| object_contact_count | 2.33 | 2.56 | 2.70 @ ep 531 |
+| hand_to_object_distance (m) | 0.110 | 0.109 | — |
+| finger_curl_reg | -2.15 | -2.27 | -0.19 @ ep 78 |
+| num_adr_increases | 0 | 0 | 0 |
+| episode_lengths | 332 | 458 | 520 |
+
+**Observations:**
+1. **Brief lift signal emerged early**, peaking at `lift_success = 0.005` at ep 147, then collapsing to ~0 by ep 250. Same pattern as run4d's 0.8% peak but smaller and earlier.
+2. **Rewards still climbing when terminated** (8317 → 12434 → 13991 across the run) — unlike run4d which peaked at ep 996 then declined. Hard to say if run4e would have followed the same collapse pattern past ep 1000 because it didn't reach that point.
+3. **Good_grasp and contact rewards climbing** through ep 531 — policy was actively learning to engage the object. The early lift collapse pattern is similar to run4d but the larger reward landscape hadn't peaked yet.
+4. **ADR stuck at 0** through 579 ep — same as every v2 retrain to date.
+
+**Decision rule outcome — second branch fires (with caveat):**
+
+> "Brief lift signal like run4d → 32a8924 is salvageable in dextrah_clean; run4c's flat-zero was contaminated by test repo / dextrah_test specifics."
+
+Comparison to run4c definitively confirms env/repo affects the early exploration phase:
+
+| | run4c (test, 32a8924) | run4e (main, 32a8924) |
+|---|---|---|
+| Lift signal ever > 0? | NO (flat zero, 4800 ep) | **YES, briefly (0.5% @ ep 147)** |
+| Peak reward through ep 500 | ~9300 @ ep 1000 | 12434 @ ep 500 (still climbing) |
+| Failure mode | never grasps | grasps briefly then abandons |
+
+**The env/repo difference is real but does not break the basin.** Same config (32a8924), same v2-specific actuator deltas, different early exploration outcome — but neither reaches sustainable lifting. This is consistent with the run4d pattern: the policy can briefly find lifting, but the touch-don't-lift basin pulls it back. Env/repo determines *how easily* the policy stumbles into the brief lift exploration window — main+dextrah_clean does it earlier but smaller (0.5% @ ep 147), test+dextrah_test does it later but bigger or not at all.
+
+**Net implication:** Env/repo is a *minor* variable affecting exploration phase, NOT the structural cause of the v2 regression. The bisection should continue focusing on v2-specific actuator/randomization deltas (arm_joint_init, thumb_rot velocity floor, arm 5-7 effort).
+
+**Note:** User terminated this run at ep 579 to free GPU 0 for run5b. Did not reach the 2000-epoch decision point — strictly speaking, can't rule out the third branch (sustained climbing) without continuing past ep 1000. But given run4d's full 2500-epoch trajectory at the related 4fe7cb7 config showed the same touch-don't-lift collapse, it's safe to assume run4e would have followed the same path.
+
+### run5b — remove arm_joint_init EventTerm (2026-05-20, terminated early)
+
+**Motivation:** Isolate whether the ±0.2 rad arm joint randomization at every reset (the qualitatively biggest v2↔v1 difference) is what blocks grasp-timing consolidation in v2.
+
+**Result (ep 580, terminated early):** Did not show meaningful improvement. User stopped early — "didn't seem good." Per the user's qualitative assessment, the policy was not showing emerging lift signal at 580 epochs (vs run4d which had peak `lift_success=0.008` at ep 474). Suggests `arm_joint_init` alone is not the structural cause — removing it didn't unlock lifting. Bisection moves on to reward-magnitude experiments (run5c).
+
+### run5c — 10× lift_weight ADR bump on clean 4fe7cb7 / run2g state (2026-05-20)
+
+**Motivation:** Three actuator-side bisection attempts (run5a doubled thumb_rot, run5b removed arm_joint_init, both implicitly v2 config) failed to unlock lifting. Run4d showed the 4fe7cb7 reward shape *does* briefly steer the policy toward grasping (0.8% lift peak @ ep 474) — but the basin pulls it back into camp-don't-lift by ep 1000. So the issue may be **insufficient reward magnitude**, not actuator constraints: even when grasping briefly emerges, the marginal value of committing to a full lift isn't high enough vs the camping baseline.
+
+Test: **10× multiply the `lift_weight` ADR range from (40., 30.) to (400., 300.)** while keeping everything else at the clean run2g end-state (4fe7cb7 / 990c395). This makes successful lifting ~10× more rewarding than any other shaped term. If the touch-don't-lift basin is fundamentally a reward-shape problem (not an actuator-feasibility problem), this should break out of it by sheer reward gradient.
+
+Historical reference: CLAUDE.md notes that run3l bumped `lift_weight` ADR from (60, 30) → (100, 50) and "made the lift action 60% more rewarding than camping." That ~67% bump didn't break the basin. A 10× bump is qualitatively different — it's testing whether the reward landscape itself is the bottleneck.
+
+**Risks of 10× bump:**
+- Reward saturation — lift_reward alone could dominate total reward enough that the gradient signal from other terms becomes negligible.
+- Unsafe lifts — policy may learn to flick the object up at any cost (even causing OOB / palm flip terminations) because the lift bonus outweighs termination penalties.
+- These are tolerable for this experiment: we want to see if the policy *can* lift at all. If it does, we can then dial the bump back to find a sustainable level.
+
+**Configuration delta from clean 4fe7cb7 / 990c395 baseline:**
+- `lift_weight` ADR: (40., 30.) → **(400., 300.)** ([env_cfg.py:922](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+- Everything else identical to 4fe7cb7 / 990c395 (arm_joint_init EventTerm active, thumb_rot start 15 deg/s, arm 5-7 start 20 Nm, lift_sharpness=4.0, success_bonus=20).
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024, visdex_selected.
+
+**Train command:**
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` climbs past run4d's 0.8% peak and consolidates (>5% by ep 2000) → reward magnitude was the structural bottleneck. Then iterate: dial the bump back in run5c.1 (e.g., 5× = (200, 150)) and run5c.2 (2× = (80, 60)) to find the smallest bump that still works.
+- Brief lift peak then collapse, similar to run4d → 10× helps initial exploration but the basin still pulls back. Means there's an additional structural issue beyond reward magnitude (likely actuator-side).
+- Flat zero lift through ep 2000+ → reward magnitude is *not* the issue. Confirms the cause is in v2's actuator/randomization deltas. Strong indication that bisection should pivot to a *combined* test (multiple v2 changes reverted at once).
+- Unsafe rate explodes (palm flips, OOB) → reward gradient is too strong, policy learning to flick rather than lift. Need to add safety terms or reduce bump.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-20_14-18-57/` (test repo, GPU 0, dextrah_test env)
+
+**Result (ep 1213, 2026-05-20): FAILURE. Reward magnitude confirmed NOT the bottleneck — basin more unstable, not broken.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 50 | ep 200 | ep 300 (peak engagement) | ep 500 | ep 750 (avoidance) | ep 1000 | PEAK |
+|---|---|---|---|---|---|---|---|
+| **lift_success** | 0.000 | 0.001 | 0.000 | 0.000 | 0.000 | 0.000 | **0.002 @ ep 164** |
+| in_success_region | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| rewards (raw) | -745 | 6423 | 16235 | 19561 | **2505** | 23374 | 32221 @ ep 1173 |
+| lift_reward | 0.0 | 30.4 | 36.4 | 27.1 | **5.2** | 50.3 | 55.1 @ ep 1082 |
+| hand_object_contact_reward | 0.0 | 2.94 | 3.80 | 2.20 | **0.53** | 5.35 | 6.01 @ ep 1068 |
+| good_grasp_reward | 0.0 | 0.39 | 0.54 | 0.32 | **0.10** | 1.18 | 1.41 @ ep 1062 |
+| object_contact_count | 0.0 | 0.98 | 1.27 | 0.74 | **0.18** | 1.78 | 2.00 @ ep 1068 |
+| hand_to_object_distance (m) | 0.77 | 0.16 | 0.14 | 0.25 | **0.41** | 0.13 | — |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| episode_lengths | 481 | 186 | 368 | 484 | 470 | 382 | 599 |
+
+User qualitative observation at ep 1200: "0 lift. high contact and bad good_grasp."
+
+**Observations:**
+1. **`lift_success` peaked at 0.002 (0.2%) at ep 164 — *lower* than run4d's 0.8% peak with the same env_cfg minus the 10× bump.** The 10× lift_weight bump did not unlock lifting; if anything, the bigger reward gradient hurt convergence.
+2. **Policy oscillates between engagement and avoidance phases:** approach learning by ep 200 (contact_count 0.98) → engagement peak ep 300 (contact 1.27, lift_reward 36) → **avoidance regression ep 500-750** (contact dropped to 0.18, hand walked 0.27m away from object) → re-engagement ep 1000+ (contact back to 1.78). The 10× reward gradient is making policy updates more violent, causing larger swings in/out of engagement basin.
+3. **`lift_reward` saturates at the 10× camp residual (~50/step)** at engagement peaks — exactly the math: 400 · exp(-4 · 0.5) ≈ 54 for object-at-table-touch. Policy is fully exploiting the shaped lift_reward without ever actually lifting.
+4. **`good_grasp_reward` at peak = 1.41** (vs weight=6.0 cfg ceiling). Moderate but not high — user's "bad good_grasp" observation is consistent with this.
+5. **ADR stuck at 0** through 1213 ep — same as every other v2 retrain on this stack.
+
+**Decision rule outcome — second branch fires:**
+
+> "Brief lift peak then collapse, similar to run4d → 10× helps initial exploration but the basin still pulls back. Means there's an additional structural issue beyond reward magnitude (likely actuator-side)."
+
+Worse than that branch: the 10× bump didn't help initial exploration (peak 0.2% vs run4d's 0.8%) AND introduced new oscillation pathology. Reward magnitude is now decisively ruled out as the bottleneck. Strong evidence that the structural cause lies in v2's actuator/randomization deltas.
+
+**Comparison against all v2 retrains to date:**
+
+| Run | Config | Env | Peak lift_success | Pattern |
+|---|---|---|---|---|
+| run4c | 32a8924 | test+dextrah_test | 0.000 | flat zero entire 4800 ep |
+| run4e | 32a8924 | main+dextrah_clean | 0.005 @ ep 147 | brief peak, terminated at 579 |
+| run4d | 4fe7cb7 | main+dextrah_clean | 0.008 @ ep 474 | peak then decline |
+| run5a | 32a8924 + thumb 2× | test+dextrah_test | 0 @ ep 1000 | flat zero, terminated |
+| run5b | 4fe7cb7 − arm_joint_init | test+dextrah_test | 0 @ ep 580 | no improvement, terminated |
+| **run5c** | **4fe7cb7 + lift 10×** | **test+dextrah_test** | **0.002 @ ep 164** | **oscillation, basin worse** |
+
+Every single-knob revert has now been tested. None unlock lifting. **The next experiment should be a multi-knob test** — revert several v2 deltas simultaneously to v1's values. Candidates: remove `arm_joint_init` + restore thumb_rot start to v1's 10.0 rad/s + restore arm 5-7 effort to v1's 50 Nm. If that lifts, narrow down which combination matters. If that *also* fails, the cause is below the config level (LSTM hidden state interaction with these constraints? early termination cascade?).
+
+
+
+
