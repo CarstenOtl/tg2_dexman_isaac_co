@@ -3443,6 +3443,121 @@ Except modulated: lift_reward isn't near zero (9 is significant), but lift_succe
 
 **Asset-level finding (separate from main investigation):** user provided AgileHand hardware spec: finger velocities = 360 deg/s = 6.283 rad/s. Current asset value of 8.0 rad/s is 27% over spec. CLAUDE.md's previous "Use 2.0 rad/s" recommendation (based on assumed 30-60 deg/s hardware) was wrong — corrected in commit `17b1677`. Asset velocity_limit_sim updated to 6.283 rad/s for the next experiment (run6d).
 
+### run6d — multi-knob: lift dominance + asset velocity fix (2026-05-20)
+
+**Motivation:** Run6c.1 confirmed the gate works mechanically but the policy farms a buckled-thumb exploit because `lift_reward ≈ good_grasp_reward ≈ 9/step` — the two signals are functionally identical when the gate fires, so there's no marginal incentive to actually lift vs maintain a static "grip". Per user analysis, the fix needs to (a) make lift_reward MUCH more dominant than the competing signals, (b) concentrate lift gradient near the goal (steeper sharpness), and (c) match asset finger velocities to hardware spec.
+
+**5-knob change** (by user direction, multi-knob test):
+
+1. **Asset finger velocity_limit_sim 8.0 → 6.283 rad/s** (360 deg/s, AgileHand hardware spec) — applies to `mcp_pitch`, `mcp_yaw`, `pip` joint groups. Sim2real accuracy fix + may reduce the buckled-thumb fling-back artifact slightly.
+2. **`hand_object_contact_weight` 3.0 → 1.5** — halve contact's competing signal. Contact_reward at run6c.1 peaks was ~7/step; this cuts it to ~3.5/step.
+3. **`good_grasp_weight` 15.0 → 6.0** — back to ~run2g original value. Cuts good_grasp peak from ~10/step to ~4/step.
+4. **`lift_sharpness` 2.0 → 4.0** — restore 4fe7cb7 value. Steeper gradient near goal, less reward at table. At weight=60 + sharpness=4: camp residual at table ≈ 8/step, max at goal ≈ 60/step. Marginal lift gain across 50cm = ~52/step (vs run6c.1's ~4/step over 13cm).
+5. **`lift_weight` ADR (40., 30.) → (60., 30.)** — 1.5× starting bump per user direction. End unchanged.
+
+**Reward landscape comparison at ADR 0, "engaging" state (gate firing):**
+
+| Component | run6c.1 (gate, sharp=2, w=40, grasp=15, contact=3) | run6d (gate, sharp=4, w=60, grasp=6, contact=1.5) |
+|---|---|---|
+| good_grasp_reward (when gate fires) | 15 | **6** (-60%) |
+| contact_reward (5 sensors max) | 15 (5×3) | **7.5** (-50%) |
+| lift_reward at table (h≈0) | 40·exp(-1) ≈ 14.7 | **60·exp(-2) ≈ 8.1** (-45%) |
+| lift_reward at mid (h=0.25m) | 40·exp(-0.5) ≈ 24.3 | **60·exp(-1) ≈ 22.1** (similar) |
+| lift_reward at goal (h=0.5m) | 40 | **60** (+50%) |
+| Δlift (table → goal) | 25.3 | **51.9** (+105%) |
+
+**Net effect:** lift gradient across the full trajectory more than doubles, while competing signals (good_grasp + contact) drop by ~50%. The policy can no longer farm buckled-thumb-grip for big reward — it has to actually lift to get the dominant signal.
+
+**Net diff vs 990c395 baseline (run2g):**
+- env.py: 1-line good_grasp_mask gate (from run6c)
+- env_cfg.py: 4 lines (contact_weight, good_grasp_weight, lift_sharpness, lift_weight ADR)
+- fr3_tekken_left.py: 3 lines (mcp_pitch, mcp_yaw, pip velocity_limit_sim)
+
+**5-knob test by user direction.** Skill anti-pattern warning acknowledged — if this works, we won't know which knob is responsible. If it doesn't work, we'll need to bisect down.
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024 headless, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` climbs past 0.05 sustained by ep 1500 AND `in_success_region > 0` AND ADR finally advances → 5-knob combination broke the basin. Let it cook; subsequent runs can bisect which knobs matter.
+- `lift_reward` dominates good_grasp by >2× consistently (per the math expected — lift should reach 20+ at engaged state while good_grasp caps at 6) AND lift_success climbs slowly → reward shape is correct, just needs more training time.
+- Same buckled-thumb pattern (good_grasp=6 firing constantly, lift_reward stuck low) → policy STILL exploits the gate with crushed grip. Means even with reduced grasp incentive, the local optimum is buckled-thumb. Pivot to a structural fix on the mask itself (require specific fingers).
+- Catastrophic collapse / negative rewards → 5-knob change destabilized something. Bisect: revert good_grasp+contact reductions first (run6d.1 with only lift bump + sharpness fix).
+- Brief lift peak >1% then collapse → reward shape works for initial exploration but basin re-emerges. Means the gate has a fundamental issue beyond reward magnitude.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-20_23-20-46/` (test repo, GPU 0, dextrah_test env, 1024 envs headless)
+
+**Result (ep 1671, stopped by user at ~1.6k, 2026-05-21): Dominance fix partially worked but basin still pulls back. Peak lift 1.3%, same collapse-recover pattern.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 100 | ep 250 | ep 500 | ep 750 (CRASH) | ep 1000 | ep 1250 | ep 1500 | PEAK |
+|---|---|---|---|---|---|---|---|---|
+| **lift_success** | 0.000 | 0.000 | 0.001 | 0.000 | 0.000 | 0.000 | 0.000 | **0.013 @ ep 369** |
+| in_success_region | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.001 @ ep 426 |
+| rewards (raw) | 4243 | 7168 | 8986 | **879** | 9616 | 10306 | 9813 | 11415 @ ep 1237 |
+| **lift_reward** | 4.40 | 5.75 | 5.67 | 0.59 | 6.71 | 6.49 | 6.66 | 7.67 |
+| **good_grasp_reward** | 2.95 | 3.65 | 3.50 | 0.37 | 4.17 | 4.02 | 4.10 | 4.78 |
+| hand_object_contact_reward | 3.66 | 3.71 | 3.14 | 0.30 | 3.67 | 3.56 | 3.50 | 4.17 |
+| object_to_goal_reward | 3.10 | 3.12 | 2.90 | 0.34 | 3.39 | 3.39 | 3.39 | 3.53 |
+| object_contact_count | 2.44 | 2.47 | 2.09 | 0.20 | 2.45 | 2.37 | 2.34 | 2.78 |
+| hand_to_object_distance (m) | 0.100 | 0.124 | 0.135 | **0.274** | 0.106 | 0.110 | 0.118 | — |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| episode_lengths | 281 | 407 | 518 | 547 | 485 | 524 | 507 | 587 |
+
+**Observations:**
+
+1. **Weight cuts took effect as designed.** good_grasp_reward dropped to ~4/step (from run6c.1's ~9) ✓. contact_reward dropped to ~3.5/step (from ~7) ✓. The reward landscape was reshaped as intended.
+2. **lift_reward / good_grasp ratio improved to 1.63×** (lift 6.7 / good_grasp 4.1). Better than run6c.1's ~1:1, but not the >2× dominance the math predicted (which assumed lifting to mid-trajectory). Suggests the policy is still spending most of its time at table altitude where lift_reward = ~8 ≈ good_grasp_reward × 1.3.
+3. **Peak lift_success 0.013 (1.3%) at ep 369** — higher than run6c.1's 0.3% peak, comparable to run6b's 1.0%. The dominance fix produced *some* additional exploration but didn't break the basin.
+4. **Catastrophic collapse at ep 750.** Rewards 8986 → 879 (-90%). All engagement metrics dropped to zero (contact 3.14 → 0.30, good_grasp 3.50 → 0.37). Hand walked away (0.135m → 0.274m). Same pattern as run6a's run5c-era collapse. Recovered by ep 1000 but lift_success never returned.
+5. **ADR stuck at 0** through 1.6k epochs.
+
+**Decision rule outcome — first branch did NOT fire (no >0.05 sustained), second branch did NOT fully fire (ratio not >2×), fifth branch fired:** "Brief lift peak >1% then collapse → reward shape works for initial exploration but basin re-emerges. Means the gate has a fundamental issue beyond reward magnitude."
+
+**Summary of all v2 retrains' lift peaks:**
+
+| Run | Config summary | Peak lift_success | Pattern |
+|---|---|---|---|
+| run4c | 32a8924 baseline | 0.000 | flat zero entire 4800 ep |
+| run4d | 4fe7cb7 main+clean | 0.008 | peak then decline |
+| run4e | 32a8924 main+clean | 0.005 | brief peak terminated |
+| run5a | thumb 2× | 0.000 | flat |
+| run5b | rm arm_joint_init | ~0 | terminated 580 ep |
+| run5c | lift 10× | 0.002 | oscillation, no help |
+| run6a | grasp 5× | **0.016** | catastrophic collapse |
+| run6a.1 | grasp 3× | 0.004 | mild collapse |
+| run6b | sharp 2 + grasp 5× | 0.010 | partial-lift basin, no collapse |
+| run6c.1 | + lift gate | 0.003 | buckled-thumb exploit |
+| **run6d** | **5-knob: lift-dominant + asset fix** | **0.013** | **brief peak + collapse + flat** |
+
+**No v2 retrain has exceeded 1.6% lift_success peak. The basin appears robust to ANY combination of reward magnitudes + gating + sharpness + asset velocity tweaks tested so far.** Strong evidence that the issue lies at a level deeper than reward shape — possibly the gate definition (good_grasp_mask too lenient with the buckled-thumb pose), or v2 actuator constraints making physical lifting infeasible regardless of reward signal.
+
+**Path forward suggestions:**
+- **run6e (option 4 from earlier):** tighten `good_grasp_mask` itself to require specific fingers (thumb + index + middle) or `finger_count >= 3 & thumb_contact`. Prevents the buckled-thumb exploit by making the mask geometrically demanding.
+- **run6f (option 1 from earlier):** verify torque isn't the cap — bump arm 5-7 effort start from 20 to 50 Nm (v1 value) while keeping run6d reward shape. If lift_success jumps, torque was the constraint.
+- **Alternative:** explicitly visualize the failure — replay ep_500 (closest to lift peak window) AND ep_1500 (best reward) to see what's qualitatively different between the brief-lift state and the recovered-engagement state.
+
 
 
 

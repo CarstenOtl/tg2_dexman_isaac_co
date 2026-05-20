@@ -743,8 +743,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
 
     # phase 2: contact
-    hand_object_contact_weight = 3.0   # 8→4→3: contact still dominating lift
-    good_grasp_weight = 15.0           # run6b (2026-05-20): match run6a's 5x bump (3→15) — the value that produced the 1.6% lift peak. Stacked with lift_sharpness 4→2 to test if the flatter lift gradient prevents the collapse pattern that broke run6a at sharpness=4.
+    hand_object_contact_weight = 1.5   # run6d (2026-05-20): 3→1.5, halved to reduce contact's competing pull (contact_reward was ~7/step competing with lift_reward 9). Want lift to dominate.
+    good_grasp_weight = 6.0            # run6d (2026-05-20): 15→6, dial back to ~run2g original value (CLAUDE.md notes run2g had 6.0). Reduces good_grasp's competing pull (was 8.5/step at run6c.1, exceeding lift). Combined with lift_weight bump + sharpness 4, want lift to be the dominant signal.
     finger_curl_reg_weight = -0.2    # reduced to allow ADR to widen; was -0.5
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl
@@ -753,7 +753,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
     success_bonus_weight = 20.0  # bumped from 10: stronger incentive to close last few cm to goal
-    lift_sharpness = 2.0 #run6b (2026-05-20): 4→2, restore run2a baseline value (drifted to 4 within run-2a-g per CLAUDE.md). At sharpness=2 the lift gradient is flatter/more uniform from table to goal — d(reward)/dh stays meaningful across the full lift trajectory instead of saturating in the first 10cm. Tests whether a sustained vertical gradient unsticks the camp-at-table equilibrium that's been the v2 retrain failure mode.
+    lift_sharpness = 4.0 #run6d (2026-05-20): 2→4 back to 4fe7cb7 value. With reduced contact/good_grasp + bumped lift_weight + gate active, want the lift gradient to be STEEPER near the goal — sharpness=4 reduces camp residual at table (~14→8 with weight 40, scales with new weight 60) and concentrates lift_reward toward the goal region. Steeper gradient pulls policy toward actual goal altitude vs run6b's flat-gradient camp-at-21cm equilibrium.
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
@@ -919,7 +919,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "reward_weights": {
             "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
-            "lift_weight": (40., 30.),  # slower decay so lift signal stays strong while goal sharpness ramps up
+            "lift_weight": (60., 30.),  # run6d (2026-05-20): start 40→60 (1.5x bump per user direction). End unchanged at 30. With the good_grasp gate (env.py) + sharpness 4 + reduced contact/good_grasp, want lift to be the dominant single signal at training start. Historically run3l used (60, 30) too.
             "finger_curl_reg": (-0.3, -0.8),  # reduced: previous (-0.5,-1.2) penalized grasps too aggressively at higher ADR
         },
         "pd_targets": {

@@ -103,21 +103,21 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
         "mcp_pitch": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_pitch"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=8.0,
+            velocity_limit_sim=6.283,  # 360 deg/s — AgileHand hardware spec (was 8.0 = ~458 deg/s, 27% over spec)
             stiffness=10.0,
             damping=6.0,              # 3→6: more damping, smoother contact
         ),
         "mcp_yaw": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_yaw"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=8.0,
+            velocity_limit_sim=6.283,  # 360 deg/s — AgileHand hardware spec (was 8.0 = ~458 deg/s, 27% over spec)
             stiffness=10.0,
             damping=6.0,              # 3→6
         ),
         "pip": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_pip"],
             effort_limit_sim=2.0,
-            velocity_limit_sim=8.0,
+            velocity_limit_sim=6.283,  # 360 deg/s — AgileHand hardware spec (was 8.0 = ~458 deg/s, 27% over spec)
             stiffness=10.0,
             damping=6.0,              # 3→6
         ),
