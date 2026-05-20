@@ -3558,6 +3558,96 @@ TensorBoard at iter sample points:
 - **run6f (option 1 from earlier):** verify torque isn't the cap — bump arm 5-7 effort start from 20 to 50 Nm (v1 value) while keeping run6d reward shape. If lift_success jumps, torque was the constraint.
 - **Alternative:** explicitly visualize the failure — replay ep_500 (closest to lift peak window) AND ep_1500 (best reward) to see what's qualitatively different between the brief-lift state and the recovered-engagement state.
 
+### run6e — symmetric thumb_rot init + tighter hardware-realistic thumb velocity (2026-05-21)
+
+**Motivation:** User livestream observation during run6d revealed the policy gravitates to thumb_rot ≈ -30° (joint min, thumb pointing AWAY from other fingers). Investigation showed the reset state was asymmetric and biased toward the joint min:
+
+- `init_state.joint_pos["revolute_thumb_rot"] = -0.3491` rad = **-20°** (only 10° clear of -30° hard stop)
+- `thumb_rot_init` EventTerm `position_range = (0.0, 0.3491)` = offset 0° to +20° (asymmetric, no negative offset)
+- Net reset range: **-20° to 0°** (thumb at reset is ALWAYS in the lower half of its joint range)
+
+Combined with the fact that joint range is `[-30°, +20°]` (50° wide), the policy was being exposed only to thumb positions from "near joint min" to "mid-range" — zero exposure to the upper half where the thumb points toward the other fingers (needed for a real outside-wrap grasp).
+
+Also: user provided updated hardware spec — real `revolute_thumb_rot` rotational speed is **2 deg/s** (much tighter than the 8 deg/s used in the previous curriculum endpoint).
+
+**4-knob change:**
+
+1. **`init_state.joint_pos["revolute_thumb_rot"]`**: -0.3491 → **0.0** (mid-range). Symmetric default, equal exposure to "thumb toward fingers" and "thumb away" at reset.
+2. **`thumb_rot_init` EventTerm `position_range`**: (0.0, 0.3491) → **(0.0, 0.0)** (no randomization at ADR 0). Lets the policy learn a clean default first.
+3. **New `adr_cfg_dict["thumb_rot_init"]["position_range"]` = (-0.1745, 0.1745)** — the curriculum target. ADR linearly widens reset randomization from (0, 0) to (-10°, +10°) over `num_increments`. Keeps the joint well clear of both joint limits (-30°, +20°) even at max ADR.
+4. **`adr_custom_cfg_dict["actuator_curriculum"]["thumb_rot_vel_limit"]`**: (0.2618, 0.1396) → **(0.0873, 0.0349)** = 5 deg/s → 2 deg/s. Matches updated hardware spec; tighter than the previous 15→8 deg/s curriculum.
+
+**Hypothesis:** the buckled-thumb / -30° default isn't an inherent policy preference — it's a reset-distribution artifact. With symmetric reset and a clear default at mid-range, the policy should explore the upper half of the thumb_rot range (toward fingers) where a real outside-wrap grasp is geometrically possible. Combined with the tighter hardware velocity (2 deg/s instead of 8), the policy must learn careful timing on thumb closure rather than fast flailing.
+
+**Configuration delta from previous (7fbd1fd / run6d):**
+- env_cfg.py 4 lines (init pos, EventTerm range, new adr_cfg_dict entry, vel curriculum)
+- env.py: unchanged (gate from run6c persists)
+- Asset: unchanged from run6d (finger velocity 6.283 rad/s persists)
+- Reward weights: unchanged from run6d (contact=1.5, good_grasp=6, lift_sharpness=4, lift_weight=(60,30))
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024 headless, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` climbs past 0.05 sustained AND livestream shows thumb wrapping AROUND object (not buckled inward) → centered init was the missing piece. The combined run6d shape + run6e geometry fix unsticks the basin. Let it cook to confirm ADR advances.
+- `lift_success` matches run6d (~1% peak) but livestream shows new thumb geometry → reset bias contributed but isn't the dominant cause. Need to tighten `good_grasp_mask` (require specific fingers) to fully close the exploit.
+- Policy explores upper thumb_rot range early but reverts to buckled at -30° later → the asymmetry was symptomatic, not causal. Pivot to good_grasp_mask tightening.
+- thumb velocity at 2 deg/s causes finger oscillation / PD instability → drop velocity bump (revert to 5 → 4 deg/s) but keep init position fix.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-21_00-32-27/` (test repo, GPU 0, dextrah_test env, 1024 envs headless)
+
+**Result (ep 753, stopped by user at ~750, 2026-05-21): FAILURE. Centered thumb init didn't break the basin. Lower lift signal than run6d, no qualitative breakthrough.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 100 | ep 250 | ep 500 | ep 750 | PEAK |
+|---|---|---|---|---|---|
+| **lift_success** | 0.000 | 0.000 | 0.000 | 0.000 | **0.003 @ ep 249** |
+| in_success_region | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| rewards (raw) | -382 | 3666 | 6968 | 6999 | 7801 @ ep 548 |
+| lift_reward | 0.14 | 2.50 | 4.45 | 4.31 | 5.30 @ ep 531 |
+| good_grasp_reward | 0.13 | 1.63 | 2.78 | 2.69 | 3.33 @ ep 531 |
+| hand_object_contact_reward | 0.25 | 1.61 | 2.30 | 2.34 | 2.71 |
+| object_contact_count | 0.17 | 1.07 | 1.54 | 1.56 | 1.81 |
+| object_to_goal_reward | 0.40 | 1.88 | 2.82 | 2.64 | 3.06 |
+| hand_to_object_distance (m) | 0.365 | 0.142 | 0.120 | 0.132 | — |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 |
+| episode_lengths | 418 | 401 | 506 | 501 | 599 |
+| finger_curl_reg | -0.83 | -1.33 | -1.41 | -1.33 | — |
+
+**Observations:**
+
+1. **Centered thumb init didn't unlock lifting.** Peak `lift_success = 0.003 @ ep 249` — lower than run6d's 1.3% peak. The geometric fix (thumb starting at 0° instead of -20°) helped slightly with approach (hand_to_object reaches 0.12m by ep 500) but didn't translate into actual lifts.
+2. **Lower reward magnitudes overall** (good_grasp 2.78 vs run6d's 4.10, lift_reward 4.45 vs 6.66, contact 2.30 vs 3.50). Likely because the thumb at 5→2 deg/s velocity is *slow* — the policy has less margin to form grasps within episode time. Same shape of reward landscape but lower amplitudes.
+3. **No collapse** (unlike run6d's ep 750 crash) — reward monotonically climbed 3666 → 6968 → 6999. The slower thumb may be preventing the instability/oscillation that caused run6d's avoidance regression.
+4. **ADR stuck at 0** — same as every v2 run.
+
+**Decision rule outcome — second/third branch fires:** "Policy explores upper thumb_rot range early but reverts to buckled at -30° later → the asymmetry was symptomatic, not causal" — except in this run, lift didn't even reach run6d's peak. Suggests centered init alone isn't enough.
+
+**Most likely remaining bottleneck — user's wrist torque hypothesis:**
+
+User raised the FR3 joints 5-7 effort limit (20 Nm at ADR 0) as a candidate constraint. Mechanism: when fingers (especially thumb_rot with 10 Nm capacity) generate gripping torques, the reaction torques on the hand base must be reacted by the wrist. v1 has 50 Nm wrist effort (2.5× headroom); v2 has 20 Nm. If finger reaction loads consume 5-10 Nm of the 20 Nm wrist budget, very little is left for actual lifting + orientation control. Next experiment (run6f) tests this directly.
+
 
 
 

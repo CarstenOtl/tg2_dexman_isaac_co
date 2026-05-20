@@ -116,7 +116,9 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=["revolute_thumb_rot"]),
-            "position_range": (0.0, 0.3491),
+            # run6e (2026-05-21): ADR-curriculurized. Starts at (0, 0) = no randomization,
+            # widens to (-0.1745, +0.1745) = ±10° at max ADR via adr_cfg_dict entry below.
+            "position_range": (0.0, 0.0),
             "velocity_range": (0.0, 0.0),
         },
     )
@@ -268,7 +270,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
                 "fr3_joint5": -0.5236,  # -30.0 degrees
                 "fr3_joint6":  2.9671,  #  170.0 degrees
                 "fr3_joint7":  0.0000,  #  0.0 degrees
-                "revolute_thumb_rot": -0.3491,  # -20 deg (joint min is -30 deg)
+                "revolute_thumb_rot": 0.0,      # run6e (2026-05-21): -20° → 0° (mid-range). Was at -20° (only 10° clear of joint min -30°), causing policy to default near joint min. Centered init gives symmetric exploration toward +20° (toward fingers) and -20° (away).
                 "revolute_thumb_mcp_pitch": 0.0,
                 "revolute_thumb_mcp_yaw": 0.0,
                 "revolute_thumb_pip": 0.0,
@@ -860,6 +862,11 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "stiffness_distribution_params": (0.7, 2.),
             "damping_distribution_params": (0.7, 2.),
         },
+        # run6e (2026-05-21): curriculum on thumb_rot reset randomization.
+        # Starts at (0, 0) from the EventTerm — widens to (-10°, +10°) at max ADR.
+        "thumb_rot_init": {
+            "position_range": (-0.1745, 0.1745),
+        },
         "robot_joint_friction": {
             "friction_distribution_params": (0., 5.),
         },
@@ -930,8 +937,10 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         },
         # Sim2real actuator curriculum — only for params NOT covered by EventTerms
         "actuator_curriculum": {
-            # Thumb rotation velocity limit (rad/s): 0.2618 (15 deg/s) → 0.1396 (8 deg/s)
-            "thumb_rot_vel_limit": (0.2618, 0.1396),
+            # run6e (2026-05-21): thumb_rot velocity matches updated hardware spec
+            # Real hardware: 2 deg/s actual rotation speed. Start at 5 deg/s ADR 0, curriculum
+            # linearly down to 2 deg/s at max ADR. 5 deg/s = 0.0873 rad/s, 2 deg/s = 0.0349 rad/s.
+            "thumb_rot_vel_limit": (0.0873, 0.0349),
             # FR3 arm effort limits (Nm): hardware starting → factory spec
             "arm_14_effort_limit": (90.0, 87.0),
             "arm_57_effort_limit": (20.0, 12.0),
