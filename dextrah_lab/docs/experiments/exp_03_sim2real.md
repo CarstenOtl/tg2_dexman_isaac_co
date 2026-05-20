@@ -3272,6 +3272,101 @@ The flatter sharpness=2 gradient + grasp shaping cleared the camp-at-table basin
 
 **Path forward (run6c):** gate `lift_reward` on `good_grasp_mask` so the policy can only earn lift_reward when a proper thumb+finger grasp is formed. This breaks the "any contact + slight lift = camp residual" exploit at moderate height. The run3-era structural fix per CLAUDE.md, but applied here on top of the run6b reward shape that prevents the collapse pattern.
 
+### run6c — gate lift_reward on good_grasp_mask (env.py edit) (2026-05-20)
+
+**Motivation:** Run6b's failure mode was the partial-lift camp at ~21cm altitude. The policy gets `lift_reward = 13.75/step` from the sharpness=2 gradient just for keeping any sensor touching at moderate altitude, with no incentive to grasp tighter or lift higher. Confirmed by livestream: thumb+ring grip with middle/index curled and not contributing (just brushing the object for `contact_mask=True`).
+
+Apply the run3-era structural fix per CLAUDE.md: **change `lift_reward`'s gate from `contact_mask` (any sensor) to `good_grasp_mask` (thumb + ≥1 finger)**. With this gate, lift_reward fires only when a proper grip is formed. The middle/index brushing the object no longer earns the lift residual — the policy must form a real grasp to get any lift gradient signal at all.
+
+`good_grasp_mask` definition is intentionally left unchanged (`thumb + ≥1 unique finger`). Per user direction: "the policy should find its own optimum" — we're not forcing tripod (thumb+index+middle) specifically, just requiring SOME proper grip rather than incidental contact.
+
+**Hypothesis:** with the gate, the moderate-altitude camp residual disappears (because the policy must actively maintain a grip to keep lift_reward flowing). Combined with run6b's existing partial-lift behavior, this should push the policy from "lift to 21cm with weak contact" → "lift to higher altitudes while maintaining the grip" → eventually reach the goal region.
+
+**Risk:** if the policy currently spends most of its time at "moderate lift with weak contact," gating lift_reward might zero out a large fraction of the reward gradient, potentially destabilizing the policy back into avoidance.
+
+**Configuration delta from previous (12400f2 / run6b):**
+- `env.py` line 2225: `lift_reward = ... * contact_mask` → `... * good_grasp_mask.to(contact_count.dtype)` ([env.py:2226](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env.py))
+- `env_cfg.py`: **unchanged from run6b** (good_grasp_weight=15, lift_sharpness=2 preserved).
+- Net vs 990c395 baseline: env_cfg.py 2-line diff (run6b values) + env.py 1-line gate change.
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, **num_envs 16 livestream mode** (qualitative observation — see if the gate changes grasping/lifting behavior visually). Note per CLAUDE.md: 16 envs × 13 objects ≈ 1.2 envs/object is well below the ≥64-envs-per-object stable-training threshold, so TB data will be noisy and the policy won't converge. Use this run for qualitative livestream debugging only; if behavior looks promising, switch to the 1024-env headless command for actual training.
+
+**Train command (16-env livestream — current launch):**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --task=dextrah_fr3_agilehand --seed 42 --livestream 2 \
+  --num_envs 16 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=256 \
+  agent.params.config.central_value_config.minibatch_size=256 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Headless 1024-env command (for follow-up if livestream looks promising):**
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` climbs past 0.01 sustained AND `in_success_region` starts firing (>0) AND ADR finally moves off 0 → structural fix worked. Camp-at-moderate-height basin broken. Let it cook to confirm goal-region behavior consolidates.
+- `lift_reward` stays around 10-14/step but only when good_grasp is also high (>5/step) → policy correctly couples grasp + lift. Sign of healthy progression even if lift_success peak is still moderate (~1-2%).
+- Lift_reward drops dramatically (e.g. <5/step average) AND policy retreats from object → gate removed too much gradient signal; policy lost the partial-lift behavior. Then revert env.py and try a softer alternative: keep contact_mask gate but ADD a good_grasp multiplier (e.g., `lift_reward *= (0.5 + 0.5 * good_grasp_mask)` for half-reward without grasp, full with).
+- Same partial-lift pattern as run6b (lift_reward ~13 at ~21cm, lift_success 0) → the camp basin isn't gate-related; the lift gradient itself flattens too much past 25cm. Pivot to lift_sharpness=3 (between run6b's 2 and 4fe7cb7's 4).
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-20_21-30-39/` (test repo, GPU 0, dextrah_test env, **16-env livestream**)
+
+**Result (ep 2404, stopped by user at ep 2300, 2026-05-20): INCONCLUSIVE — 16-env training under-resourced; no contact-and-hold behavior emerged.**
+
+TensorBoard at iter sample points (note: 16 envs / 13 objects = ~1.2 envs/object, well below CLAUDE.md's ≥64-envs-per-object stability threshold — data is dominated by gradient noise):
+
+| Signal | ep 200 | ep 500 | ep 1000 | ep 1500 | ep 2000 | ep 2300 | PEAK |
+|---|---|---|---|---|---|---|---|
+| lift_success | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | **0.000 (never lifted)** |
+| in_success_region | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| rewards (raw) | 125 | 242 | 358 | 272 | 51 | 164 | 431 @ ep 693 |
+| lift_reward | 0.17 | 0.34 | 0.25 | 0.05 | 0.02 | 0.15 | 3.08 @ ep 1182 |
+| good_grasp_reward | 0.38 | 0.49 | 0.95 | 0.11 | 0.09 | 0.52 | 4.69 @ ep 1007 |
+| hand_object_contact_reward | 1.00 | 1.03 | 1.24 | 0.25 | 0.42 | 0.98 | 3.38 @ ep 222 |
+| object_contact_count | 0.33 | 0.34 | 0.41 | 0.08 | 0.14 | 0.33 | 1.13 |
+| hand_to_object_distance (m) | 0.214 | 0.214 | 0.176 | 0.210 | 0.254 | 0.237 | — |
+| episode_lengths | 103 | 75 | 84 | 125 | 35 | 44 | 284 |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+**Observations:**
+
+1. **Magnitudes 5-10× lower than run6b (1024 envs).** `lift_reward` peak 3.08 (run6b had 13.75), `good_grasp_reward` peak 4.69 (run6b had 10.25), `rewards` 125-430 (run6b 4450-17184). The policy never developed the partial-lift behavior run6b had.
+2. **Approach incomplete.** `hand_to_object_distance` hovers at 0.18-0.25m vs run6b's 0.14m — the hand doesn't reliably reach the object. With 1.2 envs/object, each object only gets 1-2 envs per batch and the policy gradient is too noisy to consolidate even basic approach.
+3. **Episode lengths short (35-280 steps vs 470-530 in run6b)** — episodes terminating early via early_termination penalty paths (hand_too_far, palm_flip, etc.). The policy can't even sustain engagement long enough to test the gate hypothesis.
+4. **Gate hypothesis NOT tested.** Run6c's data is dominated by the env-count problem, not by the lift_reward gate change. With 16 envs the policy never reaches the state where the gate matters (i.e., proper good_grasp formation that would or wouldn't be paired with lift). Need 1024 envs to actually test the gate.
+
+**Decision rule outcome — none of the branches cleanly fire** because the experiment didn't reach the failure modes the rules describe. The run was under-resourced for multi-object training. Useful primarily as a livestream sanity check: confirmed the gate change doesn't break anything immediately (no NaN, no immediate divergence), but didn't produce learnable signal.
+
+**Next:** run6c.1 — re-launch the EXACT same code (env.py + env_cfg.py unchanged) with **1024 envs headless**, the configuration where run6a/6b actually produced meaningful learning. This will be the real test of whether the lift_reward gate breaks the partial-lift basin from run6b.
+
 
 
 

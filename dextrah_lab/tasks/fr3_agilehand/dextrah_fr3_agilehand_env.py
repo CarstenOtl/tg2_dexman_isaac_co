@@ -2221,8 +2221,13 @@ def compute_rewards(
     finger_curl_reg =\
         finger_curl_reg_weight * finger_curl_dist ** 2
 
-    # Reward for lifting object off table and towards object goal
-    lift_reward = lift_weight * torch.exp(-lift_sharpness * object_vertical_error) * contact_mask
+    # Reward for lifting object off table and towards object goal.
+    # run6c (2026-05-20): gated on good_grasp_mask (thumb + ≥1 finger) instead of contact_mask
+    # (any sensor). Closes the camp-at-moderate-height exploit observed in run6b where the policy
+    # earned lift_reward 13.75/step at ~21cm altitude with only incidental sensor contact, without
+    # forming a proper grasp. With good_grasp gate, lift_reward fires only when a real thumb+finger
+    # grip is held. Run3-era structural fix per CLAUDE.md.
+    lift_reward = lift_weight * torch.exp(-lift_sharpness * object_vertical_error) * good_grasp_mask.to(contact_count.dtype)
 
     # Palm alignment penalty: squared angle (theta**2) from target direction.
     cos_sim = torch.sum(palm_dir * palm_dir_target, dim=-1).clamp(-1.0, 1.0)
