@@ -3367,6 +3367,82 @@ TensorBoard at iter sample points (note: 16 envs / 13 objects = ~1.2 envs/object
 
 **Next:** run6c.1 — re-launch the EXACT same code (env.py + env_cfg.py unchanged) with **1024 envs headless**, the configuration where run6a/6b actually produced meaningful learning. This will be the real test of whether the lift_reward gate breaks the partial-lift basin from run6b.
 
+### run6c.1 — same gate config, scaled to 1024 envs headless (2026-05-20)
+
+**Motivation:** Run6c at 16 envs was inconclusive (under-resourced for 13-object training per CLAUDE.md's ≥64-envs-per-object threshold). The gate-on-good_grasp_mask hypothesis from run6c hasn't been tested yet at a viable env count. Re-launch the same env.py + env_cfg.py state with 1024 envs headless to actually test whether gating lift_reward on good_grasp_mask breaks the partial-lift basin from run6b.
+
+**Configuration delta from previous (976e982 / run6c):**
+- **No code changes.** env.py and env_cfg.py are bit-identical to run6c's committed state.
+- Launch only: `--num_envs 16 --livestream 2` → `--num_envs 1024 --headless`, and minibatch_size 256 → 4096 to match the larger env count.
+- Net vs 990c395 baseline (run2g): same as run6c — 2 lines env_cfg (run6b values: good_grasp=15, lift_sharpness=2) + 1 line env.py gate change.
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024 headless, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule (the real run6c hypothesis test):**
+- `lift_success` climbs past 0.01 sustained AND `in_success_region` starts firing AND ADR moves off 0 → **gate fix broke the partial-lift basin**. The structural fix per CLAUDE.md works on top of the run6b reward shape. Let it cook to confirm goal-region consolidation.
+- `lift_reward` and `good_grasp_reward` climb together (both >5/step) but `lift_success` still stuck at 0 → policy correctly couples grasp + lift but can't physically reach goal altitude. Means actuator constraints (thumb_rot velocity at 15 deg/s start, arm 5-7 effort 20 Nm start) limit lift height. Pivot to actuator bisection on top of this gate.
+- `lift_reward` stays near zero while `good_grasp_reward` climbs → policy grasps but doesn't try to lift (because lift_reward is now rare/conditional, gradient signal weak). Need to add an unconditional "any lift effort" reward term, or relax the gate (e.g., `lift_reward *= 0.3 + 0.7 * good_grasp_mask` for partial credit without grasp).
+- Both `lift_reward` and `good_grasp_reward` drop AND policy retreats from object → gate removed too much gradient. Either of the run3-era fallbacks: revert env.py, or add a positive baseline reward to keep the policy engaged.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-20_22-12-07/` (test repo, GPU 0, dextrah_test env, 1024 envs headless)
+
+**Result (ep 799, stopped by user at ~750, 2026-05-20): Gate works mechanically but policy farms a NEW exploit — buckled-thumb pose satisfies good_grasp_mask without enabling lift.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 100 | ep 250 | ep 500 | ep 700 | PEAK |
+|---|---|---|---|---|---|
+| **lift_success** | 0.000 | 0.000 | 0.000 | 0.000 | **0.003 @ ep 320** |
+| in_success_region | 0.000 | 0.000 | 0.000 | 0.000 | ~0 |
+| rewards (raw) | -72 | 4220 | 14195 | 14488 | ~16k+ |
+| **lift_reward** (gated) | 0.21 | 5.63 | 8.92 | 9.13 | ~9-10 |
+| **good_grasp_reward** | 0.21 | 6.56 | 8.39 | 8.55 | ~10 |
+| hand_object_contact_reward | 0.47 | 6.07 | 6.98 | 7.03 | ~8 |
+| object_contact_count | 0.16 | 2.02 | 2.33 | 2.34 | ~2.5 |
+| hand_to_object_distance (m) | 0.487 | 0.110 | 0.110 | 0.109 | — |
+| episode_lengths | 287 | 200 | 464 | 471 | — |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 |
+
+**Observations:**
+
+1. **The gate works mechanically.** `lift_reward` and `good_grasp_reward` are now firing TOGETHER (9.13 and 8.55 at ep 700) — confirming the gate couples them. Contact_reward is climbing in parallel (7.03) but no longer driving lift_reward independently.
+2. **Higher good_grasp than run6b** (8.55 vs run6b's similar value 8.39 at same ep but with no gate) — the policy is forming "good_grasp_mask=True" states slightly more often when forced to by the gate.
+3. **BUT zero lift_success.** Peak 0.003 (0.3%) at ep 320, which is *lower* than run6b's 1.0% peak. The gate prevented the partial-lift altitude (~21cm) that run6b achieved without unlocking actual lifts.
+4. **User livestream qualitative observation:** policy is **curling the thumb inward to satisfy `good_grasp_mask`** — thumb tip + ≥1 finger contact achieved by a buckled-thumb pose, NOT a real outside-wrap grip. The policy found a NEW exploit: the gate requires thumb contact, so the policy buckles the thumb into the palm-side of the hand to maintain contact without forming a graspable pose. Lift_reward fires (gate satisfied) but the geometry can't actually elevate the object.
+
+**Mathematical analysis (per user):** in this run, `lift_reward ≈ 9` and `good_grasp_reward ≈ 8.5` — they're roughly equal. With the gate, **they're functionally indistinguishable signals from the policy's perspective**: both fire when `good_grasp_mask=True`. The marginal reward for actually LIFTING (vs just maintaining grasp at table) is small (Δlift ≈ 4-5/step across 13cm). The marginal reward for maintaining the grasp (good_grasp constant 15 when firing) is large. **The grip is 3.5× more rewarding per step than the lift gradient** — the math says buckling thumb to maintain "grip" is optimal.
+
+**Decision rule outcome — third branch fires:**
+
+> "`lift_reward` stays near zero while `good_grasp_reward` climbs → policy grasps but doesn't try to lift..."
+
+Except modulated: lift_reward isn't near zero (9 is significant), but lift_success IS near zero. The policy is exploiting the lift_reward at low altitude through buckled-thumb satisfying the gate. The gate is necessary but not sufficient — needs to be paired with a reward shape where actually lifting pays clearly more than holding-at-table.
+
+**Open hypotheses for run6d:** (1) bump lift_weight to make lift gradient dominate, (2) bump arm 5-7 effort to ensure torque isn't the cap, (3) reduce contact and good_grasp weights to remove competing signals, (4) restore sharpness=4 to concentrate lift gradient near the goal. User selected options (1)+(3)+(4) combined.
+
+**Asset-level finding (separate from main investigation):** user provided AgileHand hardware spec: finger velocities = 360 deg/s = 6.283 rad/s. Current asset value of 8.0 rad/s is 27% over spec. CLAUDE.md's previous "Use 2.0 rad/s" recommendation (based on assumed 30-60 deg/s hardware) was wrong — corrected in commit `17b1677`. Asset velocity_limit_sim updated to 6.283 rad/s for the next experiment (run6d).
+
 
 
 
