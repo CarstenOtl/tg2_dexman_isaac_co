@@ -3752,6 +3752,102 @@ Cumulative evidence after 12 v2 retrains (run4c through run6f):
 
 Strong push to investigate the structural good_grasp_mask itself — the buckled-thumb exploit is the consistent qualitative failure mode. Tightening the mask definition (require specific fingers thumb + index + middle, or `≥3 fingers + thumb`) would prevent the policy from satisfying the gate via crushed thumb geometry. This is the next planned experiment (run6g).
 
+### run6g — revert lift_reward gate (good_grasp_mask → contact_mask) (2026-05-21)
+
+**Motivation:** User livestream observation on run6f's best policy revealed the failure mode is NOT buckled-thumb (as we hypothesized in run6c-6e). The policy actually forms **proper grasps with thumb opposite the fingers**. The issue is **lack of lift incentive** — the policy parks at "good grasp held, no lift" because the reward landscape makes lifting feel risky.
+
+**v1 vs v2 reward comparison** revealed 7 differences (6 weights + 1 structural gate). Termination landscape is **identical**. The most consequential difference is the **`lift_reward` gate**:
+
+| Field | v1 (works) | v2 (run6f, 0.3% peak) |
+|---|---|---|
+| `lift_reward` gate | `contact_mask` (any sensor) | `good_grasp_mask` (thumb + ≥1 finger) |
+
+**Math of why the gate punishes lifting:**
+
+At v2's "good grasp held at table" steady state:
+- `good_grasp_reward` (weight 6) = 6/step
+- `lift_reward` (weight 60, sharp 4, gated, at h=0): 60·exp(-2)·1 ≈ 8/step
+- `contact_reward` (weight 1.5) = 1.5/step
+- **Total: ~15.5/step**
+
+If the policy tries to lift and the grip slips for one timestep (good_grasp_mask = False):
+- `good_grasp_reward` = 0 (−6 vs status quo)
+- `lift_reward` = 0 (gated, −8 vs status quo)
+- `contact_reward` = 1.5 (still firing on residual single-finger touch)
+- **Total: ~1.5/step → 14/step LOSS per slip**
+
+The marginal gain from a successful incremental lift is small (~ a few /step) compared to the **risk of losing 14/step on grip slips during the motion**. The policy correctly identifies "stay in good_grasp state" as the local maximum.
+
+**v1's no-gate landscape avoids this**: lift_reward fires on ANY contact, so partial-contact lifts still earn lift_reward — even when good_grasp momentarily slips during lift transitions.
+
+**Single-knob test:** revert ONLY the lift_reward gate (env.py line 2230). Keep all other v2 changes (reward weights, asset velocity, wrist torque, thumb_rot init, etc.). If this alone unlocks lifting, the gate was the structural blocker. If not, the additional 6 weight differences also matter.
+
+**Configuration delta from previous (ac285b2 / run6f):**
+- env.py line 2230: `lift_reward = ... * good_grasp_mask.to(contact_count.dtype)` → `... * contact_mask` ([env.py:2230](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env.py))
+- env_cfg.py: unchanged (good_grasp_weight=6, lift_sharpness=4, lift_weight=(60,30), arm_57_effort=(50,12), thumb centered init, etc. all persist)
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024 headless, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` climbs past 0.05 sustained AND `in_success_region > 0` AND ADR finally advances → **gate was the structural blocker.** Combined with v2's hardware-realistic actuators + run6d/6e reward magnitudes, removing the gate produces a working v2 teacher. Direct path to distillation.
+- `lift_success` climbs past 1-2% but doesn't reach 5% sustained → gate is partial cause; remaining lift bottleneck is in the weight imbalances. Next: stage run6h with v1's exact reward weights (`lift_sharpness=2`, `contact_weight=3`, `good_grasp_weight=3`, `lift_weight=(40,20)`, `success_bonus=10`, `finger_curl_reg=(-0.5,-1.2)`).
+- Lift peak ≤ run6d's 1.3% → gate removal alone doesn't fix it, weights are the dominant factor. Go to full v1 reward landscape adoption.
+- Policy regresses to buckled-thumb behavior (lift_reward still high without proper grasp) → confirms our earlier run6c era concern about no-gate, but with the current actuator setup (slower thumb), this should be less of a risk.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-21_10-21-17/` (test repo, GPU 0, dextrah_test env, 1024 envs headless)
+
+**Result (ep 3744, stopped by user, 2026-05-21): HIGHEST SUSTAINED v2 LIFT SIGNAL OF THE SAGA — 2.7% peak @ ep 2726, first in_success_region > 0.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 200 | ep 1000 | ep 2000 | ep 2500 | ep 3000 | ep 3500 | PEAK |
+|---|---|---|---|---|---|---|---|
+| **lift_success** | 0.000 | 0.000 | 0.000 | 0.002 | 0.013 | 0.012 | **0.027 @ ep 2726** |
+| **in_success_region** | 0.000 | 0.000 | 0.000 | 0.000 | 0.001 | 0.005 | **0.017 @ ep 2964** |
+| rewards (raw) | 25 | 1242 | 1495 | 4873 | 8176 | 8871 | 10233 @ ep 3634 |
+| lift_reward | 0.03 | 0.00 | 0.46 | 5.16 | 7.70 | 7.95 | 8.59 |
+| hand_object_contact_reward | 0.01 | 0.00 | 0.08 | 1.34 | 2.20 | 2.31 | 2.61 |
+| good_grasp_reward | 0.00 | 0.00 | 0.01 | 0.15 | 0.72 | **2.39** | 3.38 @ ep 3716 |
+| object_contact_count | 0.01 | 0.00 | 0.06 | 0.89 | 1.47 | 1.54 | 1.74 |
+| hand_to_object_distance (m) | 0.31 | 0.18 | 0.17 | 0.13 | 0.12 | 0.12 | — |
+| finger_curl_reg | -0.12 | -0.18 | -0.38 | -0.68 | -0.85 | -1.37 | — |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| episode_lengths | 30 | 490 | 463 | 449 | 498 | 498 | — |
+
+**Observations:**
+1. **Peak lift_success = 2.7% (0.027) @ ep 2726 — the highest sustained v2 lift signal of the entire saga.** Beats run6a's 1.6% (collapsed), run6d's 1.3%, run6b's 1.0%. Most importantly, no catastrophic collapse afterward — settled at 1.2% by ep 3500, not zero.
+2. **First `in_success_region > 0` of the entire v2 saga** — peak 0.017 @ ep 2964. The policy briefly reached the goal region, which is the precondition for ADR finally advancing past 0. Still below the 0.4 threshold (`success_for_adr`) so no ADR increment yet, but qualitatively new behavior.
+3. **Late-emergent learning pattern:** essentially nothing through ep 2000 (matches user's "no change" impression — visually flat in livestream), then explosive engagement ep 2000-2700: contact climbed from 0.055 → 1.47, good_grasp from 0.01 → 0.72, lift_reward 0.46 → 7.70. The gate removal needed ~2000 epochs of exploration before producing usable signal.
+4. **`finger_curl_reg = -1.37` at ep 3500** — fingers are curling harder, indicating active grasping attempts. The visual "nothing change" likely means lifts are small-amplitude in a small fraction of envs.
+5. **Slight decline from peak ep 2726 to ep 3500** (lift_success 0.027 → 0.012) — not collapse but plateau / slow regression. Could indicate the ungated lift_reward starting to attract a "small camp + tiny lift" exploit, similar to run6c.1 concern but at low amplitude.
+
+**Decision rule outcome — second branch fires:**
+
+> "`lift_success` climbs past 1-2% but doesn't reach 5% sustained → gate is partial cause; remaining lift bottleneck is in the weight imbalances. Next: stage run6h with v1's exact reward weights."
+
+Gate removal alone delivered the strongest v2 signal yet but plateaued at 2.7%. Next: adopt v1's exact reward landscape on top of the gate revert to push past the 5% threshold and trigger ADR.
+
 
 
 

@@ -2222,12 +2222,14 @@ def compute_rewards(
         finger_curl_reg_weight * finger_curl_dist ** 2
 
     # Reward for lifting object off table and towards object goal.
-    # run6c (2026-05-20): gated on good_grasp_mask (thumb + ≥1 finger) instead of contact_mask
-    # (any sensor). Closes the camp-at-moderate-height exploit observed in run6b where the policy
-    # earned lift_reward 13.75/step at ~21cm altitude with only incidental sensor contact, without
-    # forming a proper grasp. With good_grasp gate, lift_reward fires only when a real thumb+finger
-    # grip is held. Run3-era structural fix per CLAUDE.md.
-    lift_reward = lift_weight * torch.exp(-lift_sharpness * object_vertical_error) * good_grasp_mask.to(contact_count.dtype)
+    # run6g (2026-05-21): REVERTED the good_grasp_mask gate from run6c. Back to contact_mask
+    # (any sensor). User observation in run6f: policy forms good grasps but doesn't lift —
+    # math showed the gate creates a -14/step penalty risk for ANY momentary grip slip during
+    # lift attempts (gate kills both good_grasp_reward and lift_reward simultaneously), making
+    # the policy rationally park at "good grasp held, no lift." v1's no-gate landscape allows
+    # partial-contact lifts to still earn lift_reward, removing the risk asymmetry. Single-knob
+    # test of "is the gate the structural blocker?"
+    lift_reward = lift_weight * torch.exp(-lift_sharpness * object_vertical_error) * contact_mask
 
     # Palm alignment penalty: squared angle (theta**2) from target direction.
     cos_sim = torch.sum(palm_dir * palm_dir_target, dim=-1).clamp(-1.0, 1.0)
