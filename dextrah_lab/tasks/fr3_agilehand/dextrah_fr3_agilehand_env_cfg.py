@@ -755,7 +755,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
     success_bonus_weight = 20.0  # bumped from 10: stronger incentive to close last few cm to goal
-    lift_sharpness = 2.0 #run6h (2026-05-21): 4→2 matching v1's value. v1 trains to ADR 13 with sharpness 2 — the flatter gradient lets the policy discover lifts from table height. v2 at sharpness 4 concentrates lift_reward near the goal and may be why run6g plateaued at 2.7% (policy can't discover the lift gradient from table level). Single-knob test on top of run6g's gate-reverted baseline.
+    lift_sharpness = 10.0 #run6i (2026-05-21): 2→10. Opposite direction from run6h. run6h showed sharpness=2 creates a fat 22/step camp residual at table-touch that pulls the policy into single-finger camping. sharpness=10 reduces table-touch residual to 0.40/step — essentially zero. Hypothesis: removing the camp incentive forces the policy to actually lift. Risk: gradient is too sparse at low altitudes, policy can't find the lift signal at all.
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   

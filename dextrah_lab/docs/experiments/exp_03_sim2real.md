@@ -3927,6 +3927,93 @@ Confirmed: lift_sharpness=2 is structurally worse for v2's setup than sharpness=
 
 **Implication for next experiment:** The "match v1's reward landscape one field at a time" strategy doesn't work for fields whose effect depends on the full reward stack. lift_sharpness needs to be retuned in concert with lift_weight (lower start), contact_weight (raise back to 3), and good_grasp_weight (lower back to 3) — i.e., a v1-bundle revert. OR pivot to actuator-side: revert thumb_rot_vel_limit to v1's (10.0, 0.1396) range, leaving rewards at run6g state. Thumb_rot is the one large v1↔v2 delta we haven't directly tested in the run6 cycle.
 
+### run6i — lift_sharpness 4 → 10 (opposite direction from run6h) (2026-05-21)
+
+**Motivation:** Run6h proved sharpness=2 fails by creating a fat camp residual (22/step at table-touch) that traps the policy in single-finger camping. Inverse hypothesis: **sharpness=10 eliminates the camp residual entirely** (0.40/step at table-touch, ~55× smaller than run6h, 20× smaller than run6g's sharpness=4). With essentially no reward for table-touch, the policy *has* to lift to capture any lift_reward — there's no comfortable local optimum to settle into.
+
+Precedent: kuka_allegro uses lift_sharpness=8.5 successfully. Sharpness=10 is slightly above that, but kuka_allegro has FABRICS smoothing approach trajectories which fr3_agilehand lacks — so sharpness=10 may be too sparse for direct joint control. Test the direction; tune magnitude if it works.
+
+**Configuration delta from previous (3bdd1f3 / run6h):**
+- `lift_sharpness`: 2.0 → **10.0** ([env_cfg.py:758](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+- Everything else identical to run6h (which was identical to run6g except for sharpness).
+
+**Effect on lift_reward landscape at ADR 0** (with `lift_weight = 60`):
+
+| Position | run6g (sharp=4) | run6h (sharp=2) | **run6i (sharp=10)** |
+|---|---|---|---|
+| Table touch (err=0.5m) | 8/step | **22/step** (camp) | **0.40/step** |
+| Half-lifted (err=0.25m) | 22/step | 36/step | **4.9/step** |
+| Mostly lifted (err=0.10m) | 40/step | 49/step | **22/step** |
+| At goal (err=0) | 60/step | 60/step | **60/step** |
+
+Most of the lift_reward gradient now lives between 5-15cm altitude. Policy must achieve significant elevation to see meaningful reward.
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` climbs past run6g's 2.7% peak AND `good_grasp_reward` doesn't collapse → killing the camp residual was the missing piece. Try sharpness=8.5 (kuka_allegro value) in run6i.1 to find the sweet spot.
+- `lift_success` stays ≤ 1% with `lift_reward` near zero (< 1/step) throughout → gradient is too sparse from table-touch for the policy to find the lift signal at all. Step back to sharpness=6 in run6i.1.
+- Policy ignores object entirely (`hand_to_object_distance` stays > 0.3m, contact stays at 0) → near-zero camp residual + no positive baseline for engagement makes the object look "uninteresting" to the policy. Need to add a contact-only bonus to bootstrap engagement.
+- Comparable to run6g (~2-3% peak, plateaus) → sharpness isn't the bottleneck regardless of direction; pivot to actuator-side (thumb_rot vel limit).
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-21_15-30-45/` (test repo, GPU 0, dextrah_test env, 1024 envs headless)
+
+**Result (ep 1684, stopped by user, 2026-05-21): CATASTROPHIC — engagement never emerged, policy abandoned approach behavior.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 240 | ep 481 | ep 721 | ep 962 | ep 1202 | ep 1443 | ep 1684 | PEAK |
+|---|---|---|---|---|---|---|---|---|
+| **lift_success** | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | **0.001 @ ep 224** |
+| in_success_region | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0 |
+| **rewards (raw)** | 458 | 1238 | 1363 | 1121 | 357 | 513 | **77** | 1582 @ ep 523 |
+| lift_reward | 0.005 | 0.000 | 0.001 | 0.000 | 0.000 | 0.000 | 0.000 | 0.014 |
+| hand_object_contact_reward | 0.015 | 0.002 | 0.003 | 0.001 | 0.001 | 0.001 | 0.001 | 0.053 |
+| good_grasp_reward | 0.001 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.006 |
+| object_contact_count | 0.010 | 0.001 | 0.002 | 0.000 | 0.000 | 0.001 | 0.001 | 0.035 |
+| hand_to_object_distance (m) | 0.21 | 0.19 | 0.18 | 0.19 | 0.20 | 0.19 | 0.25 | — |
+| finger_curl_reg | -0.16 | -0.23 | -0.26 | -0.56 | -1.27 | -0.72 | -1.10 | — |
+| episode_lengths | 227 | 562 | 498 | 447 | 269 | 241 | **79** | 590 |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+**Observations:**
+1. **Engagement never emerged.** Peak contact 0.053/step at ep 232 (brief blip), then collapsed to noise floor by ep 481 and stayed there. Compare run6g where contact climbed to 1.74/step.
+2. **Total rewards collapsed 1582 (ep 523) → 77 (ep 1684), a 95% drop.** Worse trajectory than run6a's catastrophic collapse (which at least had brief engagement). The policy actively unlearned its early baseline behavior.
+3. **Hand is near the object (0.18-0.25 m) but never commits to contact.** Fingers curling in midair (curl_reg -1.10 by end) without touching the object. Classic "lost approach" behavior — policy abandoned the approach trajectory.
+4. **`episode_lengths` collapsed 562 → 79.** Early terminations firing — policy doing erratic motions that trigger out_of_reach / palm_flip / similar. The reward landscape is so flat near the start state that any random exploration looks equivalent to any other, including bad behaviors.
+5. **lift_reward never escapes noise** (max 0.014). The sharpness=10 landscape provides effectively zero gradient until the object is well off the table — but the policy can't get the object off the table without first lifting, and it can't learn to lift without a gradient signal. Bootstrap failure.
+
+**Decision rule outcome — 2nd AND 3rd branches fire simultaneously:**
+
+> 2nd branch: "lift_success stays ≤ 1% with lift_reward near zero (< 1/step) throughout → gradient is too sparse from table-touch for the policy to find the lift signal at all. Step back to sharpness=6 in run6i.1."
+
+> 3rd branch: "Policy ignores object entirely → near-zero camp residual + no positive baseline for engagement makes the object look 'uninteresting' to the policy."
+
+Both fire because the policy doesn't just fail to lift — it actively unlearns engagement. The 0.40/step camp residual at sharpness=10 isn't enough to keep the policy near the object once it briefly leaves. The reward gradient is too flat throughout the entire approach/engage workspace.
+
+**Implication: lift_sharpness sweet spot is between 4 and 10**, likely 4-6. Sharpness=4 (run6g) was the best of the saga (2.7%). Sharpness=2 (run6h) over-rewarded camping. Sharpness=10 (run6i) starved engagement entirely. A binary search would put run6i.1 at sharpness=6 next, but the more informative pivot would be to leave sharpness at 4 (the known-best) and test the **untested big lever**: thumb_rot_vel_limit at v1's (10.0, 0.1396) range.
+
 
 
 
