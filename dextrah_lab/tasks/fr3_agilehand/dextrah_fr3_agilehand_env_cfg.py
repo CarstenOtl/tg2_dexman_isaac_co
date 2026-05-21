@@ -943,7 +943,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "thumb_rot_vel_limit": (0.0873, 0.0349),
             # FR3 arm effort limits (Nm): hardware starting → factory spec
             "arm_14_effort_limit": (90.0, 87.0),
-            "arm_57_effort_limit": (20.0, 12.0),
+            "arm_57_effort_limit": (50.0, 12.0),  # run6f (2026-05-21): start 20→50 Nm (matches v1's Teacher 11 value). End unchanged at hardware spec 12 Nm. Tests wrist-torque hypothesis: finger reaction loads (10 Nm thumb_rot + 4×2 Nm fingers) consume too much of the 20 Nm wrist budget, leaving none for lift+orient. v1 has 50 Nm = 2.5x headroom.
         },
     }
 

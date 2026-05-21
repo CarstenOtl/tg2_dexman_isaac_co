@@ -3648,6 +3648,110 @@ TensorBoard at iter sample points:
 
 User raised the FR3 joints 5-7 effort limit (20 Nm at ADR 0) as a candidate constraint. Mechanism: when fingers (especially thumb_rot with 10 Nm capacity) generate gripping torques, the reaction torques on the hand base must be reacted by the wrist. v1 has 50 Nm wrist effort (2.5× headroom); v2 has 20 Nm. If finger reaction loads consume 5-10 Nm of the 20 Nm wrist budget, very little is left for actual lifting + orientation control. Next experiment (run6f) tests this directly.
 
+### run6f — bump arm_57_effort_limit 20 → 50 Nm (match v1) (2026-05-21)
+
+**Motivation:** v1 (Teacher 11) trained successfully to ADR 13 with `arm_57_effort_limit = 50 Nm` at ADR 0. v2 baseline has `arm_57_effort_limit = 20 Nm` — a 2.5× tighter wrist budget. Mechanistic hypothesis:
+
+```
+τ_wrist_total = τ_lift (object + hand weight at moment arm)
+              + τ_orient (palm orientation control)
+              + Σ τ_finger_reactions (Newton-3rd-law reactions to finger torques)
+```
+
+Finger reaction loads on the hand base can be substantial: thumb_rot motor capacity is 10 Nm; combined with 4 finger MCP+PIP joints at 2 Nm each, the cumulative reaction torque on the hand base could be 10-20 Nm. v2's 20 Nm wrist budget gets eaten by finger reactions, leaving little for lift+orient. v1's 50 Nm has 30+ Nm headroom.
+
+**Single-knob change** on top of run6e:
+- `arm_57_effort_limit` ADR: (20.0, 12.0) → **(50.0, 12.0)**
+- Start matches v1's Teacher 11 value (Apr 2026 successful run).
+- End unchanged at 12 Nm (hardware spec).
+
+**Configuration delta from previous (378d69c / run6e):**
+- env_cfg.py 1 line (arm_57_effort_limit start 20 → 50)
+- Everything else identical to run6e (thumb centered init, ±10° curriculum, 5→2 deg/s velocity, lift_weight=(60,30), sharpness=4, good_grasp=6, contact=1.5, asset finger velocity 6.283 rad/s, env.py lift_reward gate on good_grasp_mask)
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024 headless, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` climbs past 0.05 sustained AND ADR moves off 0 → wrist torque budget was the structural bottleneck. v2 trainable at v1's wrist headroom. Then iterate down: try (35, 12) to find smallest start value that still works.
+- `lift_reward` magnitudes climb (15+/step during engaged states) AND livestream shows real wrist lift attempts (object actually leaving table > 5cm) → headroom unlocked physical lifting even if curriculum hasn't advanced yet. Strong positive signal.
+- Same flat-zero lift pattern as run6e → wrist torque NOT the bottleneck; lift constraint is elsewhere. Strong evidence for tighter `good_grasp_mask` (require thumb+index+middle specifically) as next move.
+- Lift signal emerges but degrades as ADR drops effort 50 → 12 across curriculum → wrist torque matters but the v1-realistic endpoint (12 Nm) is too tight. Then question whether 12 Nm endpoint is actually correct for sim2real, or if it needs to stay higher.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-21_00-59-49/` (test repo, GPU 0, dextrah_test env, 1024 envs headless, overnight)
+
+**Result (ep 18857, 2026-05-21): FAILURE on lift_success, but reveals a striking 2-phase trajectory. Wrist torque helped engagement emerge eventually but did NOT unlock lifting.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 500 | ep 5000 | ep 8000 | **ep 10000** | ep 12000 | ep 14000 | ep 18000 | PEAK |
+|---|---|---|---|---|---|---|---|---|
+| **lift_success** | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0003 | 0.0000 | **0.0029 @ ep 10436** |
+| in_success_region | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0.0010 |
+| rewards (raw) | 1022 | 1346 | **705** | **3772** | 9493 | 10171 | 10066 | 11750 @ ep 12470 |
+| lift_reward | 0.0001 | 0.0000 | 0.0000 | **4.22** | 6.90 | 6.87 | 6.80 | 7.51 @ ep 16965 |
+| good_grasp_reward | 0.0001 | 0.0000 | 0.0000 | **2.61** | 4.24 | 4.22 | 4.17 | 4.61 @ ep 16965 |
+| hand_object_contact_reward | 0.001 | 0.000 | 0.000 | **2.53** | 3.71 | 3.84 | 3.37 | 4.50 |
+| object_contact_count | 0.001 | 0.000 | 0.000 | **1.69** | 2.47 | 2.56 | 2.25 | 3.00 |
+| object_to_goal_reward | 0.003 | 0.001 | 0.000 | 2.63 | 3.24 | 3.29 | 3.29 | 3.43 |
+| hand_to_object_distance (m) | 0.223 | 0.181 | 0.188 | **0.133** | 0.102 | 0.117 | 0.125 | — |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| episode_lengths | 537 | 573 | 584 | **278** | 469 | 516 | 521 | 599 |
+| finger_curl_reg | -0.54 | -0.68 | -1.48 | -1.27 | -1.20 | -1.63 | -1.65 | — |
+
+**Observations:**
+
+1. **Two-phase trajectory.** Phase 1 (ep 0-8000): policy did almost nothing — all contact/grasp/lift metrics ≈ 0, hand wandered at 0.18-0.22m from object. Phase 2 (ep 10000+): sudden breakthrough into engagement — contact_count 0 → 1.7, good_grasp 0 → 2.6, lift_reward 0 → 4.2. The transition was rapid (~1500 epochs).
+2. **Episode lengths dropped at the engagement transition** (584 → 278 around ep 10000) then recovered (520 by ep 14000). Suggests early engagement attempts were causing terminations (out_of_reach or palm_flip from initial unstable grips), then the policy stabilized.
+3. **Steady-state at lift_reward ≈ 7, good_grasp ≈ 4** is similar to run6d's mid-training values. Same partial-grasp basin, just reached on a 10000-epoch delay.
+4. **Peak `lift_success` = 0.0029 (0.29%) at ep 10436** — right at the engagement breakthrough. *Lower* than run6d (1.3%), run6b (1.0%), and even run6c.1 (0.3%). This is among the worst lift peaks of any v2 retrain. After ep 10500, lift_success drops to ~0.
+5. **ADR stuck at 0** through 18,857 epochs (longest training of any v2 retrain to date).
+
+**Decision rule outcome — wrist torque NOT the lift bottleneck:**
+
+The 20 → 50 Nm wrist effort bump (matching v1) demonstrably affected exploration dynamics — the policy eventually found engagement, which it didn't in earlier runs at similar epoch counts. But it did NOT translate into more lifting. The basin trap is robust to wrist torque headroom.
+
+Cumulative evidence after 12 v2 retrains (run4c through run6f):
+
+| Hypothesis tested | Run | Outcome |
+|---|---|---|
+| Config drift (32a8924 vs 4fe7cb7) | run4c, run4d, run4e | ruled out |
+| Repo/env swap | run4d, run4e | ruled out |
+| Thumb_rot velocity bump (2×) | run5a | ruled out |
+| Remove arm_joint_init EventTerm | run5b | ruled out |
+| 10× lift_weight | run5c | ruled out (destabilized) |
+| 5× good_grasp_weight | run6a | ruled out (collapse) |
+| 3× good_grasp_weight | run6a.1 | ruled out (insufficient) |
+| Flatter lift gradient (sharp 2) + grasp 5× | run6b | partial (no collapse, basin held) |
+| lift_reward gated on good_grasp_mask | run6c.1 | gate works mechanically, buckled-thumb exploit |
+| Lift dominance (multi-knob shaping) | run6d | partial (1.3% peak) |
+| Centered thumb init + 5→2 deg/s velocity | run6e | no improvement |
+| **Wrist torque to v1 (20→50 Nm)** | **run6f** | **ruled out — partial engagement, no lift** |
+
+**The basin is robust to every reward-shape, actuator, and randomization change tested.**
+
+Strong push to investigate the structural good_grasp_mask itself — the buckled-thumb exploit is the consistent qualitative failure mode. Tightening the mask definition (require specific fingers thumb + index + middle, or `≥3 fingers + thumb`) would prevent the policy from satisfying the gate via crushed thumb geometry. This is the next planned experiment (run6g).
+
 
 
 
