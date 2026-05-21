@@ -4493,6 +4493,64 @@ User observation: *"velocity explosions going crazy right now."* The combination
 
 Fix is on the actuator side — cap finger and thumb effort limits so contact forces can't drive joint velocities into the explosion zone. Next: run6l.2 drops mcp_pitch effort 2.0→0.7, mcp_yaw/pip effort 2.0→0.5, thumb_rot effort 10.0→2.0.
 
+### run6l.2 — cap finger + thumb effort limits to stop vel_explosions (2026-05-21)
+
+**Motivation:** run6l.1 livestream showed vel_explosions firing during contact. The combination of friction=1.5 + wrist velocity at hardware spec + relatively unrestricted finger effort limits (mcp_pitch/yaw/pip at 2.0 Nm, thumb_rot at 10.0 Nm) lets contact reaction forces compound into explosive joint velocities. Drop effort limits proportionally so static grip still works (~0.2-0.3 Nm needed per finger joint) but reaction forces can't compound.
+
+The thumb_rot drop 10.0 → 2.0 is also addressing the same concern: even at the tight velocity limit (0.2618 rad/s), 10 Nm is way more than needed for static thumb hold, and reaction torques during contact were saturating it.
+
+**Configuration delta from previous (bdb410a / run6l.1):**
+- `fr3_tekken_left.py` `thumb_rot.effort_limit_sim`: 10.0 → **2.0** Nm
+- `fr3_tekken_left.py` `mcp_pitch.effort_limit_sim`: 2.0 → **0.7** Nm
+- `fr3_tekken_left.py` `mcp_yaw.effort_limit_sim`: 2.0 → **0.5** Nm
+- `fr3_tekken_left.py` `pip.effort_limit_sim`: 2.0 → **0.5** Nm
+- All friction + curl_reg + arm velocity_limit_sim changes from run6l/6l.1 remain in place.
+
+**Static grip feasibility check:**
+- A typical grip force on a 100g object: ~1-2 N at each fingertip × 0.02m moment arm to PIP = ~0.02-0.04 Nm. Well within 0.5 Nm.
+- mcp_pitch (main flexion driver) at 0.7 Nm: ~5× more than needed for static grip. Should be sufficient for dynamic closure.
+- thumb_rot at 2.0 Nm: 10× the static rotation torque needed.
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42 — start with 24 envs livestream observation to verify vel_explosions are gone before launching canonical 1024-env training.
+
+**Train command (24-env livestream observation):**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --task=dextrah_fr3_agilehand --livestream 2 --seed 42 \
+  --num_envs 24 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=192 \
+  agent.params.config.central_value_config.minibatch_size=192 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- vel_explode terminations drop to background rate AND policy attempts to lift visibly → success. Kill and launch canonical 1024-env training. If lifts emerge above run6g's 2.7%, the velocity+friction+effort triad was the answer.
+- vel_explode still firing → effort caps too generous. Drop further: mcp_pitch 0.7→0.3, mcp_yaw/pip 0.5→0.2, thumb_rot 2.0→1.0.
+- Grip too weak now (object slips even with high friction) → effort caps too aggressive. Bump mcp_pitch 0.7→1.0.
+- Stable training but no lifts → caps are reasonable but lift bottleneck is elsewhere. Re-evaluate.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-21_23-35-34/` (test repo, GPU 0, dextrah_test env — 24 envs livestream observation)
+
+**Result (2026-05-22): FAILURE — vel_explosions still firing on contact even with effort caps tightened 3-4×.** Livestream observation: episodes terminate early upon impact with the object. Cutting actuator-effort headroom in half across thumb_rot + mcp_pitch + mcp_yaw + pip did not eliminate the instability, which rules out "actuator torque is too high during contact" as the root cause of the vel_explosions.
+
+**Observations:**
+1. The instability is not gated by how much torque the policy can produce — even tight caps (mcp_pitch 0.7 Nm, mcp_yaw/pip 0.5 Nm, thumb_rot 2.0 Nm — already at ~5-10× static-grip headroom) leave contacts unstable.
+2. Together with run6l/6l.1 (friction 1.5 + wrist velocity at hardware spec), the contact spike → vel_explode pattern persists across **all** actuator-side levers tried so far in the 6l sub-saga.
+3. This points to the instability being PhysX-solver-side, not actuator-side: contact reaction impulses propagating through the AgileHand's mimic-coupled DIPs (rigid kinematic constraint snaps back after contact-constraint priority wins for one step) → solver injects depenetration velocity to fix the resulting overlap → joint velocities explode.
+
+**Decision rule outcome:** "vel_explode still firing → effort caps too generous" branch fired, BUT pivoting away from the decision rule's next move (drop effort caps further to 0.3/0.2/1.0 Nm). Reason: deeper effort cuts risk starving static grip, and the saga has spent run6l + 6l.1 + 6l.2 on actuator-side levers with no win. Switching investigation lever class to PhysX scene properties — next experiment (run6m) drops `max_depenetration_velocity` 30 → 10 to reduce the solver's depenetration impulse magnitude (textbook fix per Isaac Sim articulation stability guide).
+
 
 
 

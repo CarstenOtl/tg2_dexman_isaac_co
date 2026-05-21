@@ -95,28 +95,28 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
         ),
         "thumb_rot": ImplicitActuatorCfg(
             joint_names_expr=["revolute_thumb_rot"],
-            effort_limit_sim=10.0,
+            effort_limit_sim=2.0,       # run6l.2 (2026-05-21): 10.0→2.0. Cap contact reaction torque from thumb to prevent vel_explosions with friction=1.5 and wrist at hardware spec velocity.
             velocity_limit_sim=0.2618,  # ~15 deg/s, close to hardware
             stiffness=60.0,             # 20→60: 3× stiffer for better tracking
             damping=2.0,
         ),
         "mcp_pitch": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_pitch"],
-            effort_limit_sim=2.0,
+            effort_limit_sim=0.7,        # run6l.2 (2026-05-21): 2.0→0.7. Static grip needs ~0.2-0.3 Nm, leaves headroom but caps reaction force compounding during contact.
             velocity_limit_sim=6.283,  # 360 deg/s — AgileHand hardware spec (was 8.0 = ~458 deg/s, 27% over spec)
             stiffness=10.0,
             damping=6.0,              # 3→6: more damping, smoother contact
         ),
         "mcp_yaw": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_mcp_yaw"],
-            effort_limit_sim=2.0,
+            effort_limit_sim=0.5,        # run6l.2 (2026-05-21): 2.0→0.5. mcp_yaw is the smallest finger joint, doesn't need much torque even for grip.
             velocity_limit_sim=6.283,  # 360 deg/s — AgileHand hardware spec (was 8.0 = ~458 deg/s, 27% over spec)
             stiffness=10.0,
             damping=6.0,              # 3→6
         ),
         "pip": ImplicitActuatorCfg(
             joint_names_expr=[r"revolute_.*_pip"],
-            effort_limit_sim=2.0,
+            effort_limit_sim=0.5,        # run6l.2 (2026-05-21): 2.0→0.5. PIP joints don't drive the grasp force — that's the mcp_pitch's job — so they can be heavily limited.
             velocity_limit_sim=6.283,  # 360 deg/s — AgileHand hardware spec (was 8.0 = ~458 deg/s, 27% over spec)
             stiffness=10.0,
             damping=6.0,              # 3→6
