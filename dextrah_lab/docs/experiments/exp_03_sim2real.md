@@ -4207,6 +4207,112 @@ Even worse than the branch predicted — engagement wasn't merely reduced, it wa
 1. **run6k — restore v1's coupled reward triple together:** contact_weight 1.5→3, good_grasp 6→3, curl_reg (-0.3,-0.8)→(-0.5,-1.2). These three v1 values are internally balanced (per the run6j analysis). Tests whether v1's reward stack works on v2's actuators.
 2. **run6k — pivot to actuator side:** revert thumb_rot_vel_limit from (0.0873, 0.0349) to v1's (10.0, 0.1396). This is still the untested major v1↔v2 delta — v2 starts thumb at 5 deg/s vs v1's 573 deg/s, 115× tighter. If the grasp-timing constraint at v2's thumb velocity is the structural lift limit, no reward shaping fixes it.
 
+### run6k — restore v1's contact_weight + curl_reg (keep good_grasp at v2 value) (2026-05-21)
+
+**Motivation:** Per run6j's mechanistic finding: v1's `finger_curl_reg = (-0.5, -1.2)` overtakes v2's engagement reward when `contact_weight = 1.5`. The fix is to restore BOTH knobs to v1's values together — they're internally balanced. User opted to keep `good_grasp_weight = 6.0` (v2 value, run6d-era) rather than reverting it to v1's 3.0, since run6g already produced 2.7% lift peak with good_grasp=6 — that knob isn't the issue.
+
+Joint hypothesis: with `contact_weight = 3.0` (restored from 1.5) the engagement reward floor goes from ~2.7/step to ~5.4/step at typical contact (1.8 sensors avg). That's enough headroom to absorb `curl_reg` at -1.5 to -2/step without net engagement going negative. The policy should be able to sustain proper grasps without the run6j collapse pattern.
+
+**Configuration delta from previous (6665d96 / run6j.1):**
+- `hand_object_contact_weight`: 1.5 → **3.0** ([env_cfg.py:748](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+- `lift_sharpness`: 5.0 → **4.0** (revert to run6g baseline)
+- `finger_curl_reg` ADR: (-0.3, -0.8) → **(-0.5, -1.2)** ([env_cfg.py:930](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+
+**Net delta from run6g (b63af7f, the baseline this builds on):** exactly 2 functional changes — `contact_weight 1.5→3.0` and `curl_reg (-0.3,-0.8)→(-0.5,-1.2)`. lift_sharpness diff is comment-only.
+
+**Engagement-vs-curl balance check** (predicted at peak grasping behavior, ~1.8 sensors avg contact + good_grasp firing):
+
+| Stack | contact_reward | good_grasp_reward | curl_reg | Net engagement gain |
+|---|---|---|---|---|
+| run6g | 1.5 × 1.8 = 2.7 | 6 × 0.4 = 2.4 | -1.5 (avg) | **+3.6/step** |
+| run6j (curl alone) | 1.5 × 1.8 = 2.7 | 6 × 0.4 = 2.4 | -2.0 | **+3.1/step** (but collapsed at -0.9 once contact dropped) |
+| **run6k (contact+curl)** | **3.0 × 1.8 = 5.4** | 6 × 0.4 = 2.4 | -2.0 | **+5.8/step** (1.6× more headroom) |
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` peak > 2.7% (run6g's record) AND no collapse pattern → restoring the coupled v1 knobs worked. Stronger contact reward absorbed the curl penalty, fingers learned to open during approach and curl on object. Run6k.1 may try further v1-direction adjustments.
+- `lift_success` peak ~ run6g's 2.7% with sustained engagement (no run6j-style collapse) → contact_weight bump prevented collapse but didn't unlock more lifts. The remaining bottleneck is elsewhere (probably thumb_rot_vel_limit). Pivot to run6l: thumb_rot_vel_limit revert.
+- Collapse pattern like run6j (rewards crash by ep 700-1000) → contact_weight=3 wasn't enough to absorb the curl penalty. Try lower curl_reg (e.g., -0.4, -1.0) as a midpoint, OR revert curl and accept run6g.
+- Engagement starved like run6j.1 / run6i (no contact for 1000+ epochs) → unexpected — contact_weight is HIGHER not lower, so this shouldn't happen. Would indicate something else changed; investigate.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-21_19-26-55/` (test repo, GPU 0, dextrah_test env, 1024 envs headless)
+
+**Result (ep 2757, stopped by user, 2026-05-21): ENGAGEMENT SOLVED, lifting REGRESSED. v1 reward triple produces strongest engagement of saga but a deeper camp basin than run6g.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 200 | ep 500 | ep 1000 | ep 1500 | ep 2000 | ep 2500 | ep 2700 | PEAK |
+|---|---|---|---|---|---|---|---|---|
+| **lift_success** | 0.000 | 0.003 | 0.001 | 0.000 | 0.000 | 0.000 | 0.000 | **0.010 @ ep 443** |
+| in_success_region | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0 |
+| **rewards** | 949 | 9448 | 10430 | 12404 | 12167 | 12438 | 13296 | **14324 @ ep 2601** |
+| lift_reward | 2.98 | 7.88 | 7.31 | 8.43 | 8.18 | 8.31 | 8.40 | 8.77 |
+| **hand_object_contact_reward** | 2.60 | 5.77 | 6.28 | 8.00 | 6.97 | 7.06 | 7.74 | **8.71** ← |
+| **good_grasp_reward** | 1.04 | 2.53 | 3.26 | 4.05 | 3.83 | 4.08 | 4.16 | **4.59** ← |
+| object_contact_count | 0.87 | 1.92 | 2.09 | 2.67 | 2.32 | 2.35 | 2.58 | 2.90 |
+| hand_to_object_distance (m) | 0.17 | 0.10 | 0.13 | 0.10 | 0.10 | 0.10 | 0.10 | — |
+| finger_curl_reg | -0.87 | -1.88 | -2.29 | -2.64 | -2.52 | -2.52 | -2.52 | — |
+| episode_lengths | 109 | 456 | 518 | 514 | 535 | 534 | 543 | — |
+
+## Reward decomposition at best policy (ep 2601, rewards = 13843)
+
+| Component | Value/step | Status |
+|---|---|---|
+| hand_to_object_reward | +2.71 | approach saturated |
+| object_to_goal_reward | +3.48 | gradient at goal active |
+| **hand_object_contact_reward** | **+7.38** | 2.46 contacts × 3.0 (run6k bump engaged) |
+| **good_grasp_reward** | **+4.27** | 71% theoretical max — proper grasps forming consistently |
+| lift_reward | +8.49 | camp residual at table-touch (60·exp(-2) ≈ 8.1) |
+| episode_length_reward | +1.47 | full duration |
+| **Engagement subtotal** | **+27.80** | strongest of any v2 retrain |
+| finger_curl_reg | −2.48 | v1 ADR at peak curl |
+| in_grip_alignment | −1.72 | |
+| palm_direction_alignment | −0.83 | |
+| action_rate / joint_vel / etc | −0.27 | small |
+| **Penalty subtotal** | **−5.30** | |
+| **Net engagement gain** | **+22.50/step** | HEALTHY |
+| **lift_success** | **0.000** | ❌ ZERO |
+
+**Observations:**
+1. **Engagement reward landscape is now ~70% larger than run6g** (+27.8/step vs run6g's ~+16/step at peak). The contact_weight + curl_reg coupling restored to v1 values produced the strongest sustainable grasping behavior of the entire v2 saga — no collapse, stable at high engagement through ep 2700.
+2. **good_grasp_reward = 4.27/step at peak** means thumb+finger grasps fire ~71% of the time (theoretical max = 6 × 1.0). v2 is now forming high-quality grasps reliably.
+3. **lift_success peak 0.010 (1.0%) at ep 443 — LOWER than run6g's 2.7%.** The policy is forming better grasps but lifting less. After ep 443 lift_success decayed to ~0 and never recovered.
+4. **Mechanism: deeper camp basin.** Run6g had ~+13/step net engagement reward — modest enough that risking it for the +52 lift differential was worthwhile to the policy. Run6k has ~+22.5/step engagement reward — the policy must risk MORE absolute reward to attempt a lift. Higher-quality engagement made the camp attractor *more* attractive in absolute terms, so lift exploration dropped.
+5. **`lift_reward` stable at ~8.4/step** matches the math (60 × exp(-2 × 0.5) = 8.12 at table touch). Policy is sitting at the camp residual without elevating.
+
+**Decision rule outcome — 2nd branch fires (with caveat):**
+
+> "lift_success peak ~ run6g's 2.7% with sustained engagement (no run6j-style collapse) → contact_weight bump prevented collapse but didn't unlock more lifts. The remaining bottleneck is elsewhere (probably thumb_rot_vel_limit). Pivot to run6l: thumb_rot_vel_limit revert."
+
+Actually performed *worse* on lift_success than run6g (1.0% vs 2.7%), but engagement is dramatically better and stable. The pivot to actuator-side is now decisively justified — we have an optimized reward landscape for engagement, and the policy STILL can't lift. Two possible explanations:
+
+- **Camp basin too attractive:** the +27.8/step engagement reward is so good that the lift gradient can't compete. Would require reducing engagement rewards back toward run6g levels (but that might re-introduce run6j-style fragility) OR adding an anti-camp signal.
+- **Actuator limit:** v2's thumb_rot_vel_limit (5→2 deg/s) is 115× tighter than v1's (573→8 deg/s). Even if the policy commits to lifting, the thumb can't close fast enough to maintain grip during upward motion. Object slips, contact breaks, lift fails. This is the untested major v1↔v2 delta.
+
+**Next experiment (run6l):** revert `thumb_rot_vel_limit` from (0.0873, 0.0349) to v1's (10.0, 0.1396) on top of run6k's engagement-solving reward stack. This combines the two strongest known directions: solved engagement (run6k) + v1's thumb actuator headroom (untested). If lifts emerge above run6g's 2.7% — likely much higher — we've found the v2 trainable point. If they stay at run6k's 1.0% or below, thumb_rot isn't the bottleneck either and we need to actively reduce engagement reward (camp basin).
+
 
 
 

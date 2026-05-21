@@ -745,7 +745,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
 
     # phase 2: contact
-    hand_object_contact_weight = 1.5   # run6d (2026-05-20): 3→1.5, halved to reduce contact's competing pull (contact_reward was ~7/step competing with lift_reward 9). Want lift to dominate.
+    hand_object_contact_weight = 3.0   # run6k (2026-05-21): 1.5→3 restored to v1 value. run6j proved v1's curl_reg overtakes engagement reward when contact_weight is 1.5; restoring to 3.0 rebuilds the engagement floor needed to absorb the stronger curl penalty.
     good_grasp_weight = 6.0            # run6d (2026-05-20): 15→6, dial back to ~run2g original value (CLAUDE.md notes run2g had 6.0). Reduces good_grasp's competing pull (was 8.5/step at run6c.1, exceeding lift). Combined with lift_weight bump + sharpness 4, want lift to be the dominant signal.
     finger_curl_reg_weight = -0.2    # reduced to allow ADR to widen; was -0.5
     finger_curl_reg_min = -3.0 # max penalty for finger curl
@@ -755,7 +755,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
     success_bonus_weight = 20.0  # bumped from 10: stronger incentive to close last few cm to goal
-    lift_sharpness = 5.0 #run6j (2026-05-21): 10→5. Bracket midpoint between run6g's 4 (best, 2.7% peak) and run6i's 10 (catastrophic, no bootstrap). Camp residual at table-touch with weight=60 = 60*exp(-2.5) = 4.9/step — slightly below run6g's 8/step. Tests whether tightening the gradient slightly above run6g's value can improve on the 2.7% peak without crossing into the run6i sparse-gradient failure mode.
+    lift_sharpness = 4.0 #run6k (2026-05-21): 5→4 reverted to run6g value. run6j.1 confirmed sharpness=5 starves engagement (3500 ep of no contact). run6g's 4 is the floor for this reward stack.
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
@@ -927,7 +927,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
             "lift_weight": (60., 30.),  # run6d (2026-05-20): start 40→60 (1.5x bump per user direction). End unchanged at 30. With the good_grasp gate (env.py) + sharpness 4 + reduced contact/good_grasp, want lift to be the dominant single signal at training start. Historically run3l used (60, 30) too.
-            "finger_curl_reg": (-0.3, -0.8),  # run6j.1 (2026-05-21): reverted from (-0.5,-1.2) back to run6g's value. run6j proved v1's curl_reg overtakes v2's reduced contact_weight=1.5 engagement reward, causing collapse at ep 700. Isolating sharpness=5 contribution on top of run6g state.
+            "finger_curl_reg": (-0.5, -1.2),  # run6k (2026-05-21): restored to v1's value. Pairs with hand_object_contact_weight 1.5→3 restoration — the two coupled v1 knobs together rebuild v1's reward equilibrium. run6j alone (curl only, contact still 1.5) collapsed because engagement reward couldn't absorb curl penalty.
         },
         "pd_targets": {
             "velocity_target_factor": (1., 0.)
