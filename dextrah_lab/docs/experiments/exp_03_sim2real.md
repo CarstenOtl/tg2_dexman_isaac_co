@@ -4313,6 +4313,135 @@ Actually performed *worse* on lift_success than run6g (1.0% vs 2.7%), but engage
 
 **Next experiment (run6l):** revert `thumb_rot_vel_limit` from (0.0873, 0.0349) to v1's (10.0, 0.1396) on top of run6k's engagement-solving reward stack. This combines the two strongest known directions: solved engagement (run6k) + v1's thumb actuator headroom (untested). If lifts emerge above run6g's 2.7% — likely much higher — we've found the v2 trainable point. If they stay at run6k's 1.0% or below, thumb_rot isn't the bottleneck either and we need to actively reduce engagement reward (camp basin).
 
+### run6g.1 — verify run6g reproducibility (re-run identical config) (2026-05-21)
+
+**Motivation:** The run6h–run6k sweep showed that none of the explored reward-shape variants beat run6g's 2.7% lift peak. Before pivoting to actuator-side experiments (thumb_rot revert) or anti-camp signals, **verify that run6g's result is reproducible**. Re-run with the exact same env_cfg state (b63af7f), env.py state, seed (42), and training params. Two questions answered:
+
+1. **Is the 2.7% lift peak reproducible** with the current code, or was it stochastic luck? If lift_success again peaks 1.5-3% with similar engagement profile, run6g is confirmed as the working v2 baseline.
+2. **Reward decomposition at the new run's best policy** — compare to the original run6g breakdown (see above). Same configuration should produce same reward profile.
+
+### Run6g original reward breakdown (peak lift_success, ep 2726, lift = 2.7%) — reference
+
+| Component | Value/step |
+|---|---|
+| hand_to_object_reward | +2.57 |
+| object_to_goal_reward | +3.02 |
+| lift_reward | +7.45 (camp residual ~8 at sharpness=4) |
+| hand_object_contact_reward | +1.99 (1.33 contacts × 1.5 weight) |
+| good_grasp_reward | +0.36 (6% fire rate) |
+| episode_length_reward | +1.37 |
+| **Engagement subtotal** | **+16.76/step** |
+| finger_curl_reg | -0.83 |
+| in_grip_alignment_reward | -1.73 |
+| palm_direction_alignment_reward | -0.42 |
+| action_rate / joint_vel / etc | -0.21 |
+| **Penalty subtotal** | **-3.19/step** |
+| **Net engagement gain** | **+13.57/step** |
+| **lift_success** | **2.7%** |
+| object_contact_count | 1.33 |
+| hand_to_object_distance (m) | 0.11 |
+| in_success_region | 0.0003 |
+
+**Configuration delta from previous (c2b8f74 / run6k):**
+- `hand_object_contact_weight`: 3.0 → **1.5** (revert run6k)
+- `finger_curl_reg` ADR: (-0.5, -1.2) → **(-0.3, -0.8)** (revert run6k)
+- (`lift_sharpness` already at 4.0, unchanged)
+- Net diff vs run6g (b63af7f): **0 lines** — exact replication.
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024, visdex_selected — identical to original run6g.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` peak 1.5-3.5% with similar engagement profile to original run6g (low good_grasp ~0.4, contact ~1.3-2.0) → REPRODUCIBLE. Confirms run6g as the working v2 baseline. Then pivot to run6l (actuator-side: thumb_rot_vel_limit revert) with confidence.
+- `lift_success` peak < 1% → run6g was stochastic; the v2 reward landscape doesn't reliably produce lift. Implies need for structural fix beyond reward shaping. Pivot directly to actuator and/or anti-camp signals.
+- `lift_success` peak > 4% → unexpectedly better than original; perhaps non-determinism favoring this run. Locks in run6g as solid baseline; investigate why this run differs (likely just GPU stochastic kernels).
+- Different reward profile (e.g., higher good_grasp than original 0.36) → suggests training is non-deterministic enough that decomposition comparisons across runs are noisy. Compare lift_success only.
+
+**Run directory:** *(to be filled in once launched)*
+
+**Result:** *(to be filled in)*
+
+### run6l — arm velocity_limit_sim raised to FR3 hardware spec (2026-05-21)
+
+**Motivation:** While investigating joint 4 struggle behavior in Isaac Sim manual test, discovered that BOTH v1 and v2 have arm `velocity_limit_sim = 2.175 rad/s` for all 7 joints, but FR3 hardware spec is 150 deg/s (2.618 rad/s) for joints 1-4 and 301 deg/s (5.253 rad/s) for joints 5-7. This means **wrist joints (5-7) have been training at only 41% of their hardware velocity capability** — a major previously-untouched constraint.
+
+User-driven hypothesis: at hardware-spec velocity, the FR3 + AgileHand has "no problems lifting the object" mechanically. The 2.175 rad/s clamp may be preventing the policy from generating the dynamic wrist motions needed to (a) maintain hand orientation during lift, and (b) coordinate finger closure with arm motion fast enough to maintain grip.
+
+This is **not a v1↔v2 difference** (both have the same conservative 2.175) but a global ceiling we've never tested. If lifts improve substantially, the constraint was real for both v1 and v2 — explains why even v1 plateaued at ADR 13.
+
+**Configuration delta from previous (c2b8f74 / run6k commit):**
+
+*(also reverts the run6g.1 staged state, which had reverted env_cfg back to run6g baseline — that revert remains in place)*
+
+- `fr3_tekken_left.py` joints 1-4 `velocity_limit_sim`: 2.175 → **2.618** (150 deg/s, hardware spec)
+- `fr3_tekken_left.py` joints 5-7 `velocity_limit_sim`: 2.175 → **5.253** (301 deg/s, hardware spec)
+- `env_cfg.py`: unchanged from run6g baseline (b63af7f) — the run6g.1 revert remains.
+
+**Net effective change vs run6g state:** 2-line edit in `fr3_tekken_left.py`. Reward landscape unchanged from run6g, all other constraints unchanged. Single-knob (well, single-file-knob — velocity_limit_sim on the arm).
+
+**Hardware spec reference:**
+| Joints | Hardware °/s | Hardware rad/s | Previous | New |
+|---|---|---|---|---|
+| A1–A4 | 150 | 2.618 | 2.175 (83%) | **2.618 (100%)** |
+| A5–A7 | 301 | 5.253 | 2.175 (41%) | **5.253 (100%)** |
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` peak > 5% AND `in_success_region` crosses 0.4 → wrist velocity was a structural blocker for both v1 and v2. ADR finally advances. Major breakthrough.
+- `lift_success` peak in 2.7-5% range (improvement over run6g but not transformative) → wrist velocity helps but isn't the only bottleneck. Compound with other USD-level reverts (finger velocity, soft_joint_pos_limit) as run6l.1.
+- `lift_success` peak ≤ run6g's 2.7% → wrist velocity is not the bottleneck. Both v1 and v2 already had enough velocity. Pivot to other USD constraints (finger velocity, thumb stiffness).
+- Engagement collapses or unusual instability → faster wrist created control instability with current PD gains. Need to retune damping or reduce stiffness.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-21_23-15-16/` (test repo, GPU 0, dextrah_test env — 24 envs livestream observation)
+
+**Result (early termination, 2026-05-21): TRAINING ACCIDENTALLY STOPPED — but livestream observation was informative.**
+
+User qualitative observation: *"the policy wants to lift the object, it just has difficulties doing so."* The wrist velocity raise to hardware spec did manifest as visible intent to lift, but grip wasn't holding — object slipping during attempted upward motion. Suggests velocity headroom unblocked the *intent* but a different bottleneck (grip / friction / curl posture) prevents *execution*.
+
+No quantitative TB analysis (run terminated too early for meaningful data). Next experiment (run6l.1) addresses the grip issue: bump baseline object/robot friction from 1.0 → 1.5 and bump finger_curl_reg ADR start from -0.3 → -0.5 (encourage open-hand approach when thumb can't reposition), keeping the velocity_limit_sim raise from run6l.
+
 
 
 

@@ -82,14 +82,14 @@ FR3_TEK_LEFT_CONFIG = ArticulationCfg(
         "franka_arm": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[1-4]"],
             effort_limit_sim=90.0,    # FR3 hardware spec for joints 1-4
-            velocity_limit_sim=2.175,
+            velocity_limit_sim=2.618,  # run6l (2026-05-21): 2.175→2.618 = 150 deg/s, matches FR3 hardware spec for A1-A4. Was 83% of spec.
             stiffness=200.0,          # 400→200: softer spring, less force on contact
             damping=40.0,
         ),
         "franka_joints_ee": ImplicitActuatorCfg(
             joint_names_expr=[r"fr3_joint[5-7]"],
             effort_limit_sim=20.0,    # FR3 hardware spec for joints 5-7
-            velocity_limit_sim=2.175,
+            velocity_limit_sim=5.253,  # run6l (2026-05-21): 2.175→5.253 = 301 deg/s, matches FR3 hardware spec for A5-A7. Was only 41% of spec — biggest velocity headroom unlock.
             stiffness=200.0,          # 400→200
             damping=40.0,
         ),
