@@ -755,7 +755,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
     success_bonus_weight = 20.0  # bumped from 10: stronger incentive to close last few cm to goal
-    lift_sharpness = 4.0 #run6d (2026-05-20): 2→4 back to 4fe7cb7 value. With reduced contact/good_grasp + bumped lift_weight + gate active, want the lift gradient to be STEEPER near the goal — sharpness=4 reduces camp residual at table (~14→8 with weight 40, scales with new weight 60) and concentrates lift_reward toward the goal region. Steeper gradient pulls policy toward actual goal altitude vs run6b's flat-gradient camp-at-21cm equilibrium.
+    lift_sharpness = 2.0 #run6h (2026-05-21): 4→2 matching v1's value. v1 trains to ADR 13 with sharpness 2 — the flatter gradient lets the policy discover lifts from table height. v2 at sharpness 4 concentrates lift_reward near the goal and may be why run6g plateaued at 2.7% (policy can't discover the lift gradient from table level). Single-knob test on top of run6g's gate-reverted baseline.
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   

@@ -3848,6 +3848,85 @@ TensorBoard at iter sample points:
 
 Gate removal alone delivered the strongest v2 signal yet but plateaued at 2.7%. Next: adopt v1's exact reward landscape on top of the gate revert to push past the 5% threshold and trigger ADR.
 
+### run6h — match v1's `lift_sharpness` (4 → 2) on top of run6g (2026-05-21)
+
+**Motivation:** Per the v1↔v2 reward-landscape comparison after run6g, `lift_sharpness` is one of the largest single-knob deltas (v1 = 2.0, v2 = 4.0). v1 trains to ADR 13 with the flatter sharpness=2 gradient — meaning lift_reward begins accumulating significantly even from table height. v2 at sharpness=4 concentrates lift_reward closer to the goal altitude, so the policy can't *discover* the lift signal from camped table behavior. Hypothesis: run6g plateaued at 2.7% lift_success because the policy can't see enough lift_reward gradient from table altitude to commit to vertical motion. **Single-knob test:** match v1's `lift_sharpness = 2.0` on top of run6g's gate-reverted baseline.
+
+If correct → policy discovers lift gradient from table-touch state, climbs past run6g's 2.7% peak, possibly past the 5% threshold to trigger ADR (success_for_adr=0.4). Combined with the gate revert from run6g, this would mean v2 trains.
+
+**Configuration delta from previous (b63af7f / run6g):**
+- `lift_sharpness`: 4.0 → **2.0** ([env_cfg.py:758](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+- Everything else identical to run6g (env.py gate `contact_mask = (contact_count > 0)`, good_grasp_weight=6, contact_weight=1.5, lift_weight ADR (60,30), thumb_rot vel (0.0873, 0.0349), etc).
+
+**Effect on lift_reward landscape at ADR 0** (with `lift_weight = 60` start):
+- At table touch (vertical_err ≈ 0.5 m): v1 sharpness=2 → 60 × exp(-2 × 0.5) = **22/step**; v2 sharpness=4 → 60 × exp(-4 × 0.5) = **8/step**
+- At lift to half goal altitude (vertical_err ≈ 0.25 m): v1 → 60 × exp(-0.5) = **36/step**; v2 → 60 × exp(-1) = **22/step**
+- At goal (vertical_err = 0): both → 60/step
+
+So at sharpness=2, the policy gets 22/step just for touching the table (~3× more table-touch reward than sharpness=4's 8/step) — but also gets a stronger pull toward lifting because the gradient is more uniformly available across the altitude range.
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` climbs past 0.05 sustained AND `in_success_region` > 0.4 → **ADR advances past 0 for the first time in v2 saga**. Lift_sharpness was the single largest blocker. Let it run to ADR convergence.
+- `lift_success` climbs past run6g's 2.7% peak but stays below 5% → sharpness=2 helps but more weight tuning needed. Stack v1's other reward deltas (contact_weight 1.5→3, good_grasp 6→3, success_bonus 20→10) one by one.
+- `lift_success` stays around run6g's 2.7% or below → lift_sharpness wasn't the bottleneck. Pivot to actuator-side (thumb_rot vel limit back to v1's 10.0 rad/s — the other large v1↔v2 delta).
+- Catastrophic camp residual (lift_reward saturating at ~22/step from table-touch, no upward progress) → flatter gradient enabled a worse local optimum. Revert sharpness, try lift_weight bump instead.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-21_13-57-10/` (test repo, GPU 0, dextrah_test env, 1024 envs headless)
+
+**Result (ep 3070, 2026-05-21): FAILURE — worse than run6g. Decision-rule's 4th branch fires: camp residual saturated, policy abandoned grasping for single-finger camping.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 500 | ep 1000 | ep 1500 | ep 2000 | ep 2400 | ep 3000 | PEAK |
+|---|---|---|---|---|---|---|---|
+| **lift_success** | 0.000 | 0.000 | 0.002 | 0.000 | 0.000 | 0.000 | **0.008 @ ep 1538** |
+| **in_success_region** | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | **never > 0** |
+| rewards (raw) | 2211 | 9201 | 11521 | 14237 | 13525 | 12935 | 14892 @ ep 1989 |
+| **lift_reward (camp residual)** | 13.1 | 14.4 | 2.3 | 20.0 | 20.1 | **19.9** | **21.2 @ ep 2384** |
+| hand_object_contact_reward | 1.80 | 1.54 | 0.32 | 1.51 | 1.55 | 1.48 | 2.86 @ ep 615 |
+| good_grasp_reward | 1.14 | 0.97 | 0.23 | 0.15 | 0.11 | **0.16** | 2.17 @ ep 621 |
+| object_contact_count | 1.20 | 1.03 | 0.21 | 1.01 | 1.03 | 0.98 | 1.90 @ ep 615 |
+| hand_to_object_distance (m) | 0.17 | 0.15 | 0.30 | 0.15 | 0.15 | 0.14 | — |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+**Observations:**
+1. **lift_success peak 0.008 (0.8%) @ ep 1538 — WORSE than run6g's 2.7% peak.** The flatter gradient did not help discover lifts; it enabled a *more attractive* camp basin.
+2. **`lift_reward` saturated at ~20/step from ep 2200 onward** — exactly the predicted math: at sharpness=2, weight=60 ADR start, vertical_err=0.5m (table-touch) → 60·exp(-1) = **22/step camp residual**. Compare run6g at sharpness=4: 60·exp(-2) = 8/step camp residual. v2's sharpness=4 was *constraining* the camp residual; sharpness=2 removed that constraint.
+3. **`good_grasp_reward` collapsed from peak 2.17 (ep 621) → 0.003 (ep 2800).** Policy abandoned thumb+finger grasp formation in favor of single-finger camping. With ungated lift_reward (run6g) + fat camp residual (sharpness=2), there's no incentive to commit to a proper grasp.
+4. **`in_success_region` NEVER crossed zero** — vs run6g where it reached 0.017 peak. Policy actively regressed on goal-region behavior.
+5. **Mid-run transient regression at ep 1000-1500** (contact dropped 1.54 → 0.32, good_grasp 0.97 → 0.23, lift_reward 14.4 → 2.3) followed by recovery to camping at ep 2000. The policy briefly questioned the camp strategy then reaffirmed it.
+
+**Decision rule outcome — 4th branch fires:**
+
+> "Catastrophic camp residual (lift_reward saturating at ~22/step from table-touch, no upward progress) → flatter gradient enabled a worse local optimum. Revert sharpness, try lift_weight bump instead."
+
+Confirmed: lift_sharpness=2 is structurally worse for v2's setup than sharpness=4. v1 can use sharpness=2 because v1's other parameters (lift_weight start at 40 vs v2's 60, contact_weight 3 vs v2's 1.5, gate disposition) produce a different reward balance — but lift_sharpness alone in v2's landscape creates the fat-residual camping basin.
+
+**Implication for next experiment:** The "match v1's reward landscape one field at a time" strategy doesn't work for fields whose effect depends on the full reward stack. lift_sharpness needs to be retuned in concert with lift_weight (lower start), contact_weight (raise back to 3), and good_grasp_weight (lower back to 3) — i.e., a v1-bundle revert. OR pivot to actuator-side: revert thumb_rot_vel_limit to v1's (10.0, 0.1396) range, leaving rewards at run6g state. Thumb_rot is the one large v1↔v2 delta we haven't directly tested in the run6 cycle.
+
 
 
 
