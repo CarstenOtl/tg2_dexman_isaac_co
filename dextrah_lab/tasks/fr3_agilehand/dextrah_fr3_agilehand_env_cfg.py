@@ -41,8 +41,8 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "static_friction_range": (1.0, 1.0),
-            "dynamic_friction_range": (1.0, 1.0),
+            "static_friction_range": (1.5, 1.5),   # run6l.1 (2026-05-21): 1.0→1.5 baseline friction. Compensates for slow thumb — sticky fingers hold object even when thumb can't dynamically grip.
+            "dynamic_friction_range": (1.5, 1.5),  # run6l.1 (2026-05-21): 1.0→1.5
             "restitution_range": (1.0, 1.0),
             "num_buckets": 250,
         },
@@ -157,8 +157,8 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("object", body_names=".*"),
-            "static_friction_range": (1.0, 1.0),
-            "dynamic_friction_range": (1.0, 1.0),
+            "static_friction_range": (1.5, 1.5),   # run6l.1 (2026-05-21): 1.0→1.5 baseline friction
+            "dynamic_friction_range": (1.5, 1.5),  # run6l.1 (2026-05-21): 1.0→1.5
             "restitution_range": (1.0, 1.0),
             "num_buckets": 250,
         },
@@ -927,7 +927,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
             "lift_weight": (60., 30.),  # run6d (2026-05-20): start 40→60 (1.5x bump per user direction). End unchanged at 30. With the good_grasp gate (env.py) + sharpness 4 + reduced contact/good_grasp, want lift to be the dominant single signal at training start. Historically run3l used (60, 30) too.
-            "finger_curl_reg": (-0.3, -0.8),  # reduced: previous (-0.5,-1.2) penalized grasps too aggressively at higher ADR
+            "finger_curl_reg": (-0.5, -0.8),  # run6l.1 (2026-05-21): start -0.3→-0.5 — encourages open-hand approach when thumb is constrained by velocity limit and can't dynamically reposition. End unchanged at -0.8 (avoids run6j collapse risk from -1.2).
         },
         "pd_targets": {
             "velocity_target_factor": (1., 0.)

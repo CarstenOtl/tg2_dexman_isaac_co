@@ -4442,6 +4442,57 @@ User qualitative observation: *"the policy wants to lift the object, it just has
 
 No quantitative TB analysis (run terminated too early for meaningful data). Next experiment (run6l.1) addresses the grip issue: bump baseline object/robot friction from 1.0 → 1.5 and bump finger_curl_reg ADR start from -0.3 → -0.5 (encourage open-hand approach when thumb can't reposition), keeping the velocity_limit_sim raise from run6l.
 
+### run6l.1 — friction 1.0→1.5 + finger_curl_reg start −0.3→−0.5 (keep velocity raise) (2026-05-21)
+
+**Motivation:** run6l livestream observation: policy *wants* to lift but grip slips. With wrist velocity now at hardware spec (run6l), the dynamic intent is there — what's missing is grip retention. Two coupled fixes:
+
+1. **Baseline friction 1.0 → 1.5** (object + robot EventTerm). At ADR 0, contact friction goes from 1.0 to 1.5 — sticky fingers hold object even when the slow thumb (limited to 5 deg/s) can't dynamically compensate for slip. This is untested territory — friction has been at 1.0 for the entire v2 saga.
+
+2. **`finger_curl_reg` ADR start −0.3 → −0.5** (end unchanged at −0.8). Encourages open-hand approach when thumb is fixed near 0° (can't reposition due to velocity limit). Open fingers + sticky friction = better object envelope before closure. Smaller bump than run6j's −0.5/−1.2 disaster (which paired stronger penalty with low contact_weight=1.5 → engagement collapse). This run keeps contact_weight=1.5 too, but the friction bump should give engagement enough headroom to absorb the slightly stronger curl penalty.
+
+**Configuration delta from previous (426d044 / run6l):**
+- `robot_physics_material` EventTerm: static + dynamic friction `(1.0, 1.0) → (1.5, 1.5)` ([env_cfg.py:44-45](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+- `object_physics_material` EventTerm: static + dynamic friction `(1.0, 1.0) → (1.5, 1.5)` ([env_cfg.py:160-161](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+- `finger_curl_reg` ADR: `(-0.3, -0.8) → (-0.5, -0.8)` ([env_cfg.py:930](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+- `fr3_tekken_left.py` arm velocity_limit_sim: unchanged from run6l (joints 1-4: 2.618, joints 5-7: 5.253).
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` peak > run6g's 2.7% AND `in_success_region` crosses 0.4 → friction + velocity together broke the lift barrier. ADR finally advances. Friction was a real bottleneck.
+- `lift_success` peak in 2-3% range like run6g, but with visible grip retention in livestream → friction helped grip but other constraints (camp basin, etc.) still limit lifts. Compound with anti-camp signal next.
+- run6j-style early collapse (rewards crash by ep 700-1000) → curl_reg bump too aggressive without contact_weight restore. Revert curl_reg, keep friction.
+- `lift_success` peak ≤ run6g's 2.7% without collapse → friction alone (or with mild curl bump) isn't enough. Consider further friction bump (2.0+) or actuator-side intervention.
+
+**Run directory:** *(24-env livestream observation, no canonical 1024-env run)*
+
+**Result (livestream observation, 2026-05-21): VELOCITY EXPLOSIONS — actuator effort limits too high for the new physics regime.**
+
+User observation: *"velocity explosions going crazy right now."* The combination of friction 1.5 + velocity_limit_sim at hardware spec + finger actuator effort limits (mcp_pitch/yaw/pip at 2.0 Nm, thumb_rot at 10.0 Nm) produces vel_explode terminations during contact. With high friction holding the object, the policy commanding fast finger closure now generates large reaction forces, and the unconstrained finger effort limits let those forces compound into runaway velocity.
+
+Fix is on the actuator side — cap finger and thumb effort limits so contact forces can't drive joint velocities into the explosion zone. Next: run6l.2 drops mcp_pitch effort 2.0→0.7, mcp_yaw/pip effort 2.0→0.5, thumb_rot effort 10.0→2.0.
+
 
 
 
