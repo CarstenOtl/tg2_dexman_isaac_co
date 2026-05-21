@@ -927,7 +927,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
             "lift_weight": (60., 30.),  # run6d (2026-05-20): start 40→60 (1.5x bump per user direction). End unchanged at 30. With the good_grasp gate (env.py) + sharpness 4 + reduced contact/good_grasp, want lift to be the dominant single signal at training start. Historically run3l used (60, 30) too.
-            "finger_curl_reg": (-0.5, -1.2),  # run6j (2026-05-21): restored to v1's value (was -0.3,-0.8 in run6g). v1 trains to ADR 13 with this stronger curl penalty — encourages the policy to keep fingers open during approach and curl only when grasping the object. Pairs with sharpness=5 to push policy toward "open-hand approach + grasp at object + lift".
+            "finger_curl_reg": (-0.3, -0.8),  # run6j.1 (2026-05-21): reverted from (-0.5,-1.2) back to run6g's value. run6j proved v1's curl_reg overtakes v2's reduced contact_weight=1.5 engagement reward, causing collapse at ep 700. Isolating sharpness=5 contribution on top of run6g state.
         },
         "pd_targets": {
             "velocity_target_factor": (1., 0.)

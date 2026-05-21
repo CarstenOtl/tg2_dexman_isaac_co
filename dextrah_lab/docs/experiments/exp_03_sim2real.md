@@ -4116,6 +4116,97 @@ The crash signature (ep 500 peak → ep 700 -88%) confirms the curl_reg + lower 
 
 **Next: revert curl_reg back to run6g's (-0.3, -0.8), keep sharpness=5.** That isolates whether sharpness=5 alone helps over run6g's sharpness=4. If it does (peak > 2.7%), we've found a better operating point. If it doesn't (peak ≤ 2.7%), revert sharpness to 4 too — confirming run6g is the local optimum for the run6d-era reward stack. **Then** the only way to use v1's curl_reg is to *also* restore v1's contact_weight (3.0) — a coupled experiment, but justified by this run6j finding.
 
+### run6j.1 — isolate sharpness=5 (revert curl_reg to run6g value) (2026-05-21)
+
+**Motivation:** Run6j tested sharpness=5 + curl_reg (-0.5,-1.2) together and collapsed at ep 700 due to the curl_reg/contact_weight imbalance. Isolate the sharpness=5 contribution alone by reverting curl_reg back to run6g's (-0.3, -0.8) while keeping sharpness=5. This is a clean single-knob test vs run6g: did sharpness=5 alone help or hurt?
+
+**Configuration delta from previous (4ef6e2b / run6j):**
+- `finger_curl_reg` ADR: (-0.5, -1.2) → **(-0.3, -0.8)** ([env_cfg.py:930](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+
+**Net delta from run6g (b63af7f) baseline:** exactly one functional change:
+- `lift_sharpness`: 4.0 → **5.0** ([env_cfg.py:758](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+- `finger_curl_reg` ADR comment touched but value identical to run6g.
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` peak > 2.7% (run6g's record) → sharpness=5 alone is a marginal improvement; lock it in as new baseline. Next experiment: try sharpness=6.
+- `lift_success` peak ≤ 2.7% but no collapse → sharpness=5 didn't help, but didn't hurt either. Run6g (sharpness=4) is the local optimum for this reward stack. Revert sharpness to 4 and pivot to **run6k**: bundle v1's coupled reward triple (contact_weight 1.5→3, good_grasp_weight 6→3, curl_reg (-0.3,-0.8)→(-0.5,-1.2)) together.
+- Early collapse pattern like run6j (rewards crash before ep 1000) → sharpness=5 itself is destabilizing in this stack (not just the curl_reg). Revert to sharpness=4.
+- `lift_success` peak < 0.5% with engagement intact → sharpness=5 reduced the table-touch incentive enough that the policy didn't find the lift basin. Revert to sharpness=4.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-21_17-45-16/` (test repo, GPU 0, dextrah_test env, 1024 envs headless)
+
+**Result (ep 4062, stopped by user, 2026-05-21): ENGAGEMENT STARVED — policy approached the object but never contacted it for 3500 epochs.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 200 | ep 500 | ep 1000 | ep 2000 | ep 3000 | ep 3500 | ep 4000 | PEAK |
+|---|---|---|---|---|---|---|---|---|
+| **lift_success** | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | **0.003 @ ep 4022** |
+| rewards | 35 | 910 | 1605 | 1664 | 1746 | 1555 | 1574 | 1847 @ ep 3828 |
+| hand_to_object_reward | 1.28 | 1.69 | 2.05 | 1.99 | 2.05 | 2.01 | 2.06 | 2.16 |
+| **hand_object_contact_reward** | 0.011 | 0.001 | 0.002 | 0.000 | 0.002 | 0.002 | **0.216** | 0.43 |
+| good_grasp_reward | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.057 | 0.16 |
+| object_contact_count | 0.007 | 0.001 | 0.001 | 0.000 | 0.002 | 0.001 | 0.144 | 0.28 |
+| lift_reward | 0.022 | 0.004 | 0.005 | 0.001 | 0.002 | 0.002 | 0.397 | 0.80 |
+| hand_to_object_distance (m) | 0.30 | 0.22 | 0.17 | 0.18 | 0.17 | 0.17 | 0.17 | — |
+| finger_curl_reg | -0.10 | -0.68 | -0.11 | -0.14 | -0.18 | -0.25 | -0.56 | — |
+| episode_lengths | 35 | 555 | 535 | 553 | 572 | 545 | 509 | — |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+**Observations:**
+1. **Engagement absent for 3500 epochs.** Contact, good_grasp, lift_reward all near zero from ep 500 through ep 3500. The policy approached the object (hand_to_object_distance settled at 0.17 m by ep 1000, hand_to_object_reward stable at ~2.05) but never *touched* it.
+2. **Engagement just barely emerged at ep 4000+** (contact 0.14, good_grasp 0.057, lift_reward 0.40). This is the start of what run6g had at ep 2500-2700 — but **1500 epochs delayed**.
+3. **Same compute, vastly worse trajectory than run6g.** Run6g at ep 4000 had ~1.2% lift_success, ~1.7 contact, ~3 good_grasp. Run6j.1 at ep 4000 has 0% lift, 0.14 contact, 0.06 good_grasp. The single change (sharpness 4 → 5) cost ~1500 epochs of progress.
+4. **`hand_to_object_distance` stable at 0.17 m** through the entire dead period — policy correctly learned to approach the object, but the engagement gradient was too flat to bootstrap contact behavior.
+5. **`finger_curl_reg` near zero** (-0.10 to -0.25) through the dead period — fingers stayed mostly open. Without contact rewards firing, no incentive to curl.
+
+**Mechanism — engagement bootstrap starvation:**
+
+Sharpness=4 → 5 reduced lift_reward camp residual at table-touch from 8/step to 4.9/step (−39%). Combined with v2's `contact_weight=1.5` (vs v1's 3.0), the total positive reward for engaging the object dropped below the threshold needed to bootstrap exploration. The policy's gradient told it "approach the object" (hand_to_object_reward stays high at ~2.05) but didn't reward making contact strongly enough to overcome the noise floor of penalty terms.
+
+**Lift_sharpness sweep — complete:**
+
+| sharpness | Peak lift | Verdict |
+|---|---|---|
+| 2 (run6h) | 0.8% | fat camp basin (22/step), abandoned grasps |
+| **4 (run6g)** | **2.7%** | **local optimum — best of saga** |
+| 5 (run6j.1) | 0.3% (just emerging at ep 4000) | bootstrap-starved, 1500+ epoch delay |
+| 10 (run6i) | 0.1% | full bootstrap failure |
+
+**Decision rule outcome — 4th branch fires (modified):**
+
+> "`lift_success` peak < 0.5% with engagement intact → sharpness=5 reduced the table-touch incentive enough that the policy didn't find the lift basin. Revert to sharpness=4."
+
+Even worse than the branch predicted — engagement wasn't merely reduced, it was absent for 3500 epochs. Sharpness=4 is the floor for the current reward stack; any reduction in the table-touch camp residual breaks bootstrap.
+
+**Implication:** run6g is the local optimum for the current reward stack (`contact_weight=1.5`, `good_grasp_weight=6`, `lift_weight=(60,30)`, `lift_sharpness=4`, gate reverted). Further reward-shape tuning on this stack will not improve past 2.7% — the stack has a ceiling determined by the v2-specific actuator constraints. Two paths forward:
+
+1. **run6k — restore v1's coupled reward triple together:** contact_weight 1.5→3, good_grasp 6→3, curl_reg (-0.3,-0.8)→(-0.5,-1.2). These three v1 values are internally balanced (per the run6j analysis). Tests whether v1's reward stack works on v2's actuators.
+2. **run6k — pivot to actuator side:** revert thumb_rot_vel_limit from (0.0873, 0.0349) to v1's (10.0, 0.1396). This is still the untested major v1↔v2 delta — v2 starts thumb at 5 deg/s vs v1's 573 deg/s, 115× tighter. If the grasp-timing constraint at v2's thumb velocity is the structural lift limit, no reward shaping fixes it.
+
 
 
 
