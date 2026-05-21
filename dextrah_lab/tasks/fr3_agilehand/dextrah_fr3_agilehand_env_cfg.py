@@ -755,7 +755,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
     success_bonus_weight = 20.0  # bumped from 10: stronger incentive to close last few cm to goal
-    lift_sharpness = 10.0 #run6i (2026-05-21): 2→10. Opposite direction from run6h. run6h showed sharpness=2 creates a fat 22/step camp residual at table-touch that pulls the policy into single-finger camping. sharpness=10 reduces table-touch residual to 0.40/step — essentially zero. Hypothesis: removing the camp incentive forces the policy to actually lift. Risk: gradient is too sparse at low altitudes, policy can't find the lift signal at all.
+    lift_sharpness = 5.0 #run6j (2026-05-21): 10→5. Bracket midpoint between run6g's 4 (best, 2.7% peak) and run6i's 10 (catastrophic, no bootstrap). Camp residual at table-touch with weight=60 = 60*exp(-2.5) = 4.9/step — slightly below run6g's 8/step. Tests whether tightening the gradient slightly above run6g's value can improve on the 2.7% peak without crossing into the run6i sparse-gradient failure mode.
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
@@ -927,7 +927,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
             "lift_weight": (60., 30.),  # run6d (2026-05-20): start 40→60 (1.5x bump per user direction). End unchanged at 30. With the good_grasp gate (env.py) + sharpness 4 + reduced contact/good_grasp, want lift to be the dominant single signal at training start. Historically run3l used (60, 30) too.
-            "finger_curl_reg": (-0.3, -0.8),  # reduced: previous (-0.5,-1.2) penalized grasps too aggressively at higher ADR
+            "finger_curl_reg": (-0.5, -1.2),  # run6j (2026-05-21): restored to v1's value (was -0.3,-0.8 in run6g). v1 trains to ADR 13 with this stronger curl penalty — encourages the policy to keep fingers open during approach and curl only when grasping the object. Pairs with sharpness=5 to push policy toward "open-hand approach + grasp at object + lift".
         },
         "pd_targets": {
             "velocity_target_factor": (1., 0.)

@@ -4014,6 +4014,108 @@ Both fire because the policy doesn't just fail to lift — it actively unlearns 
 
 **Implication: lift_sharpness sweet spot is between 4 and 10**, likely 4-6. Sharpness=4 (run6g) was the best of the saga (2.7%). Sharpness=2 (run6h) over-rewarded camping. Sharpness=10 (run6i) starved engagement entirely. A binary search would put run6i.1 at sharpness=6 next, but the more informative pivot would be to leave sharpness at 4 (the known-best) and test the **untested big lever**: thumb_rot_vel_limit at v1's (10.0, 0.1396) range.
 
+### run6j — sharpness 4 → 5 + finger_curl_reg ADR back to v1 values (2026-05-21)
+
+**Motivation:** Use run6g (best v2 result, 2.7% peak) as the new baseline and apply two coupled changes that move toward v1's penalty regime:
+1. **`lift_sharpness` 4 → 5** — slightly steeper than run6g's 4 (which was already the sweep optimum: run6h=2 over-rewarded camping, run6i=10 starved engagement). Tests whether mildly tightening the gradient improves on run6g's 2.7%.
+2. **`finger_curl_reg` ADR (-0.3, -0.8) → (-0.5, -1.2)** — restore v1's stronger curl penalty. v1 trains to ADR 13 with this; encourages open-hand approach and curl-only-on-object behavior.
+
+Joint hypothesis: stronger curl penalty + slightly steeper lift gradient together push the policy toward "open hand approach → curl at object → lift" instead of run6g's tendency to camp with closed fingers. Bundled because both moves are part of "make v2's reward shape closer to v1's penalty regime" — splitting them would slow the iteration without changing what we'd learn.
+
+**Configuration delta from previous (315fac1 / run6i):**
+- `lift_sharpness`: 10.0 → **5.0** ([env_cfg.py:758](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+- `finger_curl_reg` ADR: (-0.3, -0.8) → **(-0.5, -1.2)** ([env_cfg.py:930](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py))
+- Net diff vs run6g (the explicit user-stated baseline): exactly these 2 lines.
+
+**Effect on lift_reward landscape at ADR 0** (with `lift_weight = 60`, unchanged from run6g):
+
+| Position | run6g (sharp=4) | **run6j (sharp=5)** | run6h (sharp=2) | run6i (sharp=10) |
+|---|---|---|---|---|
+| Table touch (err=0.5m) | 8.1/step | **4.9/step** | 22/step | 0.40/step |
+| Half-lifted (err=0.25m) | 22.1/step | **17.2/step** | 36/step | 4.9/step |
+| Mostly lifted (err=0.10m) | 40.2/step | **36.4/step** | 49/step | 22/step |
+| At goal (err=0) | 60/step | 60/step | 60/step | 60/step |
+
+**Effect on finger_curl_reg penalty:**
+
+| ADR level | run6g penalty range | **run6j penalty range** |
+|---|---|---|
+| ADR 0 (start) | -0.3 × curl_dist² | **-0.5 × curl_dist²** (+67% stronger) |
+| ADR 50 (end) | -0.8 × curl_dist² | **-1.2 × curl_dist²** (+50% stronger) |
+
+With finger_curl_reg_weight floor at -3.0 (clamped), max possible penalty is 3.0/step regardless of weight. But the gradient strength differs — the policy gets stronger feedback from curl deviations at run6j's weights.
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, num_envs 1024, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- `lift_success` peak > 2.7% (run6g's record) AND fingers visibly more open during approach → both knobs pushed in productive direction. Try further: stronger curl penalty as run6j.1, OR raise sharpness to 6.
+- `lift_success` peak ≤ run6g's 2.7% but fingers more open in livestream → curl_reg restoration helped behavior but sharpness=5 wasn't net positive. Drop sharpness back to 4 in run6j.1, keep curl_reg.
+- `lift_success` peak collapses < 1% with engagement intact → stronger curl_reg is fighting grasp formation (the regularizer pushes fingers OPEN but grasping needs them CURLED). Revert curl_reg, keep sharpness at 5.
+- Engagement collapses entirely (run6i-like) → sharpness=5's slightly reduced camp residual combined with stronger curl penalty starved the basin. Both changes were too aggressive together. Revert both.
+- Catastrophic divergence (rewards crash like run6h's ep 1000-1500 dip) → coupled changes caused unstable learning. Bisect: try sharpness=5 alone, OR curl_reg alone, as run6j.1 and run6j.2.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-21_16-57-07/` (test repo, GPU 0, dextrah_test env, 1024 envs headless)
+
+**Result (ep 1159, stopped by user, 2026-05-21): EARLY COLLAPSE — stronger curl_reg fought grasp formation, engagement broke before lifting could emerge.**
+
+TensorBoard at iter sample points:
+
+| Signal | ep 50 | ep 200 | ep 300 | ep 500 | ep 700 (CRASH) | ep 900 | ep 1100 | PEAK |
+|---|---|---|---|---|---|---|---|---|
+| **lift_success** | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | **0.001 @ ep 147** |
+| in_success_region | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0 |
+| **rewards** | -618 | 753 | 3056 | **3934** | **668** | 252 | 797 | 5684 @ ep 439 |
+| lift_reward | 0.00 | 2.23 | 4.40 | 4.15 | 0.79 | 0.41 | 0.53 | 4.85 |
+| hand_object_contact_reward | 0.00 | 1.63 | 2.34 | 1.99 | 0.60 | 0.32 | 0.38 | 2.71 |
+| good_grasp_reward | 0.00 | 1.57 | 2.01 | 1.64 | 0.47 | 0.22 | 0.24 | **2.46 @ ep 389** |
+| object_contact_count | 0.00 | 1.08 | 1.56 | 1.33 | 0.40 | 0.21 | 0.25 | 1.80 |
+| hand_to_object_distance (m) | 0.76 | 0.16 | 0.12 | 0.14 | 0.26 | 0.24 | 0.21 | — |
+| **finger_curl_reg** | -1.56 | -1.01 | -1.36 | -1.55 | **-1.98** | -1.80 | -1.22 | -1.98 |
+| num_adr_increases | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| episode_lengths | 268 | 93 | 236 | 325 | 390 | 449 | 412 | 529 |
+
+**Observations:**
+1. **Engagement peaked early (ep 200-500) then collapsed at ep 700.** Pattern similar to run6h but **collapse happened 200-300 epochs earlier**. Peak rewards 5684 @ ep 439, dropped to 668 by ep 700 (-88%).
+2. **Reward decomposition at peak engagement (ep 500):** good_grasp +1.64, contact +1.99, **curl_reg −1.55** → net engagement gain +2.08/step.
+3. **At collapse (ep 700):** good_grasp +0.47, contact +0.60, **curl_reg −1.98** → net engagement gain **−0.91/step (NEGATIVE)**. The curl penalty overtook the engagement rewards; the policy correctly abandoned grasping behavior because grasping was net costly.
+4. **lift_success never crossed 0.001.** good_grasp briefly reached 2.46 but never translated into lifts — the policy was attempting grasps but abandoning them before lifting.
+5. **`finger_curl_reg` reached -1.98 at ep 700 (worst point)**, consistent with the policy curling fingers hard during engagement attempts. The (-0.5, -1.2) ADR multiplier vs run6g's (-0.3, -0.8) means a 67% stronger penalty at the same curl posture.
+
+**Mechanism — coupled reward imbalance:**
+
+v2's reward stack at run6j inherited from run6d the `contact_weight=1.5` halving and `good_grasp_weight=6.0` doubling. v1's `contact_weight=3.0`, `good_grasp_weight=3.0` gives ~8.4/step engagement reward at peak grasping vs v2's ~4.7/step. **v1's curl_reg (-0.5,-1.2) ADR is balanced by v1's stronger engagement rewards.** Importing v1's curl_reg into v2's reduced-contact stack throws the balance into net-negative for engagement.
+
+**Decision rule outcome — 3rd branch fires (with 5th branch as secondary):**
+
+> 3rd: "lift_success peak collapses < 1% with engagement intact → stronger curl_reg is fighting grasp formation"
+
+> 5th: "Catastrophic divergence (rewards crash) → coupled changes caused unstable learning"
+
+The crash signature (ep 500 peak → ep 700 -88%) confirms the curl_reg + lower contact_weight combination is unstable. The sharpness=5 contribution is harder to isolate — sharpness was the same as run6g initially, but the collapse may also reflect that the slightly reduced camp residual (4.9 vs 8.1/step) didn't help.
+
+**Next: revert curl_reg back to run6g's (-0.3, -0.8), keep sharpness=5.** That isolates whether sharpness=5 alone helps over run6g's sharpness=4. If it does (peak > 2.7%), we've found a better operating point. If it doesn't (peak ≤ 2.7%), revert sharpness to 4 too — confirming run6g is the local optimum for the run6d-era reward stack. **Then** the only way to use v1's curl_reg is to *also* restore v1's contact_weight (3.0) — a coupled experiment, but justified by this run6j finding.
+
 
 
 
