@@ -1817,94 +1817,92 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         return [[env_idx, contacts] for env_idx, contacts in enumerate(contacts_per_env) if contacts]
 
     def _collect_object_contacts(self):
-        """Collect object contacts per env. Returns [[env_idx, [num_contacts, link_names]], ...].
+        """Vectorized contact collection — no GPU→CPU syncs, no Python loops over envs.
 
         run2h-reset: fingertip contacts are also classified as "inside-aligned" or not based on
         the dot product between contact force_w and (tip_pos_w - palm_pos_w). Raw contact counts
         (any-force) feed `object_contact_counts` used by lift_reward / object_to_goal_reward
         (unchanged). Inside-aligned contacts feed `good_grasp_mask` (closes the buckled-thumb
         exploit where dorsal surface receives force pointing TOWARD the palm).
+
+        Outputs (byte-identical to the previous per-env Python implementation):
+        - self.object_contact_counts: [num_envs] float, # of contact sensors with any-force contact.
+        - self.good_grasp_mask: [num_envs] bool, thumb inside-contact AND >=2 inside-contact sources.
         """
-        contact_counts = [0 for _ in range(self.num_envs)]
-        contact_links = [[] for _ in range(self.num_envs)]
-        # Inside-filtered finger contacts (for good_grasp_mask only).
-        contact_fingers_inside = [set() for _ in range(self.num_envs)]
+        # ---- One-time index setup (cached on the env after first call) ----
+        if not hasattr(self, "_contact_sensors_ordered"):
+            # Maps link_name -> (is_fingertip, is_thumb). Palm is non-fingertip; no directional filter.
+            tip_links_map = {
+                "Thumb_Distal_Phalanx": (True, True),
+                "Index_Distal_Phalanx": (True, False),
+                "Middle_Distal_Phalanx": (True, False),
+                "Ring_Distal_Phalanx": (True, False),
+                "Pinky_Distal_Phalanx": (True, False),
+                "base_link": (False, False),  # palm
+            }
+            sensors_ordered = []
+            tip_body_idx_list = []
+            is_fingertip_list = []
+            is_thumb_list = []
+            for link_name, sensor in zip(self.object_contact_links, self.object_contact_sensors):
+                if link_name not in tip_links_map:
+                    continue
+                is_finger, is_thumb = tip_links_map[link_name]
+                sensors_ordered.append(sensor)
+                # Palm slot gets a placeholder body idx (palm_body_idx) — masked out by is_fingertip.
+                tip_body_idx_list.append(
+                    self.fingertip_body_indices[link_name] if is_finger else self.palm_body_idx
+                )
+                is_fingertip_list.append(is_finger)
+                is_thumb_list.append(is_thumb)
+            self._contact_sensors_ordered = sensors_ordered
+            self._contact_tip_body_idx_t = torch.tensor(
+                tip_body_idx_list, device=self.device, dtype=torch.long
+            )  # [S]
+            self._contact_is_fingertip = torch.tensor(
+                is_fingertip_list, device=self.device, dtype=torch.bool
+            )  # [S]
+            self._contact_is_thumb = torch.tensor(
+                is_thumb_list, device=self.device, dtype=torch.bool
+            )  # [S]
 
-        # Map actual link names to finger names
-        tip_links = {
-            "Index_Distal_Phalanx": "index",
-            "Middle_Distal_Phalanx": "middle",
-            "Ring_Distal_Phalanx": "ring",
-            "Pinky_Distal_Phalanx": "pinky",
-            "Thumb_Distal_Phalanx": "thumb",
-            "base_link": "palm",  # Palm contact
-        }
+        # ---- Hot path: fully on GPU, zero syncs ----
+        # Stack force_matrix_w from all S sensors -> [S, num_envs, num_filters, 3].
+        # All sensors filter on the same single object prim (num_filters = 1), so shapes align.
+        force_per_sensor = torch.stack(
+            [s.data.force_matrix_w for s in self._contact_sensors_ordered], dim=0
+        )  # [S, num_envs, num_filters, 3]
 
-        def _finger_name(link: str) -> str | None:
-            return tip_links.get(link)
+        # Raw contact per (sensor, env): any-filter magnitude above noise floor.
+        raw_contact = (force_per_sensor.abs().sum(dim=-1) > 1e-4).any(dim=-1)  # [S, num_envs]
 
+        # object_contact_counts: number of sensors with any-force contact per env.
+        self.object_contact_counts = raw_contact.sum(dim=0).float()  # [num_envs]
+
+        # Directional filter (fingertips only).
         palm_pos_w = self.robot.data.body_pos_w[:, self.palm_body_idx]  # [num_envs, 3]
+        tip_pos_all = self.robot.data.body_pos_w[:, self._contact_tip_body_idx_t]  # [num_envs, S, 3]
+        palm_to_tip = tip_pos_all - palm_pos_w[:, None, :]  # [num_envs, S, 3]
+        palm_to_tip_unit = palm_to_tip / palm_to_tip.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+
+        force_sum = force_per_sensor.sum(dim=2).transpose(0, 1)  # [num_envs, S, 3]
+        force_inside_dot = (force_sum * palm_to_tip_unit).sum(dim=-1)  # [num_envs, S]
         inside_threshold = float(getattr(self.cfg, "grasp_force_inside_threshold", 0.0))
 
-        for link_name, sensor in zip(self.object_contact_links, self.object_contact_sensors):
-            if link_name not in tip_links:
-                continue
-            data = sensor.data
-            if data is None or data.force_matrix_w is None:
-                continue
+        # Fingertips: raw AND directional. Palm: raw only (no directional filter).
+        raw_contact_T = raw_contact.t()  # [num_envs, S]
+        inside_contact = torch.where(
+            self._contact_is_fingertip[None, :],
+            raw_contact_T & (force_inside_dot > inside_threshold),
+            raw_contact_T,
+        )  # [num_envs, S]
 
-            # Raw magnitude check (per env, any filter)
-            contact_mask_mag = (data.force_matrix_w.abs().sum(-1) > 1e-4)  # [num_envs, num_filters]
-            raw_contact = contact_mask_mag.any(dim=-1)  # [num_envs]
+        inside_count = inside_contact.sum(dim=-1)  # [num_envs]
+        thumb_inside = (inside_contact & self._contact_is_thumb[None, :]).any(dim=-1)  # [num_envs]
+        self.good_grasp_mask = (inside_count >= 2) & thumb_inside
 
-            # Update raw counts (unfiltered — feeds object_contact_counts)
-            nz_raw = raw_contact.nonzero(as_tuple=False).flatten().tolist()
-            for env_idx in nz_raw:
-                contact_counts[env_idx] += 1
-                if link_name not in contact_links[env_idx]:
-                    contact_links[env_idx].append(link_name)
-
-            # Inside-filtered check for good_grasp_mask.
-            tip_body_idx = self.fingertip_body_indices.get(link_name)
-            if tip_body_idx is None:
-                # Palm contact: no directional filter — counts as-is.
-                for env_idx in nz_raw:
-                    finger = _finger_name(link_name)
-                    if finger is not None:
-                        contact_fingers_inside[env_idx].add(finger)
-                continue
-
-            # Sum force across filters (visdex_selected has 1 filter — the object).
-            force_sum_w = data.force_matrix_w.sum(dim=1)  # [num_envs, 3]
-            tip_pos_w = self.robot.data.body_pos_w[:, tip_body_idx]  # [num_envs, 3]
-            palm_to_tip = tip_pos_w - palm_pos_w
-            palm_to_tip_unit = palm_to_tip / palm_to_tip.norm(dim=-1, keepdim=True).clamp(min=1e-6)
-            force_inside_dot = (force_sum_w * palm_to_tip_unit).sum(-1)  # [num_envs]
-            inside_contact = raw_contact & (force_inside_dot > inside_threshold)  # [num_envs]
-
-            nz_inside = inside_contact.nonzero(as_tuple=False).flatten().tolist()
-            for env_idx in nz_inside:
-                finger = _finger_name(link_name)
-                if finger is not None:
-                    contact_fingers_inside[env_idx].add(finger)
-
-        self.object_contact_counts = torch.tensor(
-            contact_counts, device=self.device, dtype=torch.float
-        )
-        finger_counts = [len(fingers) for fingers in contact_fingers_inside]
-        thumb_contact = [("thumb" in fingers) for fingers in contact_fingers_inside]
-        finger_counts_tensor = torch.tensor(
-            finger_counts, device=self.device, dtype=torch.float
-        )
-        thumb_contact_tensor = torch.tensor(
-            thumb_contact, device=self.device, dtype=torch.bool
-        )
-        self.good_grasp_mask = (finger_counts_tensor >= 2) & thumb_contact_tensor
-        return [
-            [env_idx, [contact_counts[env_idx], contact_links[env_idx]]]
-            for env_idx in range(self.num_envs)
-            if contact_counts[env_idx] > 0
-        ]
+        # Debug report list is only used for commented-out prints downstream; skip building it.
+        return None
 
     def _compute_intermediate_values(self):
         # Data from robot--------------------------
