@@ -743,8 +743,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     hand_joint_velocity_penalty_scale = 3.0    # prev 3.0
 
     # phase 2: contact
-    hand_object_contact_weight = 3.0   # 8→4→3: contact still dominating lift
-    good_grasp_weight = 3.0            # 6→3: halved
+    hand_object_contact_weight = 2.0   # 8→4→3→2: contact reduced again to ease contact:grasp dominance
+    good_grasp_weight = 4.0            # 6→3→4: bumped from 3.0 alongside contact reduction to flip dominance toward inside-aligned grasps
     finger_curl_reg_weight = -0.2    # reduced to allow ADR to widen; was -0.5
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl

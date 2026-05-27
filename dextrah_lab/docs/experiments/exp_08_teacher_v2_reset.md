@@ -238,3 +238,71 @@ PEAK `lift_success`: 0.49% at iter 3436 (~10/2048 envs transient).
 5. **No ADR progression** — `success_for_adr=0.4` is unreachable when peak lift is 0.49%.
 
 **Decision rule outcome:** Branch 4 fires by spirit (zero lift, all fingers extended throughout most of training is closer to hover-and-avoid than productive grasp). Per the 1500-epoch lift-cutoff rule, this run failed. **Next experiment is a reward-rebalance** to make grasping pay more than raw contact, addressing the dominance imbalance flagged in observation 3.
+
+### run2j-reset — mild contact:grasp rebalance (2026-05-27)
+
+**Motivation:** run2i-reset.1's three-phase trajectory (discovery → abandonment → re-engagement) suggests the policy chases raw `contact_reward` (which dominates at 5× the maximum `good_grasp_reward` since contact pays per fingertip while grasp is binary), hits the directional filter which rejects most early contacts as wrong-direction, gets no `good_grasp_reward` payback, and retreats. Rebalance the two so geometrically-correct grasping is the higher-paying target, not raw multi-fingertip touching.
+
+**Hypothesis:** With contact paying less and grasp paying more, the policy's gradient should favor configurations that satisfy the directional filter early — i.e. real inside-aligned multi-finger grasps rather than wrap-then-retreat patterns. Expect either (a) sustained lift signal emerging in the first ~500-1000 iters, or (b) the contact basin still forms but the abandonment phase doesn't happen because good_grasp pays enough to keep the policy engaged.
+
+**Configuration delta from previous (run2i-reset.1 / `8c73091`):**
+- `hand_object_contact_weight`: 3.0 → **2.0** ([env_cfg.py:746](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py#L746))
+- `good_grasp_weight`: 3.0 → **4.0** ([env_cfg.py:747](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env_cfg.py#L747))
+- Treated as one coordinated rebalance (single conceptual knob: contact-to-grasp dominance ratio). Both changes serve the same hypothesis.
+- Everything else identical to `8c73091` baseline (run2h-reset directional filter + run2i-reset split curl + vectorized contact code intact).
+
+**Reward ceiling effect:** before — `contact_max=5×3.0=15`, `grasp_max=1×3.0=3` (contact 5× larger). After — `contact_max=5×2.0=10`, `grasp_max=1×4.0=4` (contact 2.5× larger; still dominant per-step but the gap halved).
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, headless 1024 envs, visdex_selected.
+
+**Train command:**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Decision rule:**
+- Sustained `lift_success` ≥ 1% by iter 1000 → rebalance worked, contact-dominance was the blocker. Continue and check whether the abandonment phase still appears.
+- Early contact discovery (iter ~100-300) followed by NO abandonment phase but still 0 lift by iter 1500 → policy stays engaged but can't lift; next is `lift_weight` ADR bump or starting-ADR-level change.
+- Same three-phase pattern as run2i-reset.1 (discovery → abandonment → re-engagement) → rebalance was too mild; bump good_grasp further (e.g. 4.0 → 8.0) or reduce contact more (2.0 → 1.0).
+- Policy never reaches contact (good_grasp stays at 0 throughout, h2o never goes below 0.3 m) → contact reward starved so far that even initial approach doesn't pay; revert contact to 3.0 and use ONLY the good_grasp bump.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-27_16-40-26/` (test repo, GPU 0, dextrah_test, headless 1024 envs)
+
+**Result (stopped at iter 11340, 2026-05-27): BREAKTHROUGH then ADR-2 WALL. First sustained lift AND first ADR progression on the entire reset branch. Stuck at ADR 2 on a goal-reaching wall.**
+
+| Signal | iter 250 | iter 500 | iter 1000 | iter 2000 | iter 2423 (PEAK) | iter 3000 | iter 5000 | iter 7000 | iter 9000 | iter 11340 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `lift_success` | 0.0146 | 0.0625 | 0.1621 | 0.4717 | **0.5664** | 0.4570 | 0.2910 | 0.3662 | 0.3018 | 0.3057 |
+| `in_success_region` (ADR gate) | — | 0.0195 | 0.0605 | 0.2490 | **0.4023** | 0.2910 | 0.1846 | 0.2725 | 0.1680 | 0.1953 |
+| `lift_reward` | 5.26 | 5.76 | 7.89 | 16.01 | — | 15.84 | 11.94 | 14.14 | 12.28 | 12.16 |
+| `object_to_goal_reward` | — | — | — | — | — | 12.18 | 8.45 | 10.48 | 8.36 | 9.07 |
+| `hand_object_contact_reward` | 4.36 | 3.81 | 4.78 | 4.40 | — | 4.09 | 3.71 | 3.76 | 3.95 | 3.93 |
+| `good_grasp_reward` | 0.97 | 1.48 | 1.82 | 2.23 | — | 1.75 | 1.16 | 1.46 | 1.21 | 1.20 |
+| `num_adr_increases` | 0 | 0 | 0 | 0 | 0→1 | 1 | 2 | 2 | 2 | 2 |
+
+**ADR progression:** ADR 0 (iter 1–2423, ~2400 iters initial learning) → ADR 1 (2424–3059, ~640 iters) → ADR 2 (3060–11340, **stuck 8280 iters**).
+
+**Observations:**
+1. **The rebalance was decisive.** contact 3→2 + good_grasp 3→4 broke the no-lift wall that survived run7d–7g, preliminary-1/2, and run2i-reset.1. `lift_success` crossed 1% by iter 230 (vs NEVER on prior runs at 1024 envs) and peaked at **56.6%** at iter 2423. The decision-rule branch "sustained lift ≥ 1% by iter 1000" fired hard — we hit 16% by iter 1000.
+2. **No abandonment phase.** Unlike run2i-reset.1's discovery→abandon→re-engage pattern, the hand stayed locked on the object (h2o ≈ 0.10–0.13 m) throughout. The rebalance removed the incentive to chase raw contact and retreat — `good_grasp_reward` (1.0–2.2) now pays back the curl-penalty cost of engaging.
+3. **ADR gate is `in_success_region.mean() > 0.4`** ([env.py:1594](../tasks/fr3_agilehand/dextrah_fr3_agilehand_env.py#L1594)), NOT lift_success. Confirmed: `in_success_region` peaked at exactly **0.4023 at iter 2423** — the instant ADR advanced 0→1. ADR 1→2 followed at iter 3060 on another momentary spike.
+4. **ADR 2 is a goal-reaching wall, not a lifting wall.** At ADR 2, `lift_success` holds ~0.30–0.37 but `in_success_region` tops out at max 0.355 / mean 0.21 — never re-crossing 0.4. The policy LIFTS ~35% of objects but only CARRIES ~23% to the goal. The ~12pp gap is the "lifts but doesn't reach goal" problem.
+5. **Reward shape under-incentivizes goal completion at ADR 2.** `lift_reward` (12–16) consistently out-pays `object_to_goal_reward` (8–10), so the policy optimizes lift-and-park over carry-to-goal. `in_success_region` recovered post-ADR-2-step, peaked ~0.27 around iter 6000–7000, then flat-to-declining through iter 11340 — 8000 iters with no upward trend means it won't self-resolve.
+
+**Decision rule outcome:** Rebalance hypothesis CONFIRMED (branch 1 — sustained lift ≥ 1% by iter 1000, no abandonment). New bottleneck identified: ADR-2 goal-reaching wall. The gate metric `in_success_region` plateaus ~0.23 vs the 0.4 threshold. **Next experiment is goal-reaching reinforcement** — strengthen `object_to_goal_weight` and/or `object_to_goal_sharpness` so carry-to-goal out-competes lift-and-park, closing the lift→goal gap. (Alternative considered and deferred: lowering `success_for_adr` 0.4→0.3 would game the gate without fixing the underlying carry deficit — rejected in favor of the principled reward fix.)
