@@ -1867,14 +1867,19 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             )  # [S]
 
         # ---- Hot path: fully on GPU, zero syncs ----
-        # Stack force_matrix_w from all S sensors -> [S, num_envs, num_filters, 3].
-        # All sensors filter on the same single object prim (num_filters = 1), so shapes align.
+        # Stack force_matrix_w from all S sensors. Per-sensor shape is
+        # [num_envs, num_bodies, num_filters, 3] (4D — Isaac Lab convention, not the misleading
+        # 3D comment in the old loop-based code). num_bodies = num_filters = 1 for our sensors,
+        # but we handle the general case to stay correct if multi-body/multi-filter sensors are
+        # ever added.
         force_per_sensor = torch.stack(
             [s.data.force_matrix_w for s in self._contact_sensors_ordered], dim=0
-        )  # [S, num_envs, num_filters, 3]
+        )  # [S, num_envs, num_bodies, num_filters, 3]
 
-        # Raw contact per (sensor, env): any-filter magnitude above noise floor.
-        raw_contact = (force_per_sensor.abs().sum(dim=-1) > 1e-4).any(dim=-1)  # [S, num_envs]
+        # Raw contact per (sensor, env): any body × filter has magnitude above noise floor.
+        # .abs().sum(-1)  -> [S, num_envs, num_bodies, num_filters]   (sum over xyz)
+        # .any(-1).any(-1) -> [S, num_envs]                            (any filter, any body)
+        raw_contact = (force_per_sensor.abs().sum(dim=-1) > 1e-4).any(dim=-1).any(dim=-1)  # [S, num_envs]
 
         # object_contact_counts: number of sensors with any-force contact per env.
         self.object_contact_counts = raw_contact.sum(dim=0).float()  # [num_envs]
@@ -1885,7 +1890,8 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         palm_to_tip = tip_pos_all - palm_pos_w[:, None, :]  # [num_envs, S, 3]
         palm_to_tip_unit = palm_to_tip / palm_to_tip.norm(dim=-1, keepdim=True).clamp(min=1e-6)
 
-        force_sum = force_per_sensor.sum(dim=2).transpose(0, 1)  # [num_envs, S, 3]
+        # Net force per (sensor, env): sum across body and filter dims, keeping xyz.
+        force_sum = force_per_sensor.sum(dim=(2, 3)).transpose(0, 1)  # [num_envs, S, 3]
         force_inside_dot = (force_sum * palm_to_tip_unit).sum(dim=-1)  # [num_envs, S]
         inside_threshold = float(getattr(self.cfg, "grasp_force_inside_threshold", 0.0))
 
