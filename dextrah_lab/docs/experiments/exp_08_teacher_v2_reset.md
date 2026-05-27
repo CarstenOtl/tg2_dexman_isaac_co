@@ -196,3 +196,45 @@ PEAK `lift_success`: 0.0078 at iter 97 (≈ 1/128 envs, early-discovery noise).
 5. **Step FPS at end of run (~1027) is ~10× slower than the pre-refactor headless runs of run7d-g** (which were on the order of ~10k FPS at 1024 envs). The Python overhead in contact collection becomes increasingly dominant as contact density grows (more nonzero env_idxs to loop over), explaining why mean was 7203 but last was 1029.
 
 **Decision rule outcome:** Aborted before any decision-rule branch could fire — the run died on the perf axis, not the policy axis. Vectorized refactor of `_collect_object_contacts` is staged (uncommitted in `env.py`) to remove the bottleneck. Pending livestream verification on the refactored code that contact_reward and good_grasp_reward signatures still match (3.0 saturation, ~11 contact), then re-launch the same 1024-env headless config as a fresh run.
+
+### run2i-reset.1 — retry of run2i-reset on vectorized contact code (2026-05-27)
+
+**Motivation:** run2i-reset's 1024-env headless was killed at iter 284 due to a CPU bottleneck in `_collect_object_contacts` (10 GPU→CPU syncs per step + Python loops over envs). The bottleneck was fixed by vectorizing the function (commits `a91f8ee` perf + `f5e3b56` shape-fix). This is the actual hypothesis test that run2i-reset was supposed to be — does the directional fingertip force filter + split thumb/finger curl penalty produce sustained lift?
+
+**Configuration delta from previous (run2i-reset / `55a29d5`):**
+- No env_cfg.py change — same reward shape: directional filter on `good_grasp_mask`, split curl with thumb_curl_reg ADR (-0.6, -1.6) and finger_curl_reg ADR (-0.3, -0.8).
+- Underlying code: `_collect_object_contacts` now vectorized (perf-only; math byte-equivalent for our num_bodies=num_filters=1 sensor config).
+
+**Setup:** test repo, dextrah_test env, GPU 0, seed 42, headless 1024 envs, visdex_selected.
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-27_14-45-50/` (test repo, GPU 0, dextrah_test, headless 1024 envs).
+
+**Result (stopped at iter ~3593 by 1500-epoch lift-cutoff rule, 2026-05-27): FAILURE. Zero sustained lift through 3.6k iters. Multi-phase contact basin pattern with abandonment and re-engagement, but never crosses lift threshold.**
+
+| Signal | iter 50 | iter 200 | iter 500 | iter 1000 | iter 1500 | iter 2000 | iter 2500 | iter 3000 | iter 3500 |
+|---|---|---|---|---|---|---|---|---|---|
+| `lift_success` | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 |
+| `lift_reward` | 0.00 | 5.01 | 0.05 | 0.20 | 0.00 | 0.01 | 0.08 | 0.58 | 5.36 |
+| `hand_object_contact_reward` | 0.00 | **7.40** | 0.04 | 0.16 | 0.00 | 0.01 | 0.04 | 0.28 | 3.57 |
+| `good_grasp_reward` | 0.00 | 0.32 | 0.00 | 0.01 | 0.00 | 0.00 | 0.00 | 0.00 | 0.50 |
+| `thumb_curl_reg` | -0.33 | -0.63 | -1.12 | -0.07 | -0.12 | -0.09 | -0.03 | -0.04 | -0.36 |
+| `finger_curl_reg` | -0.71 | -0.81 | -0.44 | -0.15 | -0.10 | -1.00 | -0.51 | -0.39 | -0.65 |
+| `hand_to_object_distance` (m) | 0.776 | **0.095** | **0.500** | 0.364 | 0.182 | 0.222 | 0.177 | 0.170 | 0.121 |
+| `episode_lengths` | 583 | 321 | 590 | 409 | 572 | 506 | 553 | 558 | 536 |
+| `num_adr_increases` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+PEAK `lift_success`: 0.49% at iter 3436 (~10/2048 envs transient).
+
+**Performance (refactor verified working):** `step_fps` mean 15181, recent ~13300, last 13146. Vectorization sustained 13–15k FPS throughout vs the broken run's 7203 → 1029 degradation. No GPU stalls. **Refactor objective achieved.**
+
+**Observations:**
+1. **Three-phase basin search, not a single basin:**
+   - **iter ~100–300:** rapid contact discovery (contact_reward 7.4, lift_rew 5.0, h2o 0.095 m). Hand reaches and engages.
+   - **iter ~500–2500:** abandonment. h2o climbs to 0.18–0.50 m, contact crashes to ~0, good_grasp stays at 0. Policy walks AWAY from the object for ~2000 iters.
+   - **iter ~3000+:** re-engagement. h2o returns to 0.12 m, contact recovers (3.57 by iter 3500), good_grasp climbs (0.50). Peak lift_success in this phase (0.49% at iter 3436).
+2. **Likely interpretation:** directional filter rejected most early "contacts" (force directions wrong, e.g. dorsal/scraping). Policy got near-zero `good_grasp_reward` despite rich `contact_reward`, so it learned that approaching the object wasn't worth the curl-penalty cost. It retreated, only relearning contact much later with different force directions that DO satisfy the inside-aligned filter.
+3. **`contact_reward = 7.40` at iter 200 vs `good_grasp_reward = 0.32`** confirms the dominance imbalance: contact pays much more than grasping does. The policy chases raw contact, hits the filter, fails grasping criterion, retreats.
+4. **Curl regularizer worked as designed across this run:** thumb_curl tracks heavier than finger_curl when both are engaged (e.g. iter 200: thumb -0.63 vs finger -0.81, but on different L2 norms; per-joint magnitudes are comparable). When fingers extend (iter 1000-3000), both penalties shrink toward 0 as expected.
+5. **No ADR progression** — `success_for_adr=0.4` is unreachable when peak lift is 0.49%.
+
+**Decision rule outcome:** Branch 4 fires by spirit (zero lift, all fingers extended throughout most of training is closer to hover-and-avoid than productive grasp). Per the 1500-epoch lift-cutoff rule, this run failed. **Next experiment is a reward-rebalance** to make grasping pay more than raw contact, addressing the dominance imbalance flagged in observation 3.
