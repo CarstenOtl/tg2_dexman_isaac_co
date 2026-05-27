@@ -138,6 +138,61 @@ CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python
 - Thumb stays curled despite heavier penalty → thumb_curl_reg_weight magnitude insufficient; bump to 3× or 4× finger_curl_reg.
 - Policy reverts to hovering with all fingers extended → reward shape is now anti-grasp; the new 0° target competes too directly with grasp formation; consider raising thumb_curl_reg_max from 0 toward positive (allow small bonus for staying extended) or reducing weight.
 
-**Run directory:** *(to be filled in once launched)*
+**Livestream smoke check (`05-27_09-58-55`, 32 envs, stopped at ~3k iters):** User observation — "thumb isn't staying bent. it's more straightened now. the good grasp actually looks pretty good. 0 lift after 3k epochs, but that is to be expected with low env count and livestream." Decision rule branch 1 fires exactly as hypothesized: the heavier thumb curl penalty (-0.4 weight, ADR -0.6 → -1.6) plus 0° target is pulling the thumb toward extension, AND the directional contact filter is producing visually plausible good-grasp configurations rather than the buckled-thumb exploit. Behavior direction matches the hypothesis. **Promoting to 1024-env headless.**
 
-**Result:** *(to be filled in)*
+**Train command (headless, 1024 envs — the real run):**
+
+```bash
+cd /home/carsten.oertel/code/test/tg2_dexman_isaac_co/dextrah_lab/rl_games
+
+CUDA_VISIBLE_DEVICES=0 /home/carsten.oertel/bin/yes/envs/dextrah_test/bin/python train.py \
+  --headless --task=dextrah_fr3_agilehand --seed 42 \
+  --num_envs 1024 \
+  agent.params.config.horizon_length=16 \
+  agent.params.config.minibatch_size=4096 \
+  agent.params.config.central_value_config.minibatch_size=4096 \
+  agent.params.config.mini_epochs=4 \
+  agent.params.config.learning_rate=0.0001 \
+  agent.params.config.multi_gpu=False \
+  agent.params.config.max_epochs=100000 \
+  agent.wandb_activate=False \
+  env.success_for_adr=0.4 \
+  env.objects_dir=multi_objects/visdex_selected \
+  env.use_cuda_graph=False
+```
+
+**Run directory:** `logs/rl_games/dextrah_tekken_lstm/05-27_11-06-04/` (test repo, GPU 0, dextrah_test, headless 1024 envs)
+
+**Result (stopped at iter 284, 2026-05-27): TERMINATED EARLY — CPU bottleneck made training infeasibly slow, not enough data to verdict the hypothesis. But the 284 iters we did get were healthy and matched the run2h+run2i-reset design intent.**
+
+| Signal | iter 50 | iter 100 | iter 200 | iter 284 |
+|---|---|---|---|---|
+| `lift_success` | 0.000 | 0.003 | 0.001 | 0.000 |
+| `lift_reward` | 0.00 | 0.25 | 3.56 | 4.23 |
+| `hand_object_contact_reward` | 0.00 | 1.48 | **9.66** | **11.25** |
+| `good_grasp_reward` | 0.00 | **2.96** | **3.00** | **3.00** |
+| `thumb_curl_reg` | -0.33 | -0.27 | -0.62 | -0.84 |
+| `finger_curl_reg` | -0.71 | -0.48 | -0.73 | -0.70 |
+| `hand_to_object_distance` (m) | 0.775 | 0.434 | 0.162 | 0.130 |
+| `episode_lengths` | 583 | 93 | 254 | 409 |
+
+PEAK `lift_success`: 0.0078 at iter 97 (≈ 1/128 envs, early-discovery noise).
+
+**Performance (the reason the run was killed):**
+
+| Metric | mean | last |
+|---|---|---|
+| `step_fps` | 7203 | 1029 |
+| `step_inference_fps` | 6962 | 1027 |
+| `rl_update_time` | 0.37 s | 0.34 s |
+
+`step_fps` variance from 1029 → 7203 (7×) confirms the CPU-bound `_collect_object_contacts` hypothesis: the function does 10 GPU→CPU syncs per step plus Python loops over 1024 envs, causing the GPU to stall waiting for the CPU between syncs. User observed `nvidia-smi` GPU utilization bouncing 10–80% throughout the run.
+
+**Observations:**
+1. **Run2h-reset directional filter is doing its job.** `good_grasp_reward` saturates at 3.0 (its max value: good_grasp_weight × `good_grasp_mask=1`) by iter 100 and stays there — meaning the policy is producing inside-aligned multi-fingertip contacts, not the buckled-thumb scrape that the filter would reject.
+2. **Run2i-reset curl split is working.** `thumb_curl_reg` (-0.84) is consistently heavier-magnitude than `finger_curl_reg` (-0.70) by iter 284 — the 2× weight ratio is reflected in the realized penalty. Thumb is being pulled toward the 0° target harder than the other fingers.
+3. **Contact configuration is much richer than run7 era.** By iter 284, `contact_reward = 11.25` → ~3.75 fingertips per env in contact (vs run7g's ~2.2 in the thumb-curl basin) — the policy is engaging more fingertips in geometrically-real grasps, not buckling exploits.
+4. **No verdict on lifting** — only 284 iters; the iter-475-equivalent peak window (where preliminary-1 hit 0.78%) hadn't arrived yet. Can't yet say whether this configuration breaks past the prior regression pattern.
+5. **Step FPS at end of run (~1027) is ~10× slower than the pre-refactor headless runs of run7d-g** (which were on the order of ~10k FPS at 1024 envs). The Python overhead in contact collection becomes increasingly dominant as contact density grows (more nonzero env_idxs to loop over), explaining why mean was 7203 but last was 1029.
+
+**Decision rule outcome:** Aborted before any decision-rule branch could fire — the run died on the perf axis, not the policy axis. Vectorized refactor of `_collect_object_contacts` is staged (uncommitted in `env.py`) to remove the bottleneck. Pending livestream verification on the refactored code that contact_reward and good_grasp_reward signatures still match (3.0 saturation, ~11 contact), then re-launch the same 1024-env headless config as a fresh run.
