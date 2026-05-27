@@ -749,11 +749,27 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
     finger_curl_reg_min = -3.0 # max penalty for finger curl
     finger_curl_reg_max = 0.0 # min penalty for finger curl
 
+    # run2i-reset: split thumb curl from other-finger curl.
+    # `finger_curl_reg` now scoped to ONLY non-thumb fingers (index/middle/ring/pinky × mcp_pitch/mcp_yaw/pip = 12 joints).
+    # `thumb_curl_reg` is NEW and penalizes thumb mcp_pitch/mcp_yaw/pip (3 joints) — heavier weight.
+    # `revolute_thumb_rot` is EXCLUDED from both — thumb rotation is left free for the policy to explore.
+    # Curl target is 0° (extended pose) for ALL penalized joints (was init_joint_pos in run2g code).
+    thumb_curl_reg_weight = -0.4   # 2× heavier than finger_curl_reg_weight (-0.2)
+    thumb_curl_reg_min = -3.0
+    thumb_curl_reg_max = 0.0
+
     #phase 3: lifting
     object_to_goal_weight = 40 #default 5, was 20
     in_success_region_at_rest_weight = 10. #default10
     success_bonus_weight = 20.0  # bumped from 10: stronger incentive to close last few cm to goal
     lift_sharpness = 4.0 #default 8.5; 2→4: steeper lift saturation so goal reward dominates once object is off table
+
+    # Directional grasp filter (run2h-reset): for each fingertip, only count contact toward
+    # good_grasp_mask if force_w has a positive component along (tip_pos_w - palm_pos_w).
+    # Closes the buckled-thumb exploit where dorsal/outer surface scrapes the object
+    # (force points TOWARD palm = negative dot product).
+    # threshold > 0 = require stronger inward-aligned contact; default 0 = any positive component.
+    grasp_force_inside_threshold = 0.0
 
     # extras
     episode_length_reward_weight = 0.005 # default 0.025   
@@ -764,6 +780,7 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
         "action_rate_penalty",
         "hand_to_object",
         "finger_curl",
+        "thumb_curl",   # run2i-reset: split thumb curl penalty
         "palm_align",
         "good_grasp",
         "episode_length",
@@ -920,7 +937,8 @@ class DextrahFR3AgilehandEnvCfg(DirectRLEnvCfg):
             "object_to_goal_sharpness": (-5., -10.),
             # "_weight": (5., 2.5) # default = (5,0)
             "lift_weight": (40., 30.),  # slower decay so lift signal stays strong while goal sharpness ramps up
-            "finger_curl_reg": (-0.3, -0.8),  # reduced: previous (-0.5,-1.2) penalized grasps too aggressively at higher ADR
+            "finger_curl_reg": (-0.3, -0.8),  # non-thumb fingers (4 fingers × 3 joints = 12 joints) curl penalty
+            "thumb_curl_reg": (-0.6, -1.6),   # run2i-reset: 2× finger curl. Thumb mcp_pitch/mcp_yaw/pip (3 joints), excludes thumb_rot
         },
         "pd_targets": {
             "velocity_target_factor": (1., 0.)

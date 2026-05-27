@@ -571,3 +571,5 @@ CUDA_VISIBLE_DEVICES=1 python train.py --headless --task=dextrah_fr3_agilehand -
 - **Flatline `lift_weight` (40, 40)** — remove the decay that's degrading lifting
 - **Lower `success_for_adr` to 0.3** — let policy advance through ADR 13 with current performance
 - **Resume from ep 2500 with `starting_adr_increments=14`** — skip the wall (caveat: LSTM hidden state lost on resume)
+
+> **Follow-up investigations** (post-reset fresh-train + directional contact filter) moved to [`exp_08_teacher_v2_reset.md`](exp_08_teacher_v2_reset.md) — that work is reward-gate / exploit-basin focused, no longer sim2real curriculum.

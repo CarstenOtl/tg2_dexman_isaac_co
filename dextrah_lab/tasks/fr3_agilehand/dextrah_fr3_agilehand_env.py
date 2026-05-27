@@ -174,6 +174,17 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         )
         print(f"[DEBUG] Palm body name: '{self.cfg.palm_body_name}' -> index {self.palm_body_idx}")
 
+        # Fingertip body indices for directional grasp filter (run2h-reset).
+        # Map contact-sensor link name -> robot.data body index, used in _collect_object_contacts
+        # to compute force·(tip - palm) for each fingertip's contact event.
+        self.fingertip_body_indices = {
+            "Thumb_Distal_Phalanx": self.robot.body_names.index("Thumb_Distal_Phalanx"),
+            "Index_Distal_Phalanx": self.robot.body_names.index("Index_Distal_Phalanx"),
+            "Middle_Distal_Phalanx": self.robot.body_names.index("Middle_Distal_Phalanx"),
+            "Ring_Distal_Phalanx": self.robot.body_names.index("Ring_Distal_Phalanx"),
+            "Pinky_Distal_Phalanx": self.robot.body_names.index("Pinky_Distal_Phalanx"),
+        }
+
         def _normalize_vector(vec: torch.Tensor) -> torch.Tensor:
             norm = torch.norm(vec)
             return vec if norm == 0 else vec / norm
@@ -235,13 +246,35 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.robot_start_joint_vel =\
             torch.zeros(self.num_envs, self.num_robot_dofs, device=self.device)
 
-        # Nominal finger curled config (only actuated hand joints).
-        hand_joint_names = self.cfg.actuated_joint_names[7:]
-        hand_joint_defaults = [
-            init_joint_pos.get(joint_name, 0.0) for joint_name in hand_joint_names
+        # run2i-reset: split curl target into thumb (mcp_pitch/mcp_yaw/pip) and other 4 fingers (12 joints).
+        # `revolute_thumb_rot` excluded from both — thumb rotation is left free for the policy to explore.
+        # Curl target is 0° (extended pose) for all penalized joints (was init_joint_pos in run2g code).
+        thumb_curl_joint_names = [
+            "revolute_thumb_mcp_pitch",
+            "revolute_thumb_mcp_yaw",
+            "revolute_thumb_pip",
         ]
-        self.curled_q = torch.tensor(hand_joint_defaults, device=self.device, dtype=torch.float)
-        self.curled_q = self.curled_q.repeat(self.num_envs, 1).contiguous()
+        other_finger_curl_joint_names = [
+            f"revolute_{finger}_{joint}"
+            for finger in ("index", "middle", "ring", "pinky")
+            for joint in ("mcp_pitch", "mcp_yaw", "pip")
+        ]
+        # NOTE: `self.robot_dof_pos` is `self.robot.data.joint_pos[:, self.actuated_dof_indices]`,
+        # so columns of robot_dof_pos correspond to `cfg.actuated_joint_names`, NOT `robot.joint_names`.
+        # Indices must resolve against the actuated list.
+        self.thumb_curl_dof_indices = [
+            self.cfg.actuated_joint_names.index(n) for n in thumb_curl_joint_names
+        ]
+        self.other_finger_curl_dof_indices = [
+            self.cfg.actuated_joint_names.index(n) for n in other_finger_curl_joint_names
+        ]
+        # All-zero curl targets (fully-extended fingers). Per-env so shape matches the sliced dof_pos.
+        self.thumb_curl_target_q = torch.zeros(
+            self.num_envs, len(self.thumb_curl_dof_indices), device=self.device, dtype=torch.float
+        )
+        self.other_finger_curl_target_q = torch.zeros(
+            self.num_envs, len(self.other_finger_curl_dof_indices), device=self.device, dtype=torch.float
+        )
 
         # Set up ADR
         self.dextrah_adr =\
@@ -1000,6 +1033,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             hand_to_object_reward,
             object_to_goal_reward,
             finger_curl_reg,
+            thumb_curl_reg,
             lift_reward,
             palm_direction_alignment_reward,
             palm_finger_alignment_reward,
@@ -1015,13 +1049,16 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 self.hand_to_object_pos_error,
                 self.object_to_object_goal_pos_error,
                 self.object_vertical_error,
-                self.robot_dof_pos[:, 7:], # NOTE: only the finger joints
-                self.curled_q,
+                self.robot_dof_pos[:, self.other_finger_curl_dof_indices],
+                self.other_finger_curl_target_q,
+                self.robot_dof_pos[:, self.thumb_curl_dof_indices],
+                self.thumb_curl_target_q,
                 self.cfg.hand_to_object_weight,
                 self.cfg.hand_to_object_sharpness,
                 self.cfg.object_to_goal_weight,
                 self.dextrah_adr.get_custom_param_value("reward_weights", "object_to_goal_sharpness"),
                 self.dextrah_adr.get_custom_param_value("reward_weights", "finger_curl_reg"),
+                self.dextrah_adr.get_custom_param_value("reward_weights", "thumb_curl_reg"),
                 lift_weight,
                 self.cfg.lift_sharpness,
                 self.cfg.palm_direction_alignment_weight,  
@@ -1049,6 +1086,11 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             finger_curl_reg,
             min=self.cfg.finger_curl_reg_min,
             max=self.cfg.finger_curl_reg_max,
+        )
+        thumb_curl_reg = torch.clamp(
+            thumb_curl_reg,
+            min=self.cfg.thumb_curl_reg_min,
+            max=self.cfg.thumb_curl_reg_max,
         )
 
         min_steps = getattr(self.cfg, "min_num_episode_steps", 0)
@@ -1124,6 +1166,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         self.extras["hand_to_object_reward"] = hand_to_object_reward.mean()
         self.extras["object_to_goal_reward"] = object_to_goal_reward.mean()
         self.extras["finger_curl_reg"] = finger_curl_reg.mean()
+        self.extras["thumb_curl_reg"] = thumb_curl_reg.mean()
         self.extras["lift_reward"] = lift_reward.mean()
         self.extras["hand_object_contact_reward"] = contact_reward.mean()
         self.extras["palm_direction_alignment_reward"] = palm_direction_alignment_reward.mean()
@@ -1158,6 +1201,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             "action_rate_penalty": action_rate_penalty,
             "hand_to_object": hand_to_object_reward,
             "finger_curl": finger_curl_reg,
+            "thumb_curl": thumb_curl_reg,
             "palm_align": palm_direction_alignment_reward,
             # "in_grip_align": in_grip_alignment_reward,
             "penetration_penalty": penetration_penalty,
@@ -1208,6 +1252,7 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
                 ("good_grasp",   good_grasp_reward.mean().item()),
                 ("palm_align",   palm_direction_alignment_reward.mean().item()),
                 ("finger_curl",  finger_curl_reg.mean().item()),
+                ("thumb_curl",   thumb_curl_reg.mean().item()),
                 ("episode_len",  episode_length_reward.mean().item()),
                 ("action_rate",  action_rate_penalty.mean().item()),
                 ("joint_vel",    joint_vel_penalty.mean().item()),
@@ -1772,10 +1817,18 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         return [[env_idx, contacts] for env_idx, contacts in enumerate(contacts_per_env) if contacts]
 
     def _collect_object_contacts(self):
-        """Collect object contacts per env. Returns [[env_idx, [num_contacts, link_names]], ...]."""
+        """Collect object contacts per env. Returns [[env_idx, [num_contacts, link_names]], ...].
+
+        run2h-reset: fingertip contacts are also classified as "inside-aligned" or not based on
+        the dot product between contact force_w and (tip_pos_w - palm_pos_w). Raw contact counts
+        (any-force) feed `object_contact_counts` used by lift_reward / object_to_goal_reward
+        (unchanged). Inside-aligned contacts feed `good_grasp_mask` (closes the buckled-thumb
+        exploit where dorsal surface receives force pointing TOWARD the palm).
+        """
         contact_counts = [0 for _ in range(self.num_envs)]
         contact_links = [[] for _ in range(self.num_envs)]
-        contact_fingers = [set() for _ in range(self.num_envs)]
+        # Inside-filtered finger contacts (for good_grasp_mask only).
+        contact_fingers_inside = [set() for _ in range(self.num_envs)]
 
         # Map actual link names to finger names
         tip_links = {
@@ -1790,6 +1843,9 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
         def _finger_name(link: str) -> str | None:
             return tip_links.get(link)
 
+        palm_pos_w = self.robot.data.body_pos_w[:, self.palm_body_idx]  # [num_envs, 3]
+        inside_threshold = float(getattr(self.cfg, "grasp_force_inside_threshold", 0.0))
+
         for link_name, sensor in zip(self.object_contact_links, self.object_contact_sensors):
             if link_name not in tip_links:
                 continue
@@ -1797,24 +1853,46 @@ class DextrahFR3AgilehandEnv(DirectRLEnv):
             if data is None or data.force_matrix_w is None:
                 continue
 
-            contact_mask = (data.force_matrix_w.abs().sum(-1) > 1e-4)
-            nz = contact_mask.nonzero(as_tuple=False)
-            if len(nz) == 0:
-                continue
+            # Raw magnitude check (per env, any filter)
+            contact_mask_mag = (data.force_matrix_w.abs().sum(-1) > 1e-4)  # [num_envs, num_filters]
+            raw_contact = contact_mask_mag.any(dim=-1)  # [num_envs]
 
-            for env_idx, _, _ in nz.tolist():
+            # Update raw counts (unfiltered — feeds object_contact_counts)
+            nz_raw = raw_contact.nonzero(as_tuple=False).flatten().tolist()
+            for env_idx in nz_raw:
                 contact_counts[env_idx] += 1
                 if link_name not in contact_links[env_idx]:
                     contact_links[env_idx].append(link_name)
+
+            # Inside-filtered check for good_grasp_mask.
+            tip_body_idx = self.fingertip_body_indices.get(link_name)
+            if tip_body_idx is None:
+                # Palm contact: no directional filter — counts as-is.
+                for env_idx in nz_raw:
+                    finger = _finger_name(link_name)
+                    if finger is not None:
+                        contact_fingers_inside[env_idx].add(finger)
+                continue
+
+            # Sum force across filters (visdex_selected has 1 filter — the object).
+            force_sum_w = data.force_matrix_w.sum(dim=1)  # [num_envs, 3]
+            tip_pos_w = self.robot.data.body_pos_w[:, tip_body_idx]  # [num_envs, 3]
+            palm_to_tip = tip_pos_w - palm_pos_w
+            palm_to_tip_unit = palm_to_tip / palm_to_tip.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+            force_inside_dot = (force_sum_w * palm_to_tip_unit).sum(-1)  # [num_envs]
+            inside_contact = raw_contact & (force_inside_dot > inside_threshold)  # [num_envs]
+
+            nz_inside = inside_contact.nonzero(as_tuple=False).flatten().tolist()
+            for env_idx in nz_inside:
                 finger = _finger_name(link_name)
                 if finger is not None:
-                    contact_fingers[env_idx].add(finger)
+                    contact_fingers_inside[env_idx].add(finger)
 
         self.object_contact_counts = torch.tensor(
             contact_counts, device=self.device, dtype=torch.float
         )
-        finger_counts = [len(fingers) for fingers in contact_fingers]
-        thumb_contact = [("thumb" in fingers) for fingers in contact_fingers]
+        finger_counts = [len(fingers) for fingers in contact_fingers_inside]
+        thumb_contact = [("thumb" in fingers) for fingers in contact_fingers_inside]
         finger_counts_tensor = torch.tensor(
             finger_counts, device=self.device, dtype=torch.float
         )
@@ -2173,13 +2251,16 @@ def compute_rewards(
     hand_to_object_pos_error: torch.Tensor,
     object_to_object_goal_pos_error: torch.Tensor,
     object_vertical_error: torch.Tensor,
-    robot_dof_pos: torch.Tensor,
-    curled_q: torch.Tensor,
+    other_finger_dof_pos: torch.Tensor,
+    other_finger_curl_target_q: torch.Tensor,
+    thumb_dof_pos: torch.Tensor,
+    thumb_curl_target_q: torch.Tensor,
     hand_to_object_weight: float,
     hand_to_object_sharpness: float,
     object_to_goal_weight: float,
     object_to_goal_sharpness: float,
     finger_curl_reg_weight: float,
+    thumb_curl_reg_weight: float,
     lift_weight: float,
     lift_sharpness: float,
     palm_alignment_weight: float,
@@ -2213,13 +2294,15 @@ def compute_rewards(
     object_to_goal_reward =\
         object_to_goal_weight * torch.exp(object_to_goal_sharpness * object_to_object_goal_pos_error) * contact_mask
 
-    # Regularizer on hand joints towards a nominally curled config
-    # I brought this in because the fingers seem to curl in a lot to play with the object
-    # A good strategy is to approach the object with wider set fingers and then encase the object
-    # flexing inwards
-    finger_curl_dist = (robot_dof_pos - curled_q).norm(p=2, dim=-1)
-    finger_curl_reg =\
-        finger_curl_reg_weight * finger_curl_dist ** 2
+    # run2i-reset: split curl regularizer into thumb (heavier weight) and other-fingers (lighter weight).
+    # Both targets are 0° (extended pose). `revolute_thumb_rot` is excluded from both — thumb rotation is left free.
+    # Hypothesis: heavier thumb curl penalty pushes thumb to stay extended/open longer, giving the policy more
+    # room to swing the thumb into opposition rather than buckling it into a curled exploit configuration.
+    other_finger_curl_dist = (other_finger_dof_pos - other_finger_curl_target_q).norm(p=2, dim=-1)
+    finger_curl_reg = finger_curl_reg_weight * other_finger_curl_dist ** 2
+
+    thumb_curl_dist = (thumb_dof_pos - thumb_curl_target_q).norm(p=2, dim=-1)
+    thumb_curl_reg = thumb_curl_reg_weight * thumb_curl_dist ** 2
 
     # Reward for lifting object off table and towards object goal
     lift_reward = lift_weight * torch.exp(-lift_sharpness * object_vertical_error) * contact_mask
@@ -2265,6 +2348,7 @@ def compute_rewards(
         hand_to_object_reward,
         object_to_goal_reward,
         finger_curl_reg,
+        thumb_curl_reg,
         lift_reward,
         palm_dir_align_reward,
         palm_finger_align_reward,
